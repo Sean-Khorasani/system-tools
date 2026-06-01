@@ -5,8 +5,6 @@ TCP/IP and UDP connections grouped by owning process in an expandable tree view.
 
 **Windows 10+  •  x86 / x64  •  Pure Win32 API  •  Independent self-contained .exe**
 
-![screenshot of the tree view showing processes with connections]()
-
 ## Features
 
 - **All connection types** — TCPv4, TCPv6, UDPv4, UDPv6
