@@ -74,11 +74,11 @@ echo [1/2] Compiling resources and C source...
 rc /nologo /fo tcplist.res tcplist.rc
 if errorlevel 1 exit /b 1
 
-cl /nologo /O1 /Os /MT /GS- /Gy /GL /W4 tcplist.c tcplist.res /Fe:tcplist.exe /link /OPT:REF /OPT:ICF /LTCG /MERGE:.rdata=.text /MERGE:.pdata=.text /SUBSYSTEM:WINDOWS kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib
+cl /nologo /O1 /Os /MT /GS- /Gy /GL /W4 tcplist.c tcplist.res /Fe:tcplist.exe /link /OPT:REF /OPT:ICF /LTCG /MERGE:.rdata=.text /MERGE:.pdata=.text /SUBSYSTEM:WINDOWS kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib ws2_32.lib
 if errorlevel 1 exit /b 1
 
-if /i "%ARCH%"=="x86" (if exist tcplist.exe ren tcplist.exe tcplist_x86.exe)
-if /i "%ARCH%"=="x64" (if exist tcplist.exe ren tcplist.exe tcplist_x64.exe)
+if /i "%ARCH%"=="x86" (if exist tcplist.exe move /Y tcplist.exe tcplist_x86.exe >nul)
+if /i "%ARCH%"=="x64" (if exist tcplist.exe move /Y tcplist.exe tcplist_x64.exe >nul)
 
 for %%F in (tcplist_%ARCH%.exe) do (
     set /a kb=%%~zF / 1024
@@ -97,7 +97,7 @@ call "%VCVARS64%" >nul 2>&1
 rc /nologo /fo tcplist.res tcplist.rc
 if errorlevel 1 exit /b 1
 
-cl /nologo /Zi /MTd /GS /Gy /W4 tcplist.c tcplist.res /Fe:tcplist_debug.exe /link /DEBUG:FULL /SUBSYSTEM:WINDOWS kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib
+cl /nologo /Zi /MTd /GS /Gy /W4 tcplist.c tcplist.res /Fe:tcplist_debug.exe /link /DEBUG:FULL /SUBSYSTEM:WINDOWS kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib ws2_32.lib
 if errorlevel 1 exit /b 1
 
 for %%F in (tcplist_debug.exe) do (

@@ -114,6 +114,7 @@ static void ZeroBytes(void *dst, size_t n)
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 #pragma comment(linker, "/MERGE:.rdata=.text")
 #pragma comment(linker, "/MERGE:.pdata=.text")
@@ -170,11 +171,25 @@ static PROC_ENTRY *g_pProcs;               /* Dynamic process array          */
 static int         g_connCount;            /* Total connections enumerated   */
 static int         g_procCount;            /* Total unique processes         */
 static int         g_refreshMs = DEFAULT_INTERVAL_MS;
-static BOOL        g_autoRefresh = TRUE;
+static BOOL        g_autoRefresh = FALSE;
 static BOOL        g_sortAscending = TRUE;
 static int          g_sortMode = 0;           /* 0=name, 1=connection count */
 static BOOL         g_allExpanded = TRUE;    /* Persist expand/collapse state */
 static WCHAR        g_filterText[128];       /* Filter text (always lowered) */
+static BOOL         g_nameResolution = FALSE; /* Reverse DNS on hover       */
+
+/* ---- Reverse DNS cache ------------------------------------------------ */
+#define DNS_CACHE_SIZE  256
+typedef struct {
+    DWORD addr[4];
+    int   isIPv6;
+    WCHAR host[256];
+    BOOL  hasHost;
+    BOOL  tried;
+} DNS_CACHE_ENTRY;
+static DNS_CACHE_ENTRY g_dnsCache[DNS_CACHE_SIZE];
+static int             g_dnsCacheCount = 0;
+static BOOL            g_wsaInit = FALSE;
 
 /* TCP state name table */
 static const MY_TCP_STATE g_tcpStates[] = {
@@ -731,6 +746,131 @@ static BOOL ConnectionMatchesFilter(CONN_ENTRY *conn, PROC_ENTRY *proc)
 }
 
 /* --------------------------------------------------------------------------
+ *  R E V E R S E   D N S   (Name Resolution on hover)
+ * ------------------------------------------------------------------------ */
+
+static BOOL EnsureWSAInit(void)
+{
+    if (g_wsaInit) return TRUE;
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
+        g_wsaInit = TRUE;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL LookupDnsCache(DWORD *addr, int isIPv6, WCHAR *outHost, int cch)
+{
+    for (int i = 0; i < g_dnsCacheCount; i++) {
+        if (g_dnsCache[i].isIPv6 != isIPv6) continue;
+        BOOL eq = TRUE;
+        for (int k = 0; k < (isIPv6 ? 4 : 1); k++)
+            if (g_dnsCache[i].addr[k] != addr[k]) { eq = FALSE; break; }
+        if (!eq) continue;
+        if (!g_dnsCache[i].tried) return FALSE;
+        if (g_dnsCache[i].hasHost) {
+            lstrcpynW(outHost, g_dnsCache[i].host, cch);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    return FALSE;
+}
+
+static BOOL IsCacheEntryPresent(DWORD *addr, int isIPv6, int *pIdx)
+{
+    for (int i = 0; i < g_dnsCacheCount; i++) {
+        if (g_dnsCache[i].isIPv6 != isIPv6) continue;
+        BOOL eq = TRUE;
+        for (int k = 0; k < (isIPv6 ? 4 : 1); k++)
+            if (g_dnsCache[i].addr[k] != addr[k]) { eq = FALSE; break; }
+        if (eq) { if (pIdx) *pIdx = i; return TRUE; }
+    }
+    return FALSE;
+}
+
+static void AddDnsCache(DWORD *addr, int isIPv6, LPCWSTR host)
+{
+    int idx = -1;
+    if (IsCacheEntryPresent(addr, isIPv6, &idx)) {
+        /* update existing */
+        if (host && host[0]) {
+            lstrcpynW(g_dnsCache[idx].host, host, ARRAYSIZE(g_dnsCache[idx].host));
+            g_dnsCache[idx].hasHost = TRUE;
+        } else {
+            g_dnsCache[idx].hasHost = FALSE;
+        }
+        g_dnsCache[idx].tried = TRUE;
+        return;
+    }
+    if (g_dnsCacheCount >= DNS_CACHE_SIZE) {
+        /* simple LRU: evict oldest (0) and shift */
+        for (int i = 1; i < DNS_CACHE_SIZE; i++)
+            g_dnsCache[i - 1] = g_dnsCache[i];
+        g_dnsCacheCount = DNS_CACHE_SIZE - 1;
+    }
+    DNS_CACHE_ENTRY *e = &g_dnsCache[g_dnsCacheCount++];
+    ZeroBytes(e, sizeof(*e));
+    for (int k = 0; k < (isIPv6 ? 4 : 1); k++) e->addr[k] = addr[k];
+    e->isIPv6 = isIPv6;
+    e->tried = TRUE;
+    if (host && host[0]) {
+        lstrcpynW(e->host, host, ARRAYSIZE(e->host));
+        e->hasHost = TRUE;
+    } else {
+        e->hasHost = FALSE;
+    }
+}
+
+static BOOL ResolveIPToHost(DWORD *addr, int isIPv6, WCHAR *outHost, int cchHost)
+{
+    if (!addr || !outHost || cchHost <= 0) return FALSE;
+
+    /* fast path: check cache */
+    WCHAR cached[256];
+    if (LookupDnsCache(addr, isIPv6, cached, ARRAYSIZE(cached))) {
+        lstrcpynW(outHost, cached, cchHost);
+        return TRUE;
+    }
+    /* if already tried and failed, don't retry */
+    int idx = -1;
+    if (IsCacheEntryPresent(addr, isIPv6, &idx)) {
+        if (g_dnsCache[idx].tried && !g_dnsCache[idx].hasHost)
+            return FALSE;
+    }
+
+    if (!EnsureWSAInit()) return FALSE;
+
+    WCHAR host[256] = {0};
+    int ret = -1;
+
+    if (isIPv6) {
+        SOCKADDR_IN6 sin6;
+        ZeroBytes(&sin6, sizeof(sin6));
+        sin6.sin6_family = AF_INET6;
+        CopyBytes(&sin6.sin6_addr, addr, 16);
+        ret = GetNameInfoW((SOCKADDR*)&sin6, sizeof(sin6),
+                           host, ARRAYSIZE(host), NULL, 0, 0);
+    } else {
+        SOCKADDR_IN sin;
+        ZeroBytes(&sin, sizeof(sin));
+        sin.sin_family = AF_INET;
+        sin.sin_addr.S_un.S_addr = addr[0];
+        ret = GetNameInfoW((SOCKADDR*)&sin, sizeof(sin),
+                           host, ARRAYSIZE(host), NULL, 0, 0);
+    }
+
+    if (ret == 0 && host[0]) {
+        lstrcpynW(outHost, host, cchHost);
+        AddDnsCache(addr, isIPv6, host);
+        return TRUE;
+    }
+    AddDnsCache(addr, isIPv6, NULL);
+    return FALSE;
+}
+
+/* --------------------------------------------------------------------------
  *  T R E E V I E W   M A N A G E M E N T
  * ------------------------------------------------------------------------ */
 
@@ -888,6 +1028,7 @@ static void CopySelectedItem(void)
 #define IDM_SORT_CONNS    107
 #define IDM_EXPAND_ALL    108
 #define IDM_COLLAPSE_ALL  109
+#define IDM_NAME_RESOLUTION 110
 
 static HMENU CreateMainMenu(void)
 {
@@ -907,6 +1048,8 @@ static HMENU CreateMainMenu(void)
                 IDM_SORT_CONNS, L"Sort by &Connections\tF7");
     AppendMenuW(hView, MF_STRING | (g_sortMode == 0 ? MF_CHECKED : 0),
                 IDM_SORT_NAME, L"Sort by &Name\tF8");
+    AppendMenuW(hView, MF_STRING | (g_nameResolution ? MF_CHECKED : 0),
+                IDM_NAME_RESOLUTION, L"&Name Resolution\tF9");
     AppendMenuW(hView, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hView, MF_STRING, IDM_EXPAND_ALL, L"Expand &All\tCtrl+E");
     AppendMenuW(hView, MF_STRING, IDM_COLLAPSE_ALL, L"&Collapse All\tCtrl+W");
@@ -1187,6 +1330,12 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
             PopulateTreeView();
             return 0;
 
+        case IDM_NAME_RESOLUTION:
+            g_nameResolution = !g_nameResolution;
+            CheckMenuItem(g_hMenu, IDM_NAME_RESOLUTION,
+                          g_nameResolution ? MF_CHECKED : MF_UNCHECKED);
+            return 0;
+
         case IDM_COPY:
             CopySelectedItem();
             return 0;
@@ -1225,6 +1374,9 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case VK_F8:
             PostMessageW(hWnd, WM_COMMAND, IDM_SORT_NAME, 0);
+            return 0;
+        case VK_F9:
+            PostMessageW(hWnd, WM_COMMAND, IDM_NAME_RESOLUTION, 0);
             return 0;
         case VK_ESCAPE:
             /* Clear filter if active, otherwise close window */
@@ -1291,12 +1443,103 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
                 }
                 return 0;
             }
+            if (nmh->idFrom == 100 && nmh->code == TVN_GETINFOTIPW) {
+                NMTVGETINFOTIPW *tip = (NMTVGETINFOTIPW*)lp;
+                if (!g_nameResolution) {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                    return 0;
+                }
+                /* Only connection (child) items have IP addresses */
+                HTREEITEM hParent = TreeView_GetParent(g_hTree, tip->hItem);
+                if (!hParent) {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                    return 0;
+                }
+                TVITEMW tvItem = {0};
+                tvItem.hItem = tip->hItem;
+                tvItem.mask = TVIF_PARAM;
+                if (!TreeView_GetItem(g_hTree, &tvItem)) {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                    return 0;
+                }
+                CONN_ENTRY *c = (CONN_ENTRY*)tvItem.lParam;
+                if (!c) {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                    return 0;
+                }
+                /* Determine which IP is under the mouse via character column */
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(g_hTree, &pt);
+                RECT rc;
+                if (!TreeView_GetItemRect(g_hTree, tip->hItem, &rc, TRUE)) {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                    return 0;
+                }
+                HDC hdc = GetDC(g_hTree);
+                int charW = 8;
+                if (hdc) {
+                    HFONT hOld = (HFONT)SelectObject(hdc, g_hFont);
+                    SIZE sz;
+                    if (GetTextExtentPoint32W(hdc, L"W", 1, &sz) && sz.cx > 0) charW = sz.cx;
+                    SelectObject(hdc, hOld);
+                    ReleaseDC(g_hTree, hdc);
+                }
+                int offset = pt.x - rc.left;
+                if (offset < 0) offset = 0;
+                int col = charW ? (offset / charW) : 0;
+
+                /* Format layout: "%-4s %-53s  ->  %-53s  %s"
+                 * 0-3 proto, 4 space, 5-57 local, 58-63 "  ->  ", 64-116 remote */
+                int localStart = 5, localEnd = 5 + 53;
+                int remoteStart = 64, remoteEnd = 64 + 53;
+                int which = -1;
+                BOOL isUdp = (c->flags & 2) != 0;
+                int isIPv6 = (c->flags & 1) != 0;
+                if (!isUdp) {
+                    if (col >= localStart && col < localEnd) which = 0;
+                    else if (col >= remoteStart && col < remoteEnd) which = 1;
+                    else {
+                        if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                        return 0;
+                    }
+                } else {
+                    if (col >= localStart && col < localEnd) which = 0;
+                    else {
+                        if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                        return 0;
+                    }
+                }
+                DWORD *addr = (which == 0) ? c->local_addr : c->remote_addr;
+                DWORD port = (which == 0) ? c->local_port : c->remote_port;
+                /* Skip zero/invalid addresses (e.g., UDP remote 0, or 0.0.0.0) */
+                BOOL isZero = TRUE;
+                for (int k = 0; k < (isIPv6 ? 4 : 1); k++) if (addr[k] != 0) { isZero = FALSE; break; }
+                if (isZero) {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                    return 0;
+                }
+                WCHAR host[256];
+                if (ResolveIPToHost(addr, isIPv6, host, ARRAYSIZE(host))) {
+                    WCHAR ipStr[64];
+                    FormatEndpoint(ipStr, addr, isIPv6, port);
+                    /* Show "IP -> hostname" ; INFOTIP buffer is ~1024 */
+                    wsprintfW(tip->pszText, L"%s  \x2192  %s", ipStr, host);
+                    if ((int)lstrlenW(tip->pszText) >= tip->cchTextMax && tip->cchTextMax > 0) {
+                        tip->pszText[tip->cchTextMax - 1] = L'\0';
+                    }
+                } else {
+                    if (tip->pszText && tip->cchTextMax > 0) tip->pszText[0] = L'\0';
+                }
+                return 0;
+            }
         }
         break;
 
     case WM_DESTROY:
         KillTimer(hWnd, IDT_REFRESH);
         if (g_hFont) DeleteObject(g_hFont);
+        if (g_wsaInit) { WSACleanup(); g_wsaInit = FALSE; }
         PostQuitMessage(0);
         return 0;
 

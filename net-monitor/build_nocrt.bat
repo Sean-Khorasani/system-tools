@@ -81,7 +81,7 @@ if errorlevel 1 exit /b 1
 
 rem Link
 echo [4/4] Linking...
-link /nologo /NODEFAULTLIB /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /LTCG /MERGE:.rdata=.text /MERGE:.pdata=.text tcplist.obj startup.obj memset.obj memcpy.obj tcplist.res /OUT:tcplist.exe kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib
+link /nologo /NODEFAULTLIB /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /LTCG /MERGE:.rdata=.text /MERGE:.pdata=.text tcplist.obj startup.obj memset.obj memcpy.obj tcplist.res /OUT:tcplist.exe kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib ws2_32.lib
 if errorlevel 1 exit /b 1
 
 goto :report
@@ -109,7 +109,7 @@ if errorlevel 1 exit /b 1
 
 rem For x86, provide memcpy/memset via minimal CRT libs
 echo [4/4] Linking...
-link /nologo /NODEFAULTLIB /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /LTCG /MERGE:.rdata=.text /MERGE:.pdata=.text tcplist.obj startup.obj tcplist.res /OUT:tcplist_x86.exe kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib libvcruntime.lib libcmt.lib
+link /nologo /NODEFAULTLIB /ENTRY:WinMainCRTStartup /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /LTCG /MERGE:.rdata=.text /MERGE:.pdata=.text tcplist.obj startup.obj tcplist.res /OUT:tcplist_x86.exe kernel32.lib user32.lib gdi32.lib comctl32.lib iphlpapi.lib advapi32.lib ws2_32.lib libvcruntime.lib libcmt.lib
 if errorlevel 1 exit /b 1
 
 goto :report
