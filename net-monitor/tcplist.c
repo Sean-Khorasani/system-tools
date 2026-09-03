@@ -1346,7 +1346,7 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
 
         case IDM_ABOUT:
             MessageBoxW(hWnd,
-                        L"TCP/IP Connection Monitor v1.0\n\n"
+                        L"TCP/IP Connection Monitor v1.0.1\n\n"
                         L"Displays all TCP and UDP connections grouped\n"
                         L"by owning process, with expandable details.\n\n"
                         L"Filter: type in the filter bar to search by\n"
