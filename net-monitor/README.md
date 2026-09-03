@@ -14,10 +14,12 @@ TCP/IP and UDP connections grouped by owning process in an expandable tree view.
 - **Expandable details** — click the `+` to see every socket per process
 - **Connection state** — LISTENING, ESTABLISHED, TIME_WAIT, CLOSE_WAIT, etc.
 - **Auto-refresh** — configurable interval with manual F5 override
+- **Name resolution** — View → Name Resolution (`F9`) reverse-resolves hovered IP to hostname via `GetNameInfoW` (`ws2_32.dll`) with 256-entry cache — tooltip `IP → hostname` appears only while pointer is on that IP
 - **Clipboard copy** — Ctrl+C copies the selected tree item text
 - **Status bar** — live summary: process count, TCP/UDP breakdown
 - **Resizable** — window sizes naturally, Consolas monospace font
 - **DPI-aware** — PerMonitorV2 DPI awareness via manifest
+- **Filter bar** — live filter by port, process, IP, state, PID, protocol (AND logic, `Ctrl+F`/`Esc`)
 
 ## Quick Start
 
@@ -76,6 +78,7 @@ This uses assembly entry points (`startup_x64.asm`, `memset_x64.asm`,
 | **Language** | C (not C++) for smallest code generation |
 | **UI** | Pure Win32 API — TreeView, StatusBar common controls |
 | **Network data** | `GetExtendedTcpTable` / `GetExtendedUdpTable` from `iphlpapi.dll` |
+| **Name resolution** | `GetNameInfoW` from `ws2_32.dll` (256-entry cache, on hover when enabled via View menu) |
 | **Process names** | `CreateToolhelp32Snapshot` from `kernel32.dll` |
 | **Assembly** | `startup_x64.asm` / `startup_x86.asm` — no-CRT entry point (ML64/MASM) |
 |   | `memset_x64.asm` / `memcpy_x64.asm` — minimal memory functions |
@@ -120,9 +123,13 @@ This uses assembly entry points (`startup_x64.asm`, `memset_x64.asm`,
 |-----|--------|
 | **F5** | Manual refresh |
 | **F6** | Toggle auto-refresh |
-| **F7** | Toggle sort direction |
+| **F7** | Sort by connections (toggle asc/desc) |
+| **F8** | Sort by name (toggle asc/desc) |
+| **F9** | Toggle Name Resolution (IP → DNS tooltip on hover) |
 | **Ctrl+C** | Copy selected item to clipboard |
-| **Esc** | Close application |
+| **Ctrl+F** | Focus filter bar |
+| **Ctrl+E** / **Ctrl+W** | Expand all / Collapse all |
+| **Esc** | Clear filter (if active) else close application |
 
 ## File Manifest
 
@@ -155,8 +162,9 @@ README.md          This file
 - `/SUBSYSTEM:WINDOWS` — GUI app (no console)
 - `/NODEFAULTLIB` (no-CRT build) — zero CRT overhead
 - `CopyBytes`/`ZeroBytes` loops — avoid `memcpy`/`memset` dependency
-- `MyHtons` inline — avoid `ws2_32.lib` dependency
+- `MyHtons` inline — avoids extra `ws2_32.lib` calls for port conversion (still linked for `GetNameInfoW` name resolution)
 - `InsertionSort` — replacement for CRT `qsort`
+- `GetNameInfoW` + 256-entry DNS cache (`ws2_32.lib`) — on-demand reverse lookup only when Name Resolution is enabled and pointer is on an IP
 - `wsprintfW` from `user32.dll` — no CRT `swprintf` needed
 - No MFC, no ATL, no exception handling, no RTTI
 - Assembly `memset`/`memcpy` — 30-byte implementations (no-CRT build only)
