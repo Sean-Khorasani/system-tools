@@ -82,7 +82,7 @@ public:
     std::wstring DatabaseVersion() const;
     uint64_t RecordCount() const;
     uint64_t NodeCount() const;
-    size_t FileSize() const { return data_.size(); }
+    size_t FileSize() const { return fileSize_; }
 
 private:
     void MoveFrom(GeoIpDatabase& other) noexcept;
@@ -92,7 +92,14 @@ private:
     // Resolve a data-section offset to a country code, or empty.
     std::wstring CountryAt(size_t dataOffset) const;
 
-    std::vector<unsigned char> data_;
+    // The loaded database as a memory-mapped view of the file, not a heap
+    // copy. A City database is ~70 MB and ISP-level files run to ~450 MB;
+    // reading that into a std::vector at startup allocates it, blocks on the
+    // read, and pins it - CreateFileMappingW + MapViewOfFile makes it
+    // demand-paged work instead, and Load returns in microseconds. The view
+    // is released in Close().
+    const unsigned char* mappedView_ = nullptr;
+    size_t fileSize_ = 0;
 
     // The 16-byte separator's last 8 bytes give where the data section starts;
     // the section runs from there to the end of the file. Data-section

@@ -22,7 +22,8 @@
 #include <cstring>
 #include <limits>
 
-// Only for the file read in Load() (CreateFileW/ReadFile). Deliberately not in
+// Only for the file mapping in Load() (CreateFileW, CreateFileMappingW,
+// MapViewOfFile). Deliberately not in
 // the header: the rest of the program can use this reader without dragging in
 // windows.h and its macros.
 #include <windows.h>
@@ -101,10 +102,6 @@ constexpr unsigned kIpv6BitCount = 128;
 // No country key, ISO code or name this reader looks at comes close to this,
 // so a size field beyond it is a corrupt file rather than a long string.
 constexpr size_t kMaxStringBytes = 1024;
-
-// Chunked so the read never depends on one ReadFile of a few hundred MB
-// succeeding whole.
-constexpr DWORD kReadChunk = 1u << 20;
 
 bool AddOvf(size_t a, size_t b, size_t* out) {
     if (a > (std::numeric_limits<size_t>::max)() - b) return false;
@@ -484,7 +481,7 @@ bool LooksLikeIsoCode(const std::wstring& s) {
 // GeoIpDatabase
 // ---------------------------------------------------------------------------
 
-GeoIpDatabase::~GeoIpDatabase() = default;
+GeoIpDatabase::~GeoIpDatabase() { Close(); }
 
 GeoIpDatabase::GeoIpDatabase(GeoIpDatabase&& other) noexcept {
     MoveFrom(other);
@@ -499,7 +496,8 @@ GeoIpDatabase& GeoIpDatabase::operator=(GeoIpDatabase&& other) noexcept {
 }
 
 void GeoIpDatabase::MoveFrom(GeoIpDatabase& other) noexcept {
-    data_ = std::move(other.data_);
+    mappedView_ = other.mappedView_;
+    fileSize_ = other.fileSize_;
     dataSectionBase_ = other.dataSectionBase_;
     dataSectionSize_ = other.dataSectionSize_;
     ipv6Tree_ = other.ipv6Tree_;
@@ -512,6 +510,8 @@ void GeoIpDatabase::MoveFrom(GeoIpDatabase& other) noexcept {
     nodeCount_ = other.nodeCount_;
     version_ = std::move(other.version_);
 
+    other.mappedView_ = nullptr;
+    other.fileSize_ = 0;
     other.dataSectionBase_ = 0;
     other.dataSectionSize_ = 0;
     other.ipv6Tree_ = false;
@@ -526,8 +526,9 @@ void GeoIpDatabase::MoveFrom(GeoIpDatabase& other) noexcept {
 }
 
 void GeoIpDatabase::Close() {
-    data_.clear();
-    data_.shrink_to_fit();
+    if (mappedView_ != nullptr) ::UnmapViewOfFile(mappedView_);
+    mappedView_ = nullptr;
+    fileSize_ = 0;
     dataSectionBase_ = 0;
     dataSectionSize_ = 0;
     ipv6Tree_ = false;
@@ -545,8 +546,11 @@ uint64_t GeoIpDatabase::RecordCount() const { return recordCount_; }
 uint64_t GeoIpDatabase::NodeCount() const { return nodeCount_; }
 
 bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
-    const auto fail = [error](const wchar_t* what) {
+    const auto fail = [error, this](const wchar_t* what) {
         if (error != nullptr) *error = what;
+        // Release any partial mapping on failure. On an early failure
+        // mappedView_ is still null, so Close() is a clean no-op.
+        Close();
         return false;
     };
     if (error != nullptr) error->clear();
@@ -586,35 +590,28 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     }
 
     const size_t total = static_cast<size_t>(fileSize.QuadPart);
-    std::vector<unsigned char> buf;
-    try {
-        buf.resize(total);
-    } catch (...) {
-        // A file this large on a machine this short of memory is a real
-        // outcome, not a bug: report it like any other failure and leave the
-        // object unloaded rather than letting it escape as an exception.
-        CloseHandle(h);
-        return fail(L"There is not enough memory to read the GeoIP database.");
+
+    // A real database is 70-500 MB. A full ReadFile into a heap buffer used to
+    // allocate it and block startup. Map it instead: CreateFileMappingW +
+    // MapViewOfFile gives us a view of the file with demand paging, Load
+    // returns immediately, and cold pages are the OS's problem, not this
+    // process's commit charge. The file and mapping handles are closed after
+    // the view is open; the view alone keeps the underlying pages alive.
+    const HANDLE hMap = ::CreateFileMappingW(
+        h, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (hMap == nullptr) {
+        ::CloseHandle(h);
+        return fail(L"Could not create a file mapping for the GeoIP database.");
+    }
+    const void* view = ::MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, total);
+    ::CloseHandle(hMap);
+    ::CloseHandle(h);
+    if (view == nullptr) {
+        return fail(L"Could not map the GeoIP database into memory.");
     }
 
-    size_t done = 0;
-    bool readOk = true;
-    while (done < total) {
-        const size_t want = (std::min)(total - done,
-                                       static_cast<size_t>(kReadChunk));
-        DWORD got = 0;
-        if (!ReadFile(h, buf.data() + done, static_cast<DWORD>(want), &got,
-                      nullptr) ||
-            got == 0) {
-            readOk = false;
-            break;
-        }
-        done += got;
-    }
-    CloseHandle(h);
-    if (!readOk || done != total) {
-        return fail(L"The GeoIP database could not be read completely.");
-    }
+    mappedView_ = static_cast<const unsigned char*>(view);
+    fileSize_ = total;
 
     // --- metadata ------------------------------------------------------------
     // Found by searching backwards from the END OF THE FILE for the marker. The
@@ -626,7 +623,7 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     bool haveMeta = false;
     for (size_t back = sizeof(kMetaMarker); back <= total; ++back) {
         const size_t off = total - back;
-        if (std::memcmp(buf.data() + off, kMetaMarker, sizeof(kMetaMarker)) == 0) {
+        if (std::memcmp(mappedView_ + off, kMetaMarker, sizeof(kMetaMarker)) == 0) {
             metaStart = off + sizeof(kMetaMarker);
             haveMeta = true;
             break;
@@ -638,7 +635,7 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
 
     // The metadata is read as its own section, so a pointer in it cannot walk
     // back into the data section and be mistaken for a record.
-    const DataReader meta(buf.data() + metaStart, total - metaStart, metaStart);
+    const DataReader meta(mappedView_ + metaStart, total - metaStart, metaStart);
     Value metaMap;
     if (!meta.Decode(0, &metaMap) || metaMap.type != Value::Type::kMap) {
         return fail(L"The GeoIP database metadata is malformed.");
@@ -727,7 +724,9 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     }
 
     // Everything checked out, so take ownership of the buffer.
-    data_ = std::move(buf);
+    // Everything checked out; the buffer is not copied, so there is nothing
+    // more to take ownership of here. Ownership already transferred when
+    // mappedView_ was set right after MapViewOfFile.
     dataSectionBase_ = base;
     dataSectionSize_ = dataSize;
     ipv6Tree_ = ipv6Tree;
@@ -773,7 +772,7 @@ std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
             // middle byte of the node, so a 28-bit file has to be reassembled
             // from both halves rather than read straight out. This is the
             // layout nearly every real database uses.
-            const unsigned char* p = data_.data() + recPos;
+            const unsigned char* p = mappedView_ + recPos;
             if (bit == 0) {
                 record = (static_cast<size_t>(p[3] >> 4) << 24) |
                          (static_cast<size_t>(p[0]) << 16) |
@@ -786,20 +785,20 @@ std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
                          static_cast<size_t>(p[6]);
             }
         } else if (recordBytes_ == 4) {
-            record = ReadU32BE(data_.data() + recPos);
+            record = ReadU32BE(mappedView_ + recPos);
         } else if (recordBytes_ == 3) {
             // A 3-byte record is the 3 bytes of the node starting at the half
             // this bit selects: bytes 0-2 for the left record, 3-5 for the
             // right. Reading the same window for both (which is what this used
             // to do) meant the right record was a copy of the left, so every
             // walk stepped down the left half and found nothing.
-            record = (ReadU32BE(data_.data() + recPos + (bit ? 3u : 0u)) >> 8) &
+            record = (ReadU32BE(mappedView_ + recPos + (bit ? 3u : 0u)) >> 8) &
                      0x00FFFFFFu;
         } else {
             // A 28-bit record keeps the top four bits of both halves in the
             // middle byte of the node, so a 28-bit file has to be reassembled
             // from both halves rather than read straight out.
-            const unsigned char* p = data_.data() + recPos;
+            const unsigned char* p = mappedView_ + recPos;
             if (bit == 0) {
                 record = (static_cast<size_t>(p[3] >> 4) << 24) |
                          (static_cast<size_t>(p[0]) << 16) |
@@ -872,7 +871,7 @@ std::wstring GeoIpDatabase::LookupV6(const unsigned char addr[16]) const {
 
 std::wstring GeoIpDatabase::CountryAt(size_t dataOffset) const {
     if (dataOffset == 0 || dataSectionSize_ == 0) return std::wstring();
-    const DataReader r(data_.data() + dataSectionBase_, dataSectionSize_,
+    const DataReader r(mappedView_ + dataSectionBase_, dataSectionSize_,
                        dataSectionBase_);
 
     Value rec;

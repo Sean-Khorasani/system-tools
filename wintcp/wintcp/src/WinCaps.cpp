@@ -37,11 +37,44 @@
 namespace wintcp {
 namespace {
 
-// Is a DLL loadable at all? Deliberately NOT LoadLibraryEx with
-// LOAD_LIBRARY_SEARCH_* flags: those need a KB2533623 on Win7 and would
-// themselves become the compatibility problem this file exists to avoid.
-bool DllPresent(const char* name) {
+// LoadLibrary used strictly as a PROBE of whether an optional system library
+// is usable.
+//
+// WHY THE ERROR MODE IS SAVED AROUND IT: a DLL that exists but is not a valid
+// image - a zero-byte file left beside the exe, a truncated download, bit-rot
+// on an old install - does not make LoadLibraryA return NULL quietly. The
+// loader raises the hard error STATUS_INVALID_IMAGE_FORMAT (0xC0000020) and
+// the default handler puts a modal "Bad Image" message box on the desktop,
+// naming the DLL. That box is modal, it is not about the feature being probed,
+// and it fires every time a probe runs - so a diagnostic tool that is doing its
+// job of reporting "this library is unusable" instead interrupts the user.
+//
+// SEM_FAILCRITICALERRORS is what suppresses it; SEM_NOOPENFILEERRORBOX
+// covers the neighbouring open-failure path. The previous mode is OR-ed in
+// rather than replaced, so flags another part of the process set are not
+// dropped for the duration, and the original is restored on return. The mode
+// is process-wide, so this is brief by construction: one LoadLibraryA and
+// straight back. Nothing here changes what the probe RETURNS - LoadLibraryA
+// still fails on a bad image, and the caller still sees "absent".
+//
+// Deliberately NOT LoadLibraryEx with LOAD_LIBRARY_SEARCH_* flags: those need
+// a KB2533623 on Win7 and would themselves become the compatibility problem
+// this file exists to avoid.
+HMODULE ProbeLoadLibrary(const char* name) {
+    // Capture the caller's mode, then OR our flags in rather than overwrite:
+    // SetErrorMode REPLACES the whole mode, so setting only ours would silently
+    // drop a flag another part of the process had already set (SEM_NOGPFAULT-
+    // ERRORBOX, for instance) for the length of this call.
+    const UINT saved = ::SetErrorMode(0);
+    ::SetErrorMode(saved | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     const HMODULE m = ::LoadLibraryA(name);
+    ::SetErrorMode(saved);
+    return m;
+}
+
+// Is a DLL loadable at all?
+bool DllPresent(const char* name) {
+    const HMODULE m = ProbeLoadLibrary(name);
     if (m == nullptr) return false;
     // FreeLibrary balances the LoadLibrary. The first version of this helper
     // dropped the handle, which is a leak of one reference per probe - the
@@ -339,7 +372,7 @@ bool DllAvailable(const char* dllName) {
             static int cache[kDelayedDllCount] = {};
             int& slot = cache[i];
             if (slot == 0) {
-                const HMODULE m = ::LoadLibraryA(kDelayedDlls[i].name);
+                const HMODULE m = ProbeLoadLibrary(kDelayedDlls[i].name);
                 if (m == nullptr) {
                     slot = 2;   // absent, and remembered
                 } else {
@@ -355,7 +388,7 @@ bool DllAvailable(const char* dllName) {
         }
     }
 
-    const HMODULE m = ::LoadLibraryA(dllName);
+    const HMODULE m = ProbeLoadLibrary(dllName);
     if (m == nullptr) return false;
     ::FreeLibrary(m);
     return true;
