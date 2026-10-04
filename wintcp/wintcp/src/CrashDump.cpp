@@ -105,6 +105,63 @@ void PruneOldDumps(const wchar_t* dir) {
     }
 }
 
+// Wide path -> ASCII, one unit at a time, because this runs inside the crash
+// filter: no CRT locale, no heap, and a path holding non-ASCII is better shown
+// as '?' than not shown at all.
+void Narrow(const wchar_t* in, char* out, size_t cap) {
+    if (out == nullptr || cap == 0) return;
+    size_t i = 0;
+    for (; i + 1 < cap && in != nullptr && in[i] != L'\0'; ++i) {
+        out[i] = (in[i] < 128) ? static_cast<char>(in[i]) : '?';
+    }
+    out[i] = '\0';
+}
+
+// The on-disk breadcrumb, written into the same directory as the dumps. stderr
+// is not always there - a GUI launch, a detached process, a handle nobody
+// reads - and the dump itself is exactly the thing that can fail, so the proof
+// that the handler ran has to live where the next person will already be
+// looking: the crashes folder. It is also the only record that survives a
+// filter that dies part-way, which is what heap corruption does.
+//
+// Called TWICE per crash: once before the dump attempt with a progress line,
+// once after with the outcome. If the second write never happens, the first
+// one is still on disk and still says the handler ran and how far it got.
+//
+// 'what' selects the second line: nullptr means the dump was written and the
+// path is printed; a non-null string is the whole clause, printed as-is (with
+// the path appended while there is progress to name it).
+void WriteCrashNote(const wchar_t* dir, const wchar_t* stamp, DWORD code,
+                    const wchar_t* dumpPath, const char* what) {
+    wchar_t note[MAX_PATH * 2] = {0};
+    ::swprintf_s(note, L"%ls\\wintcp-last-crash.txt", dir);
+
+    char line2[MAX_PATH * 2 + 64] = {0};
+    if (what == nullptr && dumpPath != nullptr) {
+        char narrow[MAX_PATH * 2] = {0};
+        Narrow(dumpPath, narrow, sizeof(narrow));
+        ::sprintf_s(line2, "handler ran; minidump: %s", narrow);
+    } else if (what != nullptr && dumpPath != nullptr) {
+        char narrow[MAX_PATH * 2] = {0};
+        Narrow(dumpPath, narrow, sizeof(narrow));
+        ::sprintf_s(line2, "handler ran; %s %s", what, narrow);
+    } else {
+        ::sprintf_s(line2, "handler ran; %s", (what != nullptr) ? what : "");
+    }
+
+    char text[MAX_PATH * 2 + 256] = {0};
+    ::sprintf_s(text, "wintcp crashed at %ls UTC; exception 0x%08lX\r\n%s\r\n",
+                stamp, static_cast<unsigned long>(code), line2);
+
+    HANDLE f = ::CreateFileW(note, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+        DWORD put = 0;
+        ::WriteFile(f, text, static_cast<DWORD>(::strlen(text)), &put, nullptr);
+        ::CloseHandle(f);
+    }
+}
+
 // Everything below runs INSIDE the crashing process on the crashing thread,
 // so it follows crash-handler discipline: stack buffers only, no heap, no
 // locks, no CRT locale calls, and every API failure falls through to the next
@@ -115,7 +172,15 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
                            ? xp->ExceptionRecord->ExceptionCode
                            : 0xC0000005u;
     wchar_t path[MAX_PATH * 2] = {0};
+    wchar_t stamp[64] = {0};
     bool dumped = false;
+    // Why there is no dump - named precisely rather than as one catch-all.
+    // Every failure used to report "dump directory unavailable", so a missing
+    // dbghelp.dll or a refused write pointed the reader at a directory that
+    // was perfectly healthy, and the one case the message existed for (a truly
+    // unresolvable folder) was indistinguishable from two others.
+    const char* why = "dump directory unavailable";
+
     if (g_crashDir[0] != L'\0') {
         EnsureDir(g_crashDir);
         SYSTEMTIME st = {};
@@ -124,10 +189,22 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
                      g_crashDir, st.wYear, st.wMonth, st.wDay, st.wHour,
                      st.wMinute, st.wSecond,
                      static_cast<unsigned long>(::GetCurrentProcessId()));
+        ::swprintf_s(stamp, L"%04u-%02u-%02u %02u:%02u:%02uZ",
+                     st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+                     st.wSecond);
+        // Before anything else, the record that the handler ran. Everything
+        // below this line can fail, fault or be skipped; this is the one write
+        // that has to come first, because a crash that loses its artefact
+        // halfway through is precisely the case nobody can otherwise tell from
+        // a program that simply exited.
+        WriteCrashNote(g_crashDir, stamp, code, path, "writing minidump");
+
         // dbghelp is loaded dynamically, not linked: a missing DLL must degrade
         // to "breadcrumb only" rather than fail the whole filter at load time.
         HMODULE dbg = ::LoadLibraryW(L"dbghelp.dll");
-        if (dbg != nullptr) {
+        if (dbg == nullptr) {
+            why = "dbghelp.dll could not be loaded";
+        } else {
             typedef BOOL(WINAPI* MiniDumpWriteDump_t)(
                 HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
                 const PMINIDUMP_EXCEPTION_INFORMATION,
@@ -135,11 +212,15 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
                 const PMINIDUMP_CALLBACK_INFORMATION);
             auto dump = reinterpret_cast<MiniDumpWriteDump_t>(
                 ::GetProcAddress(dbg, "MiniDumpWriteDump"));
-            if (dump != nullptr) {
+            if (dump == nullptr) {
+                why = "MiniDumpWriteDump is not exported";
+            } else {
                 HANDLE f = ::CreateFileW(
                     path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (f != INVALID_HANDLE_VALUE) {
+                if (f == INVALID_HANDLE_VALUE) {
+                    why = "cannot create the dump file";
+                } else {
                     MINIDUMP_EXCEPTION_INFORMATION info = {};
                     info.ThreadId = ::GetCurrentThreadId();
                     info.ExceptionPointers = xp;
@@ -148,29 +229,40 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
                                   ::GetCurrentProcessId(), f, MiniDumpNormal,
                                   &info, nullptr, nullptr) != FALSE;
                     ::CloseHandle(f);
-                    if (!dumped) ::DeleteFileW(path);   // no partial artefacts
+                    if (!dumped) {
+                        why = "MiniDumpWriteDump failed";
+                        ::DeleteFileW(path);   // no partial artefacts
+                    }
                 }
             }
             ::FreeLibrary(dbg);
         }
         if (dumped) PruneOldDumps(g_crashDir);
+        // Then the outcome. When this second write is the one that never
+        // happens, the first is still on disk and still says the handler ran
+        // and how far it got.
+        if (dumped) {
+            WriteCrashNote(g_crashDir, stamp, code, path, nullptr);
+        } else {
+            char noDump[256] = {0};
+            ::sprintf_s(noDump, "no minidump (%s)", why);
+            WriteCrashNote(g_crashDir, stamp, code, nullptr, noDump);
+        }
     }
-    // The breadcrumb names the dump when there is one and says so when there
-    // is not. stderr, not stdout: a crash report is diagnostics, never data
-    // (the D4 rule), and a pipeline parsing stdout must not receive it.
-    char msg[512] = {0};
+    // The breadcrumb names the dump when there is one and says precisely why
+    // not when there is not. stderr, not stdout: a crash report is
+    // diagnostics, never data (the D4 rule), and a pipeline parsing stdout
+    // must not receive it.
+    char msg[MAX_PATH * 2 + 128] = {0};
     if (dumped) {
         char narrow[MAX_PATH * 2] = {0};
-        for (size_t i = 0; i + 1 < sizeof(narrow) && path[i] != L'\0'; ++i)
-            narrow[i] = (path[i] < 128) ? static_cast<char>(path[i]) : '?';
-        ::sprintf_s(msg,
-                    "fatal: unhandled exception 0x%08lX; minidump: %s\r\n",
+        Narrow(path, narrow, sizeof(narrow));
+        ::sprintf_s(msg, "fatal: unhandled exception 0x%08lX; minidump: %s\r\n",
                     code, narrow);
     } else {
         ::sprintf_s(msg,
-                    "fatal: unhandled exception 0x%08lX; no minidump "
-                    "(dump directory unavailable)\r\n",
-                    code);
+                    "fatal: unhandled exception 0x%08lX; no minidump (%s)\r\n",
+                    code, why);
     }
     const HANDLE err = ::GetStdHandle(STD_ERROR_HANDLE);
     if (err != nullptr && err != INVALID_HANDLE_VALUE) {

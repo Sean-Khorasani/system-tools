@@ -449,6 +449,55 @@ if errorlevel 1 (
     echo ok - crash minidump lands on disk
 )
 del "%LOCALAPPDATA%\WinTCP\crashes\wintcp-*.dmp" >nul 2>&1
+REM V7: the breadcrumb on stderr is not always visible - a detached or GUI
+REM launch has no stderr for anyone to be reading - so the same record is also
+REM written to disk, in the folder the dumps land in, before the dump attempt.
+REM findstr fails outright when the file is absent, so the first check below is
+REM also the existence check.
+set /a CHECKS+=1
+findstr /c:"exception 0xC0000005" "%LOCALAPPDATA%\WinTCP\crashes\wintcp-last-crash.txt" >nul 2>&1
+if errorlevel 1 (
+    echo FAIL crash note on disk records the exception [crashtest]
+    set /a FAILS+=1
+) else (
+    echo ok - crash note on disk records the exception
+)
+set /a CHECKS+=1
+findstr /c:"handler ran; minidump: " "%LOCALAPPDATA%\WinTCP\crashes\wintcp-last-crash.txt" >nul 2>&1
+if errorlevel 1 (
+    echo FAIL crash note on disk names the dump it wrote [crashtest]
+    set /a FAILS+=1
+) else (
+    echo ok - crash note on disk names the dump
+)
+REM And the case the note exists for: the handler runs but cannot produce a
+REM dump. Every such failure used to report "dump directory unavailable", so a
+REM missing dbghelp.dll or a refused write sent the reader to a folder that
+REM was perfectly healthy. Put a FILE where the crashes directory belongs -
+REM CreateDirectory then fails and the dump cannot be created - and the
+REM breadcrumb has to name THAT reason instead of claiming a dump.
+REM
+REM The real directory is moved aside rather than deleted: it may hold a user's
+REM dumps, and golden leaves the machine as found. The backup lives in %TEMP%
+REM under a name only this script uses, so a stale one is safe to clear.
+set CRASHDIR=%LOCALAPPDATA%\WinTCP\crashes
+set CRASHBAK=%TEMP%\wintcp_crashes_goldenbak
+set /a CHECKS+=1
+rmdir /s /q "%CRASHBAK%" >nul 2>&1
+if exist "%CRASHDIR%\" move "%CRASHDIR%" "%CRASHBAK%" >nul 2>&1
+type nul > "%CRASHDIR%"
+"%BIN%" crashtest > "%OUT%" 2>&1
+findstr /c:"no minidump (cannot create the dump file)" "%OUT%" >nul 2>&1
+set NO_DUMP_OK=%ERRORLEVEL%
+del "%CRASHDIR%" >nul 2>&1
+if exist "%CRASHBAK%\" move "%CRASHBAK%" "%CRASHDIR%" >nul 2>&1
+if not "%NO_DUMP_OK%"=="0" (
+    echo FAIL crash names the real reason when no dump can be written [crashtest]
+    set /a FAILS+=1
+) else (
+    echo ok - crash names the real reason with no dump
+)
+del "%LOCALAPPDATA%\WinTCP\crashes\wintcp-last-crash.txt" >nul 2>&1
 
 REM --- V2: delay-load degradation holds when DLLs are missing ----------------
 REM     DLLs can be shadowed (comdlg32/ole32/oleaut32/shell32 are KnownDLLs and
