@@ -449,6 +449,57 @@ if errorlevel 1 (
     echo ok - crash minidump lands on disk
 )
 del "%LOCALAPPDATA%\WinTCP\crashes\wintcp-*.dmp" >nul 2>&1
+
+REM --- V2: delay-load degradation holds when DLLs are missing ----------------
+REM     DLLs can be shadowed (comdlg32/ole32/oleaut32/shell32 are KnownDLLs and
+REM     ignore an application-directory copy). crypt32 gets loaded into the
+REM     process early by something else (shell32 / winhttp), so stubbing it does
+REM     NOT exercise the missing-DLL branch - tested, confirmed: DllPresent still
+REM     returns true because LoadLibraryA returns the already-loaded module.
+REM     Only pdh actually gets exercised this way, and it does.
+REM
+REM Copy the product into a temp dir with a zero-byte stub for pdh, and the run
+REM must stay up AND name the missing capability AND degrade its feature. That
+REM is the property V2 is about: a missing delay-loaded DLL is a reported
+REM degradation, not a crash at load time.
+set DL_DIR=%TEMP%\wngolden_dl
+rmdir /s /q "%DL_DIR%" >nul 2>&1
+md "%DL_DIR%" >nul 2>&1
+copy /y "%BIN%" "%DL_DIR%\wintcp.exe" >nul
+type nul > "%DL_DIR%\pdh.dll"
+set /a CHECKS+=1
+"%DL_DIR%\wintcp.exe" version > "%OUT%" 2>&1
+set DLRC=%ERRORLEVEL%
+findstr /c:"Optional features" "%OUT%" >nul 2>&1
+if errorlevel 1 (
+    echo FAIL delayload version prints Optional features [dl]
+    set /a FAILS+=1
+) else (
+    findstr /c:"pdh.dll is not present" "%OUT%" >nul 2>&1
+    if errorlevel 1 (
+        echo FAIL delayload names pdh.dll as missing [dl]
+        set /a FAILS+=1
+    ) else (
+        echo ok - delayload names missing pdh.dll
+    )
+)
+set /a CHECKS+=1
+"%DL_DIR%\wintcp.exe" stat --count 1 > "%OUT%" 2>&1
+findstr /c:"DISK n/a" "%OUT%" >nul 2>&1
+if errorlevel 1 (
+    echo FAIL delayload stat degrades disk to n/a without pdh.dll [dl]
+    set /a FAILS+=1
+) else (
+    echo ok - delayload stat degrades disk to n/a
+)
+set /a CHECKS+=1
+if "%DLRC%"=="0" (
+    echo ok - delayload version exits 0 with stubs
+) else (
+    echo FAIL delayload version exits non-zero with stubs [rc=%DLRC%]
+    set /a FAILS+=1
+)
+rmdir /s /q "%DL_DIR%" >nul 2>&1
 REM With NO explicit --columns a grouped stream gets a group-answerable
 REM default instead of the flat ten (four of which are per-connection). Assert
 REM the FILE's header, since the header is the schema claim being fixed.
