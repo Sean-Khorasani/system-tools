@@ -1,0 +1,70 @@
+list --filter "process:AnyDesk.exe state:estab" --columns pid,process,local,remote,rport,state
+close --select "pid:5168 remote:107.155.105.90" --dry-run
+kill --select "local:port:49665" --dry-run
+kill --select "ipv4: local:port:49665" --dry-run
+block --select "remote:20.47.110.73 state:estab" --dry-run
+blocks
+unblock --address 20.47.110.73 --port 443 --dry-run
+list --group --traffic --sort nettotal --desc --limit 4 --columns pid,process,nettotal,rx,tx
+list --group --traffic --sort tx --desc --limit 4 --columns pid,process,tx,rx
+list --group --traffic --filter "tx:1KB" --sort tx --desc --columns pid,process,tx
+list --group --traffic --filter "tx:500GB" --columns pid,process,tx
+list --group --traffic --filter "process:svchost.exe" --sort tx --desc --limit 3 --columns pid,process,tx --watch 1 --count 2
+list --traffic --watch 2 --count 4 --sort bandwidth --desc --limit 3 --columns pid,process,remote,rport,bandwidth
+geoip info --db GeoLite2-Country.mmdb
+list --dns --traffic --filter "state:estab" --limit 4 --columns remote,host,process,nettotal
+details --select "process:AnyDesk.exe state:estab" --traffic --dns
+list --watch 1 --changes --event appear,state --count 4
+list --watch 2 --changes --filter "proto:tcp" --count 5
+list --filter "port:443" --quiet
+list --watch 1 --changes --event appear --count 3 --filter "proto:tcp state:estab"
+list --filter "process:cloudflared.exe" --columns pid,process,local,remote,rport,state --limit 2
+capture --select "pid:22180" --dry-run
+capture --select "proto:tcp state:estab" --dry-run
+list --filter "state:listen lport:445" --columns process,path,pid,local,state
+list --filter "state:listen exclude:127." --sort lport --columns pid,process,lport,local --limit 8
+list --filter "proto:udp" --columns process,pid,local,lport,proto --limit 5
+list --filter "proto:ipv6" --columns proto,process,local,lport,state --limit 5
+ps --sort cpu --limit 4
+ps --filter "proto:udp" --sort conns --limit 3
+stat
+stat --format json
+list --filter "lport:49600-49700 exclude:127." --sort lport --columns pid,process,lport,local --limit 8
+list --filter "local:port:49665" --columns pid,process,local,lport,state
+list --filter "note:""corporate dns""" --columns remote,rport,pinned --limit 3
+bookmark add --address 64.59.150.137 --port 53 --tag 3 --note "corporate dns resolver"
+bookmark note --address 64.59.150.137 --port 53 --note "confirmed with netops"
+bookmark colour --address 64.59.150.137 --port 53 --tag 1
+bookmark list --format json
+list --filter "note:confirmed" --columns remote,rport,pinned --limit 3
+bookmark remove --address 64.59.150.137 --port 53
+preset save --name rmcheck --filter "port:443" --sort pid
+preset list
+preset show --name rmcheck
+preset apply --name rmcheck --limit 10 --columns pid,process,remote,rport
+preset save --name rmcheck --filter "port:80" --force
+preset delete --name rmcheck
+export --out %TEMP%\rmc_a.csv --filter "tcp: state:listen"
+export --out %TEMP%\rmc_a.tsv --format tsv --columns proto,pid,process,state
+export --out %TEMP%\rmc_b.csv --group --traffic --sort nettotal --desc
+export --out %TEMP%\rmc_c.csv --quiet
+list --format json --columns proto,local,lport,remote,rport,state,pid,process --limit 2
+list --format json --columns full --limit 1
+list --filter "state:listen exclude:127." --quiet
+list --group --traffic --filter "tx:1GB" --quiet
+ps --sort mem --limit 1 --quiet
+# `bench` moved out of the product on 2026-10-02 and now lives in
+# wintcp-tests.exe. It is no longer a documented wintcp.exe command, so
+# asserting it here would assert a rejection.
+#
+# Note the `#`, not `REM`: readmegolden.ps1 skips lines starting with `#` only.
+# Three `REM` lines here were executed as commands and the harness rejected all
+# three with "unexpected argument" - which is exactly what it is for.
+list --watch 2 --changes --event appear,state --format json --count 3
+list --traffic --sort duration --desc --limit 4 --columns pid,process,remote,rport,duration
+list --traffic --filter "duration:1h" --sort duration --desc --limit 4 --columns pid,process,remote,rport,duration
+list --traffic --sort rtt --desc --limit 4 --columns process,remote,rport,rtt,minrtt,cwnd,retrans
+list --traffic --filter "rtt:100" --columns process,rtt,cwnd
+list --traffic --filter "retrans:1KB" --columns process,retrans
+list --traffic --watch 1 --count 3 --filter "state:estab" --columns process,bandwidth,procspeed --limit 8
+list --traffic --group --sort procspeed --desc --limit 6 --columns pid,process,procspeed

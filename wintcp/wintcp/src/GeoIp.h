@@ -1,0 +1,136 @@
+// File: wintcp/src/GeoIp.h (c-header)
+// GeoIp.h
+// A read-only MaxMind DB (.mmdb) reader: address -> ISO 3166-1 alpha-2
+// country code, for the Country column.
+//
+// WHY IT IS HERE RATHER THAN A LIBRARY: the published libmaxminddb is C, and
+// the .mmdb file is the only input we have (the user drops one in). Parsing
+// it in-tree keeps the build dependency-free and the failure mode under our
+// control - the file is untrusted input, so every read in the implementation
+// is bounds-checked against the loaded buffer.
+//
+// The file is read once into memory and kept there for the object's life.
+// These are 1-500 MB files; a real map is not worth the lifetime rules here
+// when the reader is owned by one object with an explicit Close().
+//
+// Nothing in this header throws. Load() reports through a return value and an
+// out-parameter because the file is user-supplied and can be absent,
+// truncated, or not a database at all - none of which are exceptional.
+
+#pragma once
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT
+#endif
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace wintcp {
+
+class GeoIpDatabase {
+public:
+    GeoIpDatabase() = default;
+    ~GeoIpDatabase();
+
+    // Move-only: the instance owns a multi-hundred-megabyte buffer, and
+    // silently duplicating that would be a footgun rather than a convenience.
+    GeoIpDatabase(GeoIpDatabase&& other) noexcept;
+    GeoIpDatabase& operator=(GeoIpDatabase&& other) noexcept;
+
+    GeoIpDatabase(const GeoIpDatabase&) = delete;
+    GeoIpDatabase& operator=(const GeoIpDatabase&) = delete;
+
+    // Read and validate the whole file. Returns false and sets *error (if
+    // non-null) on any failure, including a file that is not an MMDB or is
+    // too small to hold a search tree. 'error' is cleared on success.
+    // 'path' is UTF-16; the code point limit is enforced by the OS, so no
+    // wide/narrow conversion is needed or attempted here.
+    bool Load(const std::wstring& path, std::wstring* error);
+
+    // Release the buffer. Safe at any time, including when nothing is loaded.
+    void Close();
+
+    bool Loaded() const { return dataSectionSize_ != 0; }
+
+    // Look up an address. Returns an ISO 3166-1 alpha-2 code (L"US"), or an
+    // empty string when the address is absent from the database, has no
+    // country record, or the database is not loaded.
+    //
+    // 'hostOrderAddr' is the dotted-quad address in host byte order, i.e. the
+    // same value you would compare against INADDR_NONE. The tree is walked
+    // in network order internally.
+    //
+    // Addresses that are not globally routable return empty WITHOUT touching
+    // the tree. They are not "country unknown", they are "not a country at
+    // all", and printing a code for a loopback or RFC1918 peer would be a
+    // lie; registry data is full of rows for ranges that will never be a
+    // remote endpoint.
+    std::wstring LookupV4(uint32_t hostOrderAddr) const;
+
+    // 'addr' is the 16 address bytes in network order, as stored in
+    // IN6_ADDR / SOCKADDR_IN6.
+    std::wstring LookupV6(const unsigned char addr[16]) const;
+
+    // Metadata, for the About box. All are empty/zero unless the metadata
+    // section parsed, which is a valid state: a database that answers lookups
+    // is still usable, so nothing here is load-bearing.
+    std::wstring DatabaseVersion() const;
+    uint64_t RecordCount() const;
+    uint64_t NodeCount() const;
+    size_t FileSize() const { return data_.size(); }
+
+private:
+    void MoveFrom(GeoIpDatabase& other) noexcept;
+    // Walk the tree for 'bitCount' address bits taken from the front of
+    // 'bits' (network order), then resolve the record found there.
+    std::wstring LookupBits(const unsigned char bits[16], unsigned bitCount) const;
+    // Resolve a data-section offset to a country code, or empty.
+    std::wstring CountryAt(size_t dataOffset) const;
+
+    std::vector<unsigned char> data_;
+
+    // The 16-byte separator's last 8 bytes give where the data section starts;
+    // the section runs from there to the end of the file. Data-section
+    // pointers are relative to that start, so it is also the base every
+    // pointer inside the section resolves against.
+    size_t dataSectionBase_ = 0;
+    size_t dataSectionSize_ = 0;
+
+    // ip_version from the metadata, 4 or 6 only. In a v6 tree the IPv4 half
+    // sits behind 96 bits of zeros, so an IPv4 lookup would otherwise walk 32
+    // more hops through a subtree every real database aliases anyway;
+    // ipv4_start_node from the metadata jumps straight to it.
+    bool ipv6Tree_ = false;
+    size_t v4StartNode_ = 0;
+
+    // Node geometry, from node_count and record_size. A node is two records
+    // of recordBytes_ bytes, so nodes are nodeByteSize_ bytes apart, and the
+    // tree occupies treeSize_ bytes. None of this is stored in the file: it
+    // is all derived, and derived values are the only ones trusted.
+    // record28_ is set for a 28-bit record size, the one layout that is not a
+    // whole number of bytes per record: its node is 7 bytes and the two records
+    // share the nibbles in the middle byte, so it needs reassembling.
+    size_t recordBytes_ = 0;
+    bool record28_ = false;
+    size_t nodeByteSize_ = 0;
+    size_t treeSize_ = 0;
+
+    uint64_t recordCount_ = 0;
+    uint64_t nodeCount_ = 0;
+    std::wstring version_;
+};
+
+// True for addresses that are not globally routable and should never get a
+// country: loopback, link-local, multicast, broadcast, unspecified, the
+// RFC1918 private ranges, and the rest of the non-forwardable blocks
+// (0.0.0.0/8, 192.0.0/24, 100.64/10, 198.18/15, 240.0.0.0/4 and friends).
+// Public so the caller can skip the lookup entirely.
+bool IsGlobalUnicastV4(uint32_t hostOrderAddr);
+bool IsGlobalUnicastV6(const unsigned char addr[16]);
+
+}  // namespace wintcp
