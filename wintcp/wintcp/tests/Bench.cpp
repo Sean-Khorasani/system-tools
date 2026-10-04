@@ -703,6 +703,66 @@ Connection MakeReferenceTcpRow() {
     return c;
 }
 
+// ---- well-formedness oracles for the text converters -----------------------
+// WideToUtf8 and Utf8ToWide sit between every row, every CSV cell, every log
+// line and the outside world, and both take NUL-terminated input. "It
+// returned" is therefore the weakest thing that could be asserted about them:
+// a converter that quietly dropped half a string still returns. These two
+// predicates are what the checks below actually assert - encoded bytes a
+// conforming decoder must read back as the same text, and decoded text with
+// no lone surrogate, because a lone surrogate is exactly what makes the NEXT
+// encode fail and take the whole row with it.
+//
+// ValidUtf8 rejects the three ways UTF-8 can be malformed while still looking
+// like UTF-8: an overlong encoding (reads a different character than the
+// encoder meant), a surrogate (not a character at all), and anything past
+// U+10FFFF.
+bool ValidUtf8(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t extra;  // continuation bytes that must follow
+        unsigned char lo = 0x80, hi = 0xBF;
+        if (c < 0x80) { ++i; continue; }
+        if (c >= 0xC2 && c <= 0xDF) { extra = 1; }
+        else if (c == 0xE0) { extra = 2; lo = 0xA0; }  // no overlong 3-byte
+        else if (c >= 0xE1 && c <= 0xEC) { extra = 2; }
+        else if (c == 0xED) { extra = 2; hi = 0x9F; }  // no surrogate
+        else if (c >= 0xEE && c <= 0xEF) { extra = 2; }
+        else if (c == 0xF0) { extra = 3; lo = 0x90; }  // no overlong 4-byte
+        else if (c >= 0xF1 && c <= 0xF3) { extra = 3; }
+        else if (c == 0xF4) { extra = 3; hi = 0x8F; }  // cap at U+10FFFF
+        else { return false; }                         // 80..C1 and F5..FF
+        if (i + extra >= s.size()) return false;       // runs past the end
+        for (size_t k = 1; k <= extra; ++k) {
+            const unsigned char b = static_cast<unsigned char>(s[i + k]);
+            const unsigned char klo = (k == 1) ? lo : static_cast<unsigned char>(0x80);
+            const unsigned char khi = (k == 1) ? hi : static_cast<unsigned char>(0xBF);
+            if (b < klo || b > khi) return false;
+        }
+        i += extra + 1;
+    }
+    return true;
+}
+
+// ValidUtf16 rejects a high surrogate not followed by a low one, and a low
+// surrogate with no high in front: the shape a malformed UTF-8 decode leaves
+// behind, and the shape that makes WideToUtf8 fail and return nothing.
+bool ValidUtf16(const std::wstring& s) {
+    for (size_t i = 0; i < s.size(); ++i) {
+        const wchar_t c = s[i];
+        if (c >= 0xD800 && c <= 0xDBFF) {
+            if (i + 1 >= s.size()) return false;
+            const wchar_t d = s[i + 1];
+            if (d < 0xDC00 || d > 0xDFFF) return false;
+            ++i;
+        } else if (c >= 0xDC00 && c <= 0xDFFF) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 // ---- selftest --------------------------------------------------------------
@@ -2239,6 +2299,209 @@ TestResult RunSelfTest() {
               CsvEscapeUtf8("abc") == "abc" &&
                   CsvEscapeUtf8("a,b") == "\"a,b\"");
         Check(r, "text.format-port", FormatPort(443) == L"443");
+
+        // The rest of block 9 exists because these two functions are the only
+        // thing between an arbitrary string and a CSV cell, a JSON export or a
+        // log line - and both take NUL-terminated input, so a partial answer
+        // looks exactly like a complete one from the outside.
+
+        // The oracles have to be pinned too, or "the converter's output is
+        // well formed" says nothing: an oracle that accepted every byte string
+        // would pass a converter that copied its input straight through. Each
+        // term below is a case the predicate must take a side on - overlong,
+        // surrogate, past U+10FFFF, truncated, never-a-byte, and their
+        // well-formed counterparts at each of the four sequence lengths.
+        Check(r, "text.utf8-oracle",
+              !ValidUtf8("\x80") && !ValidUtf8("\xC0\xAF") &&
+                  !ValidUtf8("\xE0\x80\xAF") && !ValidUtf8("\xED\xA0\x80") &&
+                  !ValidUtf8("\xF4\x90\x80\x80") && !ValidUtf8("\xF5\x80\x80\x80") &&
+                  !ValidUtf8("\xE2\x82") && !ValidUtf8("\xC2") &&
+                  ValidUtf8("") && ValidUtf8("abc") && ValidUtf8("\x7F") &&
+                  ValidUtf8("\xC2\x80") && ValidUtf8("\xE0\xA0\x80") &&
+                  ValidUtf8("\xF0\x90\x80\x80") && ValidUtf8("\xF4\x8F\xBF\xBF") &&
+                  !ValidUtf16(L"\xD800") && !ValidUtf16(L"\xDC00") &&
+                  !ValidUtf16(L"ok\xDBFF") && !ValidUtf16(L"\xDFFF" L"ok") &&
+                  ValidUtf16(L"") && ValidUtf16(L"abc") &&
+                  ValidUtf16(L"\xD83D\xDE00"),
+              "oracle");
+
+        // Well-formed text must survive an encode followed by a decode with
+        // nothing added, dropped, reordered or substituted. Every entry is
+        // here for a reason: the em dash and CJK are the multi-byte shapes, the
+        // emoji is a surrogate pair (four bytes in UTF-8, two units in wide),
+        // the combining acute is a sequence rather than a precomposed letter,
+        // U+FFFF and U+E000 are a noncharacter and a private-use code point
+        // that a stricter converter might refuse, and the long strings go past
+        // any single-allocation path.
+        bool wideRt = true;
+        for (const wchar_t* w : {
+                 L"",
+                 L"abc",
+                 L"\x2014",             // em dash, 3-byte UTF-8
+                 L"caf\xE9",            // Latin-1 with an accent
+                 L"\x4E2D\x6587",       // CJK
+                 L"\xD83D\xDE00",       // U+1F600, a surrogate pair
+                 L"a\x0301" L"e",       // 'a' + combining acute + 'e'
+                 L"\x05D0\x05D1",       // Hebrew, right-to-left
+                 L"\x2028\x2029",       // line and paragraph separators
+                 L"\xE000",             // private use
+                 L"\xFFFF",             // noncharacter
+                 L"\xFFFD",             // the replacement character itself
+                 L"\x0001\x001F",       // C0 controls
+                 L"\x007F",             // DEL
+                 L"0123456789",
+             }) {
+            const std::wstring in(w);
+            if (Utf8ToWide(WideToUtf8(in).c_str()) != in) { wideRt = false; break; }
+        }
+        std::wstring longw(20000, L'x');  // well past any small-string buffer
+        for (size_t i = 0; i < longw.size(); i += 7) {
+            longw[i] = static_cast<wchar_t>(0x4E00 + (i % 90));
+        }
+        wideRt = wideRt && Utf8ToWide(WideToUtf8(longw).c_str()) == longw;
+        Check(r, "text.utf8-wide-roundtrip", wideRt);
+
+        // The same trip the other way: bytes that are already well-formed
+        // UTF-8 must come back byte for byte. Each entry is a boundary - the
+        // last one-byte code point, the first and last two- and three-byte
+        // code points, U+FFFF's neighbourhood, a BOM when it is text rather
+        // than a file header, and U+10FFFF, the largest code point Unicode
+        // defines, whose encoding ends in two bytes that look like a lone
+        // continuation to anything that stopped counting early.
+        bool byteRt = true;
+        for (const char* p : {
+                 "",
+                 "abc",
+                 "caf\xC3\xA9",
+                 "\xE4\xB8\xAD\xE6\x96\x87",
+                 "\xF0\x9F\x98\x80",      // U+1F600
+                 "\x7F\xC2\x80",          // DEL, then the first 2-byte code point
+                 "\xDF\xBF\xE0\xA0\x80",  // last 2-byte, first 3-byte
+                 "\xEF\xBB\xBF",          // BOM as content
+                 "\xED\x9F\xBF",          // U+D7FF, just below the surrogates
+                 "\xEE\x80\x80",          // U+E000, first private use
+                 "\xF4\x8F\xBF\xBF",      // U+10FFFF
+             }) {
+            const std::string in(p);
+            if (WideToUtf8(Utf8ToWide(in.c_str())) != in) { byteRt = false; break; }
+        }
+        Check(r, "text.utf8-byte-roundtrip", byteRt);
+
+        // Garbage in, and there is no correct answer to compare against - so
+        // what is pinned is what has to hold REGARDLESS of the bytes. Every
+        // entry is malformed in a different way: a stray continuation, an
+        // overlong slash (which decodes to '/' if the overlong form is
+        // accepted, a different character than was encoded), a CESU-8
+        // surrogate, a code point past U+10FFFF, a truncated sequence, a bad
+        // continuation between two ASCII bytes, and an embedded NUL, which
+        // both functions stop at by construction.
+        const std::string garbage[] = {
+            std::string("\x80"),                    // lone continuation
+            std::string("\xBF"),                    // lone continuation, high
+            std::string("\xC0\xAF"),                // overlong '/'
+            std::string("\xC1\xBF"),                // overlong U+007F
+            std::string("\xE0\x80\xAF"),            // overlong, 3-byte form
+            std::string("\xF0\x80\x80\xAF"),        // overlong, 4-byte form
+            std::string("\xED\xA0\x80"),            // CESU-8 high surrogate
+            std::string("\xED\xB0\x80"),            // lone low surrogate
+            std::string("\xF4\x90\x80\x80"),        // past U+10FFFF
+            std::string("\xF5\x80\x80\x80"),        // never a lead byte
+            std::string("\xFF\xFE"),                // never any byte
+            std::string("\xE2\x82"),                // truncated sequence
+            std::string("\xF0\x9F\x98"),            // truncated 4-byte
+            std::string("\xE2\x28\xA1"),            // bad continuation mid-sequence
+            std::string("a\x80" "b"),               // stray byte between ASCII
+            std::string("\xC2"),                    // lead byte with nothing after
+            std::string("\xE2\x80\xAE" "abc"),      // RTL override, then text
+            std::string("abc\0def", 7),             // embedded NUL, length kept
+            std::string(1, '\0'),                   // nothing but a NUL
+            std::string(),                          // nothing at all
+        };
+        bool gv = true, gs = true, gn = true;
+        for (const std::string& in : garbage) {
+            const std::wstring w = Utf8ToWide(in.c_str());
+            const std::string z = WideToUtf8(w);
+            // A decode must not hand a lone surrogate to the next encode, and
+            // an encode must not hand malformed UTF-8 to anything downstream.
+            if (!ValidUtf16(w)) gv = false;
+            if (!ValidUtf8(z)) gv = false;
+            // Neither output may contain a NUL: a row, a CSV cell or a log line
+            // that carries one is cut in half at the first reader.
+            if (w.find(L'\0') != std::wstring::npos) gn = false;
+            if (z.find('\0') != std::string::npos) gn = false;
+            // And the second trip must not move. A cell that reads one way on
+            // the first export and another on the second is worse than one that
+            // is wrong the same way every time.
+            if (WideToUtf8(Utf8ToWide(z.c_str())) != z) gs = false;
+        }
+        Check(r, "text.utf8-garbage-wellformed", gv);
+        Check(r, "text.utf8-garbage-no-nul", gn);
+        Check(r, "text.utf8-garbage-stable", gs);
+
+        // The same three properties for wide input that cannot be encoded: a
+        // surrogate with no partner is not a character, so a converter has to
+        // decide what to do with it, and "return nothing" would take the whole
+        // string with it rather than just the offending unit.
+        bool wv = true, wn = true, ws = true;
+        for (const wchar_t* p : {
+                 L"\xD800",        // lone high surrogate
+                 L"\xDC00",        // lone low surrogate
+                 L"ok\xDBFF",      // good prefix, then an unpaired high
+                 L"\xDFFF" L"ok",  // unpaired low, then a good suffix
+                 L"\xD83D",        // a high surrogate with its pair missing
+                 L"\x0001",
+             }) {
+            const std::wstring in(p);
+            const std::string z = WideToUtf8(in);
+            if (!ValidUtf8(z)) wv = false;
+            if (z.find('\0') != std::string::npos) wn = false;
+            if (WideToUtf8(Utf8ToWide(z.c_str())) != z) ws = false;
+        }
+        Check(r, "text.utf8-lone-surrogate-wellformed", wv);
+        Check(r, "text.utf8-lone-surrogate-no-nul", wn);
+        Check(r, "text.utf8-lone-surrogate-stable", ws);
+        // A code point that cannot be encoded must not take the rest of the
+        // string with it: 'ok' is valid on both sides of the surrogate, and a
+        // whole cell becoming empty because of one bad unit is precisely how a
+        // good row turns into a blank one. Either dropping the unit or
+        // replacing it with U+FFFD is an acceptable answer; losing 'ok' is not.
+        const std::string kept = WideToUtf8(L"ok\xDBFF");
+        Check(r, "text.utf8-lone-surrogate-keeps-prefix",
+              kept == "ok" || kept == "ok\xEF\xBF\xBD",
+              "len=" + std::to_string(kept.size()));
+        Check(r, "text.utf8-null-arg", Utf8ToWide(nullptr).empty());
+
+        // Deterministic fuzz: the same LCG every run, so a failure is
+        // reproducible from the seed printed here rather than "it happened
+        // once". Only code points that are legal on their own are generated,
+        // which keeps every round-trip failure a converter bug instead of a
+        // property of unpaired surrogate halves; the wide string is what gets
+        // encoded, and its decode must come back identical.
+        uint32_t seed = 0x9E3779B9u;
+        bool fuzz = true;
+        for (int it = 0; it < 4096 && fuzz; ++it) {
+            seed = seed * 1664525u + 1013904223u;
+            const size_t n = seed % 40;
+            std::wstring w;
+            for (size_t k = 0; k < n; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                const uint32_t cp = seed % 0x110000;
+                if (cp < 0x20) continue;                          // controls, incl. NUL
+                if (cp >= 0xD800 && cp <= 0xDFFF) continue;       // unpaired halves
+                if (cp < 0x10000) {
+                    w.push_back(static_cast<wchar_t>(cp));
+                } else {
+                    const uint32_t v = cp - 0x10000;
+                    w.push_back(static_cast<wchar_t>(0xD800 + (v >> 10)));
+                    w.push_back(static_cast<wchar_t>(0xDC00 + (v & 0x3FF)));
+                }
+            }
+            const std::string z = WideToUtf8(w);
+            if (!ValidUtf8(z)) fuzz = false;
+            if (z.find('\0') != std::string::npos) fuzz = false;
+            if (Utf8ToWide(z.c_str()) != w) fuzz = false;
+        }
+        Check(r, "text.utf8-fuzz-roundtrip", fuzz, "seed=" + std::to_string(seed));
     }
 
     // 10. Per-process stat columns.
