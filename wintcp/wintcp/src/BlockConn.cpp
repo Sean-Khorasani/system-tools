@@ -1050,7 +1050,14 @@ bool WriteLedger(const std::vector<std::wstring>& pairs) {
         const std::wstring dir = path.substr(0, sep);
         ::SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
     }
-    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+    // Write to a temp file in the SAME directory, then rename over the real
+    // ledger. CREATE_ALWAYS + write + close is NOT atomic: a kill mid-write
+    // leaves a truncated ledger, and RemoveAllWinTcpRules then cannot see
+    // which rules it owns. A same-name MoveFileExW(REPLACE_EXISTING) is a
+    // rename on NTFS - atomic, so a crash leaves either the old file or the
+    // new one, never a half-written one.
+    const std::wstring tmp = path + L".tmp";
+    HANDLE f = ::CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr,
                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return false;
     std::string text;
@@ -1062,6 +1069,11 @@ bool WriteLedger(const std::vector<std::wstring>& pairs) {
     ::WriteFile(f, text.data(), static_cast<DWORD>(text.size()), &written,
                 nullptr);
     ::CloseHandle(f);
+    if (!::MoveFileExW(tmp.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        ::DeleteFileW(tmp.c_str());
+        return false;
+    }
     return true;
 }
 

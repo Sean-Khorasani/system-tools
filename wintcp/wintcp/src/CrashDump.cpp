@@ -27,22 +27,17 @@ namespace {
 // parsing.
 constexpr int kMaxCrashDumps = 10;
 
-std::wstring CrashDirOnce() {
-    // shell32.dll is delay-loaded, and this function is called from the crash
-    // handler's own control flow. Two consequences, both deliberate:
-    //
-    //   1. The DllAvailable gate is required. Without it, a machine without
-    //      shell32 would take a delay-load EXCEPTION inside the crash path.
-    //      An exception escaping the unhandled-exception filter is not caught
-    //      by that filter - it is a hard second fault, so the minidump would
-    //      never be written. Losing the diagnostic is strictly worse than
-    //      losing the dumps.
-    //   2. There is NO DelayLoadGuard message box here, unlike every other
-    //      gated call site. During crash reporting a modal dialog is the worst
-    //      possible answer: it can block a recovering system on a message
-    //      nobody is there to dismiss. Silently producing no dumps directory is
-    //      the correct behaviour, and R1's own documentation already accepts
-    //      that "no dumps written" is a valid outcome of this handler.
+// g_crashDir is resolved ONCE at startup (InstallCrashHandler). The crash
+// filter must NOT call the heap-allocating path that used to build this on
+// every crash: after STATUS_HEAP_CORRUPTION or exhaustion, the very act of
+// allocating can fault again and lose the dump. A plain null-terminated
+// static buffer sidesteps that entirely.
+wchar_t g_crashDir[MAX_PATH * 2] = {0};
+
+std::wstring ResolveCrashDir() {
+    // shell32.dll is delay-loaded, and this runs at startup - a DllAvailable
+    // gate is still required for the same reason CrashDumpDir() documents
+    // above, but here, on a healthy thread, allocation is fine.
     if (!DllAvailable("shell32.dll")) return std::wstring();
 
     wchar_t appdata[MAX_PATH] = {0};
@@ -55,13 +50,25 @@ std::wstring CrashDirOnce() {
     return dir;
 }
 
-void EnsureDir(const std::wstring& dir) {
+void EnsureDir(const wchar_t* dir) {
     // CreateDirectory fails when the directory exists; that is the common
-    // case, not an error. Create parents first - one call cannot make two
+    // case, not an error. Create the parent first - one call cannot make two
     // levels, and checking existence first would race a concurrent run.
-    const size_t sep = dir.rfind(L'\\');
-    if (sep != std::wstring::npos) ::CreateDirectoryW(dir.substr(0, sep).c_str(), nullptr);
-    ::CreateDirectoryW(dir.c_str(), nullptr);
+    //
+    // Stack-only path arithmetic: the previous form used std::wstring::substr,
+    // which heap-allocates. EnsureDir is called from inside the crash filter,
+    // where allocation is precisely what can fail.
+    if (dir == nullptr || dir[0] == L'\0') return;
+    const wchar_t* sep = ::wcsrchr(dir, L'\\');
+    if (sep != nullptr && sep != dir) {
+        wchar_t parent[MAX_PATH] = {0};
+        const size_t n = static_cast<size_t>(sep - dir);
+        if (n < sizeof(parent) / sizeof(parent[0])) {
+            ::wcsncpy_s(parent, dir, n);
+            ::CreateDirectoryW(parent, nullptr);
+        }
+    }
+    ::CreateDirectoryW(dir, nullptr);
 }
 
 // Delete the single oldest dump when past the cap. One deletion per crash
@@ -71,9 +78,9 @@ void EnsureDir(const std::wstring& dir) {
 // Only our own "wintcp-*.dmp" names are managed; foreign files are left alone.
 // Best-effort throughout: any failure leaves the new dump in place, because
 // pruning must never endanger the artefact it was asked to make room for.
-void PruneOldDumps(const std::wstring& dir) {
+void PruneOldDumps(const wchar_t* dir) {
     wchar_t pattern[MAX_PATH * 2] = {0};
-    ::swprintf_s(pattern, L"%ls\\wintcp-*.dmp", dir.c_str());
+    ::swprintf_s(pattern, L"%ls\\wintcp-*.dmp", dir);
     WIN32_FIND_DATAW fd = {};
     const HANDLE h = ::FindFirstFileW(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -93,7 +100,7 @@ void PruneOldDumps(const std::wstring& dir) {
     ::FindClose(h);
     if (count > kMaxCrashDumps && oldest[0] != L'\0') {
         wchar_t victim[MAX_PATH * 2] = {0};
-        ::swprintf_s(victim, L"%ls\\%ls", dir.c_str(), oldest);
+        ::swprintf_s(victim, L"%ls\\%ls", dir, oldest);
         ::DeleteFileW(victim);
     }
 }
@@ -108,14 +115,13 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
                            ? xp->ExceptionRecord->ExceptionCode
                            : 0xC0000005u;
     wchar_t path[MAX_PATH * 2] = {0};
-    const std::wstring dir = CrashDirOnce();
     bool dumped = false;
-    if (!dir.empty()) {
-        EnsureDir(dir);
+    if (g_crashDir[0] != L'\0') {
+        EnsureDir(g_crashDir);
         SYSTEMTIME st = {};
         ::GetSystemTime(&st);
         ::swprintf_s(path, L"%ls\\wintcp-%04u%02u%02u-%02u%02u%02u-%lu.dmp",
-                     dir.c_str(), st.wYear, st.wMonth, st.wDay, st.wHour,
+                     g_crashDir, st.wYear, st.wMonth, st.wDay, st.wHour,
                      st.wMinute, st.wSecond,
                      static_cast<unsigned long>(::GetCurrentProcessId()));
         // dbghelp is loaded dynamically, not linked: a missing DLL must degrade
@@ -147,7 +153,7 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
             }
             ::FreeLibrary(dbg);
         }
-        if (dumped) PruneOldDumps(dir);
+        if (dumped) PruneOldDumps(g_crashDir);
     }
     // The breadcrumb names the dump when there is one and says so when there
     // is not. stderr, not stdout: a crash report is diagnostics, never data
@@ -182,7 +188,7 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
 }  // namespace
 
 std::wstring CrashDumpDir() {
-    return CrashDirOnce();
+    return std::wstring(g_crashDir);
 }
 
 void CrashForTest() {
@@ -202,6 +208,14 @@ void InstallCrashHandler() {
     static bool installed = false;   // idempotent: main + harness share it
     if (installed) return;
     installed = true;
+    // Resolve the dump directory NOW, on a healthy thread, before the handler
+    // is needed. CrashFilter cannot afford to build it: that path used to
+    // allocate (std::wstring), which is exactly what is unsafe after a heap
+    // failure. See the g_crashDir comment above.
+    const std::wstring dir = ResolveCrashDir();
+    if (dir.size() < sizeof(g_crashDir) / sizeof(g_crashDir[0])) {
+        ::wcscpy_s(g_crashDir, dir.c_str());
+    }
     ::SetUnhandledExceptionFilter(&CrashFilter);
 }
 

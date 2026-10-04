@@ -10,6 +10,15 @@ namespace {
 // getnameinfo needs a sockaddr; parse the literal with InetPton. Link-local
 // addresses may carry a "%scope" suffix that InetPton rejects - strip it
 // (the scope is meaningless for a reverse lookup anyway).
+namespace {
+// Bound on the number of PTR answers retained across a long-running session.
+// A workstation talking to a few hundred distinct endpoints never reaches it,
+// so the evictions are cold misses, not churn. Chosen high enough to cover a
+// busy browser+gathering day, low enough that a compromised or broken peer
+// loop cannot pin unbounded process memory.
+constexpr size_t kMaxCacheEntries = 4096;
+}
+
 std::wstring StripScope(const std::wstring& addr) {
     const size_t pct = addr.find(L'%');
     return (pct == std::wstring::npos) ? addr : addr.substr(0, pct);
@@ -136,6 +145,14 @@ void DnsResolver::Run() {
         {
             std::lock_guard<std::mutex> lk(m_);
             cache_[addr] = host;                   // negative results too
+            cacheOrder_.push_back(addr);
+            // Size cap: evict the oldest entry when we overflow. A name that
+            // is still visible gets re-requested on the next refresh tick, so
+            // eviction is a cold miss rather than data loss.
+            while (cache_.size() > kMaxCacheEntries && !cacheOrder_.empty()) {
+                cache_.erase(cacheOrder_.front());
+                cacheOrder_.pop_front();
+            }
         }
         // A throwing sink drops one answer; the address stays cached as
         // unknown and the next refresh re-requests it if still visible.

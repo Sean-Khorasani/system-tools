@@ -154,8 +154,16 @@ std::vector<BYTE> MakeTemplate(DWORD style, DWORD exStyle, short x, short y,
     // One control: 0xFFFF + ordinal class, title, then 0x0000 for "no extra
     // data". The title is what puts a caption on a button, so it has to be
     // written for OK and Cancel or they come out blank.
+    //
+    // Win32 requires every DLGITEMTEMPLATE in an indirect template to start on
+    // a DWORD (4-byte) boundary. The preceding writes - the font size WORD,
+    // the DWORD-padded font name, the 2-byte "no extra data" slot - can leave
+    // p on a 2-byte boundary. The symptom is an intermittent AV when the dialog
+    // loop walks the template, which is exactly what the audit tracked down.
     const auto item = [&p](DWORD s, short ix, short iy, short icx, short icy,
                            WORD id, WORD cls, const wchar_t* caption) {
+        p = reinterpret_cast<BYTE*>(
+            (reinterpret_cast<ULONG_PTR>(p) + 3) & ~static_cast<ULONG_PTR>(3));
         auto* it = reinterpret_cast<DLGITEMTEMPLATE*>(p);
         it->style = s;
         it->x = ix; it->y = iy; it->cx = icx; it->cy = icy;

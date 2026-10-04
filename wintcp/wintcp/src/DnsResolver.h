@@ -59,7 +59,11 @@ public:
     // Spawn the (idle until offers arrive) worker. False if already running.
     bool Start(Sink sink);
 
-    // Stop and join the worker. Safe to call multiple times.
+    // Stop and join the worker. On shutdown this can block until the
+    // in-flight getnameinfo call returns (Windows has no way to cancel that
+    // synchronous call), so a wedged system DNS server defers the process
+    // exit. Documented trade-off, unchanged by this refactor - see the header
+    // top. The cache is NOT unbounded: it is capped at kMaxCacheEntries.
     void Stop();
 
     // Gate: when disabled, queued lookups wait instead of running.
@@ -98,6 +102,11 @@ private:
     std::deque<std::wstring> queue_;
     std::unordered_set<std::wstring> queued_;
     std::unordered_map<std::wstring, std::wstring> cache_;  // addr -> host ("" = none)
+    // Insertion-order of cache_ keys, for the size cap. Offer() guarantees
+    // each address is inserted at most once (it refuses an address already in
+    // cache_ or queued_), so this stays a deduplicated queue: popping the
+    // front is by construction a still-present cache_ key.
+    std::deque<std::wstring> cacheOrder_;
     Sink sink_;
 };
 

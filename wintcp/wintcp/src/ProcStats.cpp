@@ -26,9 +26,29 @@ std::map<DWORD, ProcStats> ProcStatsSampler::Sample(
     const std::vector<DWORD>& pids) {
     if (!cpuCountInit_) {
         cpuCountInit_ = true;
-        SYSTEM_INFO si = {};
-        ::GetSystemInfo(&si);
-        cpuCount_ = (si.dwNumberOfProcessors != 0) ? si.dwNumberOfProcessors : 1;
+        // GetSystemInfo reports only the primary processor group, which caps
+        // the count at 64. On a multi-socket or high-core-count single CPU
+        // (e.g. 96-thread Threadripper) the percentage figures would then
+        // understate the machine's true capacity. GetActiveProcessorCount sums
+        // every group when given ALL_PROCESSOR_GROUPS - but that entry point
+        // does not exist on Windows 7, so resolve it dynamically rather than
+        // forcing a hard dependency on a function the baseline OS cannot
+        // provide. If it is missing, the old GetSystemInfo number is the
+        // fallback: a 64-cap system is losing nothing on a Win7 box anyway.
+        using GetActiveProcessorCountFn = DWORD(WINAPI*)(WORD);
+        const HMODULE k32 = ::GetModuleHandleW(L"kernel32.dll");
+        const auto fn = (k32 != nullptr)
+            ? reinterpret_cast<GetActiveProcessorCountFn>(
+                  ::GetProcAddress(k32, "GetActiveProcessorCount"))
+            : nullptr;
+        const DWORD n = (fn != nullptr) ? fn(ALL_PROCESSOR_GROUPS) : 0;
+        if (n != 0) {
+            cpuCount_ = n;
+        } else {
+            SYSTEM_INFO si = {};
+            ::GetSystemInfo(&si);
+            cpuCount_ = (si.dwNumberOfProcessors != 0) ? si.dwNumberOfProcessors : 1;
+        }
     }
 
     std::map<DWORD, ProcStats> out;

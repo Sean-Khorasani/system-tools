@@ -3050,6 +3050,14 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             const Connection* c = store_.ViewRow(
                 static_cast<size_t>(cd->nmcd.dwItemSpec));
             if (c == nullptr) return CDRF_DODEFAULT;
+            // High Contrast schemes take precedence over every colour we would
+            // paint. In HC, the system's COLOR_WINDOW/COLOR_WINDOWTEXT pairing
+            // is the only legible answer: our palette would override it with
+            // pale fills on the HC-black background, while the default text
+            // colour would stay white. Returning CDRF_DODEFAULT lets the
+            // ListView paint with the user's HC scheme. The row-flash hint is
+            // a compromise we should keep off when that scheme is in effect.
+            if (HighContrastActive()) return CDRF_DODEFAULT;
             const bool dark = ThemeIsDark();
             if (c->flags & kRowRemoved) {
                 if (dark) {

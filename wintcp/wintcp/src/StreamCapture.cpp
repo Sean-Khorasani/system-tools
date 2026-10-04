@@ -53,7 +53,18 @@ int RunTool(const std::wstring& exe, const std::wstring& args) {
     if (::CreateProcessW(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE,
                          CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) == 0)
         return -1;
-    ::WaitForSingleObject(pi.hProcess, kToolTimeoutMs);
+    // If the tool hangs we must NOT just close the handle and walk away:
+    // pktmon.exe then keeps running, alone and locked onto the capture
+    // drivers, indefinitely. A timeout is an error, and the only sane
+    // recovery is to kill the child before we report failure.
+    const DWORD wait = ::WaitForSingleObject(pi.hProcess, kToolTimeoutMs);
+    if (wait == WAIT_TIMEOUT) {
+        ::TerminateProcess(pi.hProcess, 1);
+        ::WaitForSingleObject(pi.hProcess, 2000);   // let it die
+        ::CloseHandle(pi.hThread);
+        ::CloseHandle(pi.hProcess);
+        return -2;   // distinct from -1 (launch failure)
+    }
     DWORD code = 0;
     if (::GetExitCodeProcess(pi.hProcess, &code) == 0) code = 0xFFFFFFFFu;
     ::CloseHandle(pi.hThread);
