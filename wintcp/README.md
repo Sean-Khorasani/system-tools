@@ -134,7 +134,7 @@ not be measured.
   opens), and it is destroyed with the app.
 - Select all / focus filter / clear filter menu commands; accelerator table.
 
-**Modern Windows (tasks 10, 23, 30)**
+**Modern Windows**
 
 - Per-Monitor V2 **DPI awareness** (manifest), 9 pt Segoe UI, widths and
   font re-derived on `WM_DPICHANGED`.
@@ -1077,7 +1077,7 @@ wintcp.exe ps --filter "proto:udp" --sort conns --limit 3
 
 ```text
   PID  Process                      Conns   CPU%   Memory      Disk
-26404  winagent.exe                     2   0.5  260.5 MB    6.6 MB
+26404  opencode.exe                     2   0.5  260.5 MB    6.6 MB
 5172  Avira.Spotlight.Service.exe      2   0.3   24.3 MB   30.6 MB
 22180  cloudflared.exe                 10   0.3   45.1 MB   52.8 MB
 1940  svchost.exe                      2   0.0   21.0 MB  168.0 KB
@@ -1449,8 +1449,9 @@ you whether a machine with 100k endpoints is usable.
 
 **32. Self-check the tool** - no window, no network, no registry writes, so it
 runs in CI. It lives in `wintcp-tests.exe`, a separate development binary that
-is not distributed; `wintcp.exe` carries no test code, so `wintcp.exe selftest`
-is an unknown command. The checks themselves run the **production** code.
+is not distributed; `wintcp.exe` carries no test code, so
+`wintcp.exe selftest` is an unknown command. The checks themselves run the
+**production** code.
 
 ```bat
 wintcp-tests.exe unit
@@ -1471,7 +1472,7 @@ selftest: all checks passed
 ```
 
 ```text
-472 checks pass, 0 fail.
+473 checks pass, 0 fail.
 ```
 
 | Mode | What it does | Why |
@@ -1580,7 +1581,7 @@ Process                      Remote address   Remote port        RTT    Min RTT 
 chrome.exe                   74.6.160.107             443         30         20       21.2 KB           0 B
 brave.exe                    185.199.110.133          443         17         15       16.6 KB           0 B
 cline.exe                    127.0.0.1              19536         <1          —       63.8 KB           0 B
-winagent.exe                 127.0.0.1              49374         <1          —       18.2 KB           0 B
+opencode.exe                 127.0.0.1              49374         <1          —       18.2 KB           0 B
 ```
 
 ```text
@@ -1702,6 +1703,7 @@ They are diagnostic columns: valuable while chasing one slow connection, and
 noise to everyone else.
 
 
+
 ## Testing
 
 The self-test, the benchmark and the GUI checks are **not** in `wintcp.exe`.
@@ -1713,16 +1715,16 @@ would prove nothing.
 `build.bat` produces both binaries:
 
 ```bat
-build	ests\wintcp-tests.exe unit              :: 472 internal checks; exit 0 only if all pass
-build	ests\wintcp-tests.exe ui                :: 46 GUI checks (needs a desktop session)
-build	ests\wintcp-tests.exe bench 100000 10   :: time the view pipeline
+build\tests\wintcp-tests.exe unit              :: internal checks; exit 0 only if all pass
+build\tests\wintcp-tests.exe ui                :: GUI checks (needs a desktop session)
+build\tests\wintcp-tests.exe bench 100000 10   :: time the view pipeline
 ```
 
 Four gate scripts, all runnable from a Developer Command Prompt:
 
 | Script | What it asserts |
 |---|---|
-| `golden.bat` | CLI behaviour: 160 checks against the real `wintcp.exe`, including exit codes and refusal messages |
+| `golden.bat` | CLI behaviour: every command, exit code and refusal message against the real `wintcp.exe` |
 | `uigolden.bat` | the GUI harness; fails loudly if the harness cannot start, rather than reporting a vacuous pass |
 | `readmegolden.bat` | every command shown in this README is accepted by the binary |
 | `wintcp-tests.exe unit` | parser, snapshot diff, sort, grouping, filters, formatting, joins, GeoIP, TLS decode, reassembly, capability report |
