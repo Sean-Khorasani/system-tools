@@ -15,6 +15,7 @@
 // visible once the winsock/Windows headers have settled their macros.
 #include <iphlpapi.h>
 #include <tcpmib.h>
+#include <tlhelp32.h>    // CreateToolhelp32Snapshot for bench stage [E]
 
 #include <algorithm>
 #include <cstdio>
@@ -56,6 +57,7 @@
 #include "EtwTraffic.h"     // ClassifyNetworkEvent/Payload + GUIDs
 #include "SocketTraffic.h"  // fallback accumulator
 #include "Utils.h"
+#include "ProcessInfo.h"  // ProcessResolver bench stage [E] (pid dedup gate)
 
 namespace wintcp {
 namespace {
@@ -5295,6 +5297,45 @@ std::string RunBench(unsigned rows, unsigned iters) {
         msD = NowMs() - t0;
     }
 
+    // [E] ResolveBatch: pid -> name / path / creation time, over rows that
+    // deliberately SHARE pids the way a real table does - one browser opens
+    // hundreds of sockets, one service answers thousands of connections, so the
+    // same pid appears on row after row. The cost that should scale is the
+    // number of DISTINCT pids (one kernel round trip each); a per-row
+    // implementation instead pays OpenProcess + GetProcessTimes + CloseHandle
+    // once per ROW, and this stage is what tells the two apart.
+    double msE = 0;
+    {
+        std::vector<DWORD> pids;   // the machine's real, live processes
+        HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W pe = {};
+            pe.dwSize = sizeof(pe);
+            if (::Process32FirstW(snap, &pe)) {
+                do {
+                    pids.push_back(pe.th32ProcessID);
+                } while (::Process32NextW(snap, &pe));
+            }
+            ::CloseHandle(snap);
+        }
+        if (pids.empty()) pids.push_back(::GetCurrentProcessId());
+
+        ProcessResolver resolver;
+        std::vector<Connection> batch;
+        batch.reserve(rows);
+        for (unsigned i = 0; i < rows; ++i) {
+            Connection c = MakeRow(i);
+            c.pid = pids[i % pids.size()];   // 'rows' rows, few distinct pids
+            batch.push_back(c);
+        }
+        // One resolver, so the cache carries across iterations: the timed part
+        // is the steady-state revalidation every refresh actually does, not the
+        // first-ever resolution of a pid nobody has seen before.
+        const double t0 = NowMs();
+        for (unsigned it = 0; it < iters; ++it) resolver.ResolveBatch(batch);
+        msE = NowMs() - t0;
+    }
+
     const auto rowSpeed = [rows, iters](double totalMs) {
         if (totalMs <= 0.0) return 0.0;
         return (static_cast<double>(rows) * iters) / totalMs / 1000.0;
@@ -5311,16 +5352,18 @@ std::string RunBench(unsigned rows, unsigned iters) {
         {"[B] SetView (filter tcp port:1000-60000)  ", msB},
         {"[C] SetSort + SetView (toggle direction)  ", msC},
         {"[D] GetColumnText (all columns x rows)    ", msD},
+        {"[E] ResolveBatch (rows share pids)        ", msE},
     };
     for (const Stage& s : stages) {
         ::sprintf_s(line, "  %s  %9.3f ms/op  %8.2f Mrow/s\r\n", s.name,
                     s.total / iters, rowSpeed(s.total));
         out += line;
     }
-    ::sprintf_s(line, "  total timed: %.1f ms\r\n", msA + msB + msC + msD);
+    ::sprintf_s(line, "  total timed: %.1f ms\r\n",
+                msA + msB + msC + msD + msE);
     out += line;
     out += "  (QueryPerformanceCounter; [D] iterates the current view, "
-           "other stages scale with 'rows')\r\n";
+           "[E] resolves pid->name, other stages scale with 'rows')\r\n";
     return out;
 }
 

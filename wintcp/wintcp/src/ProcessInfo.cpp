@@ -120,49 +120,74 @@ void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
     }
 }
 
+const ProcessResolver::Entry* ProcessResolver::ResolvePid(DWORD pid) {
+    bool valid = false;
+    auto it = cache_.find(pid);
+
+    if (it != cache_.end()) {
+        if (pid == 4) {
+            valid = true;   // static label, never changes
+        } else {
+            HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (h != nullptr) {
+                FILETIME cr {}, ex {}, kr {}, ui {};
+                if (::GetProcessTimes(h, &cr, &ex, &kr, &ui) &&
+                    it->second.createKnown &&
+                    ::CompareFileTime(&cr, &it->second.create) == 0) {
+                    valid = true;
+                }
+                ::CloseHandle(h);
+            } else {
+                const DWORD err = ::GetLastError();
+                if (err != ERROR_INVALID_PARAMETER) {
+                    // Still not openable (denied/protected): reuse the
+                    // cached label; we cannot observe a recycle here.
+                    valid = true;
+                }
+            }
+            if (!valid) cache_.erase(it);
+        }
+    }
+
+    if (!valid) {
+        Entry fresh;
+        ResolveOne(pid, fresh);
+        it = cache_.emplace(pid, std::move(fresh)).first;
+    }
+    return &it->second;
+}
+
 void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
     // The snapshot is built at most once per refresh, and only if some PID
     // actually falls through to it.
     snapshotBuilt_ = false;
     snapshot_.clear();
 
+    // ONE resolution per DISTINCT pid per batch, not one per row.
+    //
+    // The result for a pid is a function of the pid and the cached entry
+    // alone - it never depends on which row asked - so the first row carrying
+    // a pid resolves it and every later row with the same pid copies that
+    // answer instead of paying another OpenProcess + GetProcessTimes +
+    // CloseHandle round trip to reach the identical conclusion. A busy machine
+    // shows thousands of connections spread over a few hundred processes, so
+    // most rows repeat a pid already resolved earlier in the same batch: the
+    // per-row form scaled its kernel traffic with ROWS, this scales it with
+    // DISTINCT PIDS. Bench stage [E] measures that difference directly
+    // (before: 142.9 ms/op over 50000 rows; after: see todo.md).
+    //
+    // 'done' holds pointers, not copies: entries are stable in cache_ across
+    // later insertions, and an entry is only ever erased while its own pid is
+    // being re-resolved - before its pointer is published.
+    std::unordered_map<DWORD, const Entry*> done;
+
     for (Connection& c : rows) {
         const DWORD pid = c.pid;
-        bool valid = false;
-        auto it = cache_.find(pid);
-
-        if (it != cache_.end()) {
-            if (pid == 4) {
-                valid = true;   // static label, never changes
-            } else {
-                HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-                if (h != nullptr) {
-                    FILETIME cr {}, ex {}, kr {}, ui {};
-                    if (::GetProcessTimes(h, &cr, &ex, &kr, &ui) &&
-                        it->second.createKnown &&
-                        ::CompareFileTime(&cr, &it->second.create) == 0) {
-                        valid = true;
-                    }
-                    ::CloseHandle(h);
-                } else {
-                    const DWORD err = ::GetLastError();
-                    if (err != ERROR_INVALID_PARAMETER) {
-                        // Still not openable (denied/protected): reuse the
-                        // cached label; we cannot observe a recycle here.
-                        valid = true;
-                    }
-                }
-                if (!valid) cache_.erase(it);
-            }
+        auto seen = done.find(pid);
+        if (seen == done.end()) {
+            seen = done.emplace(pid, ResolvePid(pid)).first;
         }
-
-        if (!valid) {
-            Entry fresh;
-            ResolveOne(pid, fresh);
-            it = cache_.emplace(pid, std::move(fresh)).first;
-        }
-
-        const Entry& e = it->second;
+        const Entry& e = *seen->second;
         c.processName = e.name;
         c.processPath = e.path;
         c.processCreate = e.create;

@@ -56,6 +56,15 @@ private:
     void BuildSnapshotIfNeeded();
     void ResolveOne(DWORD pid, Entry& e);
 
+    // Resolve (or revalidate) ONE pid and return the stable cache entry for
+    // it. The answer depends only on the pid and the cached entry - never on
+    // which row asked - which is what lets ResolveBatch ask this once per
+    // distinct pid instead of once per row. The returned pointer stays valid
+    // across later cache_ inserts (node-based container: inserting or
+    // rehashing never moves an element); it is only ever invalidated by
+    // erasing this very pid, which happens before the pointer is handed out.
+    const Entry* ResolvePid(DWORD pid);
+
     std::unordered_map<DWORD, Entry> cache_;
     std::unordered_map<DWORD, std::wstring> snapshot_;   // one per batch
     bool snapshotBuilt_ = false;
