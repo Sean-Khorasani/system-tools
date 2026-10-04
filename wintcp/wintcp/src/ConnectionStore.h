@@ -17,8 +17,10 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstring>        // std::memcmp in ConnectionKey::operator==
 #include <map>
 #include <string>
+#include <string_view>     // std::hash<std::string_view> for ConnectionKey
 #include <unordered_map>
 #include <vector>
 
@@ -217,6 +219,44 @@ struct RowStats {
     }
 };
 
+// Row identity, PACKED. This is byte for byte the sequence that KeyOf used
+// to build in a std::string - family flag, protocol flag, address, local
+// port, address, remote port, pid - held in the object instead of on the
+// heap. Looking up one row therefore allocates nothing: ReplaceSnapshot used
+// to build TWO std::strings per row per refresh, one to index the previous
+// snapshot and one to look the fresh row up in it, so 1000 rows at 1 Hz
+// cost ~2000 heap operations per second to key data whose widest form is 46
+// bytes and whose width never changes for a given address family.
+//
+// `len` is part of the key rather than a NUL terminator: IPv4 keys are 17
+// bytes and IPv6 keys 46, so the length itself distinguishes the two
+// layouts (two v4 rows differing only in unused v6 bytes must still be the
+// SAME row, which is why those bytes are simply never written).
+struct ConnectionKey {
+    // 1 + 1 (flags) + 16 + 4 + 16 (IPv6 addrs + port) + 4 + 4 (port + pid).
+    static constexpr size_t kMaxBytes = 46;
+
+    size_t len = 0;
+    unsigned char bytes[kMaxBytes] = {};
+
+    // Identical to the std::string comparison it replaced: same bytes, same
+    // length. (Equal length is implied by equal bytes for a fixed layout, but
+    // it costs one compare and makes a truncated key impossible.)
+    bool operator==(const ConnectionKey& o) const {
+        return len == o.len && std::memcmp(bytes, o.bytes, len) == 0;
+    }
+};
+
+// Hashes exactly the bytes the std::string used to hold, through the same
+// std::hash the string got, so bucket distribution is unchanged. The
+// string_view is non-owning - hashing a key still allocates nothing.
+struct ConnectionKeyHash {
+    size_t operator()(const ConnectionKey& k) const {
+        return std::hash<std::string_view>()(
+            std::string_view(reinterpret_cast<const char*>(k.bytes), k.len));
+    }
+};
+
 // ReplaceSnapshot's previous-row lookup: identity key -> the queue of previous
 // row indexes carrying that key.
 //
@@ -226,7 +266,8 @@ struct RowStats {
 // report N-1 false DISAPPEAR ghosts on every refresh and re-appear as new rows
 // on the next one. The queue hands out one previous row per fresh row, which
 // pairs them 1:1 and reports the truth: nothing changed.
-using PrevKeyIndex = std::unordered_map<std::string, std::vector<size_t>>;
+using PrevKeyIndex =
+    std::unordered_map<ConnectionKey, std::vector<size_t>, ConnectionKeyHash>;
 
 class ConnectionStore {
 public:

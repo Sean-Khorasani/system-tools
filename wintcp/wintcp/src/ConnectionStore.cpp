@@ -31,9 +31,6 @@ constexpr unsigned kRttDecimalDivisor = kMsPerSecondU / 10;
 // and a sign, so this is generous. Sized here rather than at the call site so
 // the three formatters cannot disagree about the widest case.
 constexpr size_t kRttCellChars = 32;
-// The join key's reserved capacity: a 4-tuple of two IPv6 addresses (32 bytes)
-// plus two ports, which is what it grows to on the first IPv6 row anyway.
-constexpr size_t kJoinKeyReserve = 56;
 
 // ---- small helpers ---------------------------------------------------------
 
@@ -334,22 +331,37 @@ bool ParseDurationRange(const std::wstring& v, long long* lo, long long* hi) {
 // STATE change event), and a closed socket also changes owner PID to 0, which
 // is why the PID is matched by pairing rather than by equality on the previous
 // snapshot's value alone.
-std::string KeyOf(const Connection& c) {
-    std::string k;
-    k.reserve(kJoinKeyReserve);
-    k.push_back(c.family == AF_INET6 ? '6' : '4');
-    k.push_back(c.protocol == IPPROTO_UDP ? 'U' : 'T');
+ConnectionKey KeyOf(const Connection& c) {
+    static_assert(2 + 16 + 4 + 16 + 4 + 4 <= ConnectionKey::kMaxBytes,
+                  "the widest key (IPv6) must fit ConnectionKey::bytes");
+
+    ConnectionKey k;
+    const auto push = [&k](const void* src, size_t n) {
+        std::memcpy(k.bytes + k.len, src, n);
+        k.len += n;
+    };
+
+    // Byte for byte the layout the std::string version wrote, in the same
+    // order and the same widths, so every pairing decision ReplaceSnapshot
+    // makes is unchanged - only the allocation is gone.
+    k.bytes[k.len++] = static_cast<unsigned char>(
+        c.family == AF_INET6 ? '6' : '4');
+    k.bytes[k.len++] = static_cast<unsigned char>(
+        c.protocol == IPPROTO_UDP ? 'U' : 'T');
     if (c.family == AF_INET6) {
-        k.append(reinterpret_cast<const char*>(&c.local6), 16);
-        k.append(reinterpret_cast<const char*>(&c.localPort), sizeof(UINT));
-        k.append(reinterpret_cast<const char*>(&c.remote6), 16);
+        push(&c.local6, 16);
+        push(&c.localPort, sizeof(UINT));
+        push(&c.remote6, 16);
     } else {
-        k.append(reinterpret_cast<const char*>(&c.local4), 4);
-        k.append(reinterpret_cast<const char*>(&c.localPort), sizeof(UINT));
-        k.append(reinterpret_cast<const char*>(&c.remote4), 4);
+        // Only local4/remote4 are read for IPv4: the v6 fields of an IPv4 row
+        // are untouched by the enumerator and may hold stale bytes from a
+        // reused Connection, so including them would split one row into two.
+        push(&c.local4, 4);
+        push(&c.localPort, sizeof(UINT));
+        push(&c.remote4, 4);
     }
-    k.append(reinterpret_cast<const char*>(&c.remotePort), sizeof(UINT));
-    k.append(reinterpret_cast<const char*>(&c.pid), sizeof(DWORD));
+    push(&c.remotePort, sizeof(UINT));
+    push(&c.pid, sizeof(DWORD));
     return k;
 }
 
@@ -1051,7 +1063,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
 
     for (Connection& f : fresh) {
         FinalizeRow(f);
-        const std::string key = KeyOf(f);
+        const ConnectionKey key = KeyOf(f);
         const auto it = prevMap.find(key);
         if (it != prevMap.end() && !it->second.empty()) {
             // Pop the front of this key's queue: the pairing is consumed, so a
