@@ -19,6 +19,7 @@
 #include "Cli.h"
 #include "Commands.h"
 #include "CrashDump.h"
+#include "Elevate.h"
 #include "MainWindow.h"
 #include "resource.h"
 
@@ -37,6 +38,11 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
     // First, before anything that can crash (which is everything): without
     // this a field failure is "it just closed" with nothing to diagnose.
     wintcp::InstallCrashHandler();
+    // Grant SeDebugPrivilege if the token carries it. Without it, opening
+    // handles to system-level processes (lsass, svchost, services) fails with
+    // ERROR_ACCESS_DENIED even for an Administrator, because the privilege
+    // defaults to Present-but-disabled. Harmless for a standard user.
+    wintcp::EnableDebugPrivilege();
     // The CLI writes UTF-8 (WideToUtf8) — em-dash, arrows, ellipsis, middle dot.
     // Without this the console interprets those bytes as Windows-1252 and shows
     // mojibake (e.g. "ΓÇö" for "—"). Set both input and output to UTF-8.

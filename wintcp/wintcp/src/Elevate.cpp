@@ -132,6 +132,32 @@ bool IsElevatedInstance() {
 
 bool WasRelaunchedForElevation() { return IsElevatedInstance(); }
 
+bool EnableDebugPrivilege() {
+    HANDLE token = nullptr;
+    if (!::OpenProcessToken(::GetCurrentProcess(),
+                            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+        return false;
+    LUID luid;
+    if (!::LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &luid)) {
+        ::CloseHandle(token);
+        return false;
+    }
+    TOKEN_PRIVILEGES tp = {};
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    const BOOL ok = ::AdjustTokenPrivileges(token, FALSE, &tp,
+                                            sizeof(tp), nullptr, nullptr);
+    // AdjustTokenPrivileges returns TRUE even when it granted only some
+    // privileges. The documented partial-failure signal is
+    // GetLastError() == ERROR_NOT_ALL_ASSIGNED, which we treat as "the token
+    // did not carry it" - expected for a standard-user token.
+    const bool granted =
+        (ok != FALSE && ::GetLastError() != ERROR_NOT_ALL_ASSIGNED);
+    ::CloseHandle(token);
+    return granted;
+}
+
 bool Reelevate(const std::wstring& featureName) {
     if (IsElevated()) return false;            // nothing to do
     if (IsElevatedInstance()) return false;    // already the elevated copy
@@ -171,17 +197,30 @@ bool Reelevate(const std::wstring& featureName) {
     wchar_t dir[MAX_PATH] = {0};
     if (::GetCurrentDirectoryW(MAX_PATH, dir) == 0) dir[0] = L'\0';
 
-    STARTUPINFOW si = {};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi = {};
-
     // "runas" is what makes UAC prompt. Returns FALSE with
     // ERROR_CANCELLED when the user clicks No - which must NOT be treated as
     // an error, just as "the user declined".
-    const BOOL ok = ::CreateProcessW(nullptr, newCmd.data(), nullptr, nullptr,
-                                     FALSE, 0, nullptr,
-                                     (dir[0] != L'\0') ? dir : nullptr, &si,
-                                     &pi);
+    //
+    // Use ShellExecuteExW, NOT CreateProcessW. CreateProcessW has no concept of
+    // a verb: it starts the child at the caller's token level, so the call
+    // that was SUPPOSED to trigger a UAC prompt silently relaunched the same
+    // unprivileged process - the old comment above even described "runas"
+    // behaviour that the code below did not implement. ShellExecuteExW routes
+    // through the shell, which is what actually honours the verb.
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.lpVerb = L"runas";
+    sei.lpFile = exePath;   // wchar_t[MAX_PATH] decays to LPWSTR
+    // newCmd already holds the full quoted command line:
+    //   "<exePath>" "arg1" ... "marker"
+    // lpParameters is the part AFTER the leading quoted path and one space.
+    std::wstring params = newCmd.substr(wcslen(exePath) + 3);
+    sei.lpParameters = params.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpDirectory = dir;   // keep the caller's cwd for the elevated process
+
+    const BOOL ok = ::ShellExecuteExW(&sei);
     if (ok == FALSE) {
         const DWORD err = ::GetLastError();
         if (err == ERROR_CANCELLED) {
@@ -200,8 +239,10 @@ bool Reelevate(const std::wstring& featureName) {
         }
         return false;
     }
-    ::CloseHandle(pi.hThread);
-    ::CloseHandle(pi.hProcess);
+    // ShellExecuteExW with SEE_MASK_NOCLOSEPROCESS gives us a process handle,
+    // unlike CreateProcessW which returned PROCESS_INFORMATION. The thread
+    // handle is always null; only the process handle needs closing.
+    if (sei.hProcess != nullptr) ::CloseHandle(sei.hProcess);
     (void)featureName;
     return true;
 }

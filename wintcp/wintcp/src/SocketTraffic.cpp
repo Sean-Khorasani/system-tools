@@ -1,6 +1,6 @@
 // SocketTraffic.cpp
 // See SocketTraffic.h. Everything here was validated on this machine by
-// probe2.exe (a scratch harness): as a standard user,
+// probe2.exe (Temp\opencode\probe_net): as a standard user,
 // OpenProcess(PROCESS_DUP_HANDLE) + DuplicateHandle + WSAIoctl(SIO_TCP_INFO)
 // returns the exact per-socket BytesIn/BytesOut of another process.
 
@@ -500,10 +500,24 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
     if (!workersDone) timeouts_.fetch_add(1, std::memory_order_relaxed);
 
     if (workersDone) {
-        // Every worker has returned and decremented liveThreads_ itself, so
-        // nothing is inside `scratch`, its cached source handles can be closed,
-        // and the allocation itself can go. NOT freeing it on the common
-        // (healthy) path would be a slow leak on every refresh.
+        // finished == queue.size() proves the LAST target was processed. It
+        // does NOT prove the worker that processed it has returned from its
+        // lambda and decremented liveThreads_. Freeing `scratch` here, before
+        // that happens, races the worker's next NextTarget() call (which does
+        // scratch.cursor.fetch_add on the allocation being freed) - a
+        // use-after-free. The previous comment asserted that every worker had
+        // returned, which is exactly the guarantee that was not yet true.
+        //
+        // The fix uses no new machinery: it waits on the same liveThreads_==0
+        // protocol ShutdownScanForExit already uses. The wait is bounded by
+        // construction - a worker wedged in the kernel would have prevented
+        // finished from reaching queue.size(), so reaching this line means every
+        // worker is a few instructions from the nullptr NextTarget returns and
+        // the lambda exits. An empty queue works too: finished is only
+        // meaningful when there is work, and every worker on an empty queue
+        // falls straight through to the decrement.
+        while (liveThreads_.load(std::memory_order_acquire) != 0)
+            ::Sleep(kScanPollMs);
         CloseCachedSources(*scratch);
         delete scratch;
     }
@@ -909,8 +923,10 @@ void SocketTrafficSampler::ScanHandles(ScanScratch& scratch) {
     // kernel for as long as the kernel likes, so the scan thread must never
     // join them: it is the thread Sample() is waiting on, and joining would
     // reproduce the very defect this fixes. The workers own `scratch`, which
-    // is why abandoning one is safe - see ScanScratch's comment - and
-    // scratch.done is what the scan thread polls instead.
+    // is why abandoning one is safe - see ScanScratch's comment. The scan
+    // thread does NOT poll a `done` flag on the normal path; it polls
+    // `finished` against the queue size, and only then waits on
+    // liveThreads_==0 before releasing scratch.
     SocketTrafficSampler* self = this;
     for (int w = 0; w < kProbeWorkers; ++w) {
         liveThreads_.fetch_add(1, std::memory_order_acq_rel);

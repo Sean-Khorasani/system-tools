@@ -72,4 +72,15 @@ bool WasRelaunchedForElevation();
 // message, e.g. L"Follow TCP stream".
 bool Reelevate(const std::wstring& featureName);
 
+// Grant SeDebugPrivilege to this process's token, when the token holds it.
+// Returned in false if the current token is not elevated or does not carry the
+// privilege - which is expected and not an error for a standard user. The
+// privilege defaults to Present-but-disabled in an Administrator token, so
+// without this, opening handles to system-level processes (svchost, lsass,
+// services) fails with ERROR_ACCESS_DENIED even for an Administrator.
+// Safe to call unconditionally at startup: on a standard-user token it simply
+// returns false. Weeks of debugging and confusion over "it works for me but
+// not for the admin" is the cost of never calling it.
+bool EnableDebugPrivilege();
+
 }  // namespace wintcp

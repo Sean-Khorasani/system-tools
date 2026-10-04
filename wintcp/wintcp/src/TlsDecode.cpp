@@ -304,12 +304,15 @@ void ParseServerHello(const unsigned char* p, size_t n, TlsHandshake* hs) {
         if (!er.U16(&type) || !er.U16(&len)) break;
         if (!er.Need(len)) break;
         if (type == 0x002B && len >= 2) {     // supported_versions
+            // ServerHello's SupportedVersions carries a single 2-byte field -
+            // NO length prefix. (The ClientHello form has the 1-byte prefix; a
+            // ServerHello that reads U8 first eats the high byte of the version
+            // and corrupts the parse. RFC 8446 4.2.1.) This bug silently
+            // understated TLS 1.3 as its high byte in `listLen` and the next
+            // byte in `sel`.
             Reader vr(er.Cur(), len);
-            uint8_t listLen = 0;
-            if (vr.U8(&listLen) && vr.Need(2)) {
-                uint16_t sel = 0;
-                if (vr.U16(&sel)) hs->serverVersion = sel;
-            }
+            uint16_t sel = 0;
+            if (vr.U16(&sel)) hs->serverVersion = sel;
         }
         er.Skip(len);
     }

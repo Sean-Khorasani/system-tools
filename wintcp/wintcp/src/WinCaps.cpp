@@ -41,7 +41,16 @@ namespace {
 // LOAD_LIBRARY_SEARCH_* flags: those need a KB2533623 on Win7 and would
 // themselves become the compatibility problem this file exists to avoid.
 bool DllPresent(const char* name) {
-    return ::LoadLibraryA(name) != nullptr;
+    const HMODULE m = ::LoadLibraryA(name);
+    if (m == nullptr) return false;
+    // FreeLibrary balances the LoadLibrary. The first version of this helper
+    // dropped the handle, which is a leak of one reference per probe - the
+    // same defect I fixed in DllAvailable above, and the same audit caught it:
+    // it proves the bug is a *pattern*, not an isolated line. Probes run at
+    // most once per process (WinCapabilities caches the result), so impact is
+    // small - but the shape belongs in exactly one place and this is it.
+    ::FreeLibrary(m);
+    return true;
 }
 
 // Is a specific entry point present in an already-loaded DLL? Used where the

@@ -119,8 +119,8 @@ static bool FinishTcp(const unsigned char* p, size_t off, size_t end,
     if (dataOff < 20 || dataOff > avail) { out->malformed = true; return false; }
     out->srcPort = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
     out->dstPort = static_cast<uint16_t>((p[off + 2] << 8) | p[off + 3]);
-    out->seq = Rd32(p + off + 4, false);
-    out->ack = Rd32(p + off + 8, false);
+    out->seq = Rd32(p + off + 4, true);
+    out->ack = Rd32(p + off + 8, true);
     out->tcpFlags = p[off + 13];
     out->window = static_cast<uint16_t>((p[off + 14] << 8) | p[off + 15]);
     out->payload = p + off + dataOff;

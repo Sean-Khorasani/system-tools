@@ -115,7 +115,7 @@ public:
             const uint64_t gStart = g.seq;
             const uint64_t gEnd = gStart + g.data.size();
             if (gEnd <= s) continue;                  // entirely before us
-            if (gStart >= s + (len - consumed)) break;
+            if (gStart >= s + (len - consumed)) continue;   // can't overlap remaining head
             if (gEnd > s) {                           // overlaps our head
                 const uint64_t d = gEnd - s;
                 if (d >= len - consumed) {            // fully covered

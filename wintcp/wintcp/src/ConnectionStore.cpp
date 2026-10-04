@@ -2011,8 +2011,13 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
         case COL_COUNTRY: cmp = CmpStr(a.country, b.country); break;
         case COL_PINNED: {
             // Pinned first regardless of direction, then by tag, so a
-            // bookmarked row never sin.s below unbookmarked noise.
-            if (a.pinned != b.pinned) cmp = a.pinned ? -1 : 1;
+            // bookmarked row never sinks below unbookmarked noise.
+            // NOTE: the unknownLast flag is required here, identical to
+            // COL_NOTE's precedent below - it keeps the ascending-vs-descending
+            // multiplier off the pinned comparison. Without it, sorting
+            // descending by the pinned column pushed pinned rows to the
+            // bottom, the exact opposite of "pinned first".
+            if (a.pinned != b.pinned) { unknownLast = true; cmp = a.pinned ? -1 : 1; }
             else if (a.tag != b.tag) cmp = CmpInt(a.tag, b.tag);
             break;
         }

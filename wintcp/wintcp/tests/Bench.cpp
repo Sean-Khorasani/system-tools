@@ -3765,6 +3765,54 @@ static const unsigned char kClientHello[] = {
             const TlsHandshake h = ParseTlsHandshake(mixed);
             Check(r, "tls.truncated-handshake-safe", !h.sawCertificate);
         }
+
+        // W1.2: a TLS 1.3 ServerHello's supported_versions extension carries
+        // the real negotiated version as a single 2-byte field with NO length
+        // prefix. The previous parser read a 1-byte length first and corrupted
+        // the version. Build that exact message and assert the version.
+        {
+            auto push16 = [](std::string& s, uint16_t v) {
+                s.push_back(static_cast<char>((v >> 8) & 0xFF));
+                s.push_back(static_cast<char>(v & 0xFF));
+            };
+
+            // ServerHello body
+            std::string body;
+            push16(body, 0x0303);                  // legacy_version
+            body.append(32, '\0');                 // random
+            body.push_back(static_cast<char>(0));  // session_id_len = 0
+            push16(body, 0x1301);                  // cipher_suite
+            body.push_back(static_cast<char>(0));  // compression
+
+            // one supported_versions extension
+            std::string ext;
+            push16(ext, 0x002B);                   // type
+            push16(ext, 2);                        // value length
+            push16(ext, 0x0304);                   // selected_version
+            push16(body, static_cast<uint16_t>(ext.size()));  // extensions len
+            body.append(ext);
+
+            // Handshake header: type=2 (server_hello), 3-byte length
+            std::string hsh;
+            hsh.push_back(static_cast<char>(2));
+            const uint32_t hlen = static_cast<uint32_t>(body.size());
+            hsh.push_back(static_cast<char>((hlen >> 16) & 0xFF));
+            hsh.push_back(static_cast<char>((hlen >> 8) & 0xFF));
+            hsh.push_back(static_cast<char>(hlen & 0xFF));
+            hsh.append(body);
+
+            // Record layer: type=22, version=0x0303, 2-byte length
+            std::string sh;
+            sh.push_back(static_cast<char>(22));
+            push16(sh, 0x0303);
+            push16(sh, static_cast<uint16_t>(hsh.size()));
+            sh.append(hsh);
+
+            const TlsHandshake h = ParseTlsHandshake(sh);
+            Check(r, "tls.serverhello-tls13-negotiated",
+                  h.sawServerHello && h.serverVersion == 0x0304,
+                  "ver=" + std::to_string(h.serverVersion) + " want 772 (0x0304)");
+        }
     }
     //     (not capture order), deduplication (pktmon reports each frame at
     //     several layers) and honest gap accounting.
@@ -4787,3 +4835,4 @@ std::string RunBench(unsigned rows, unsigned iters) {
 }
 
 }  // namespace wintcp
+
