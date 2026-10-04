@@ -67,6 +67,7 @@ constexpr uint8_t kTypeMap = 7;
 constexpr uint8_t kTypeUint64 = 9;
 constexpr uint8_t kTypeUint128 = 10;
 constexpr uint8_t kTypeArray = 11;
+constexpr uint8_t kTypeBool = 14;
 
 // A 5-bit size of 29/30/31 means the size continues in the next 1/2/3 bytes.
 constexpr uint8_t kSizeExtended29 = 29;
@@ -98,6 +99,13 @@ constexpr uint32_t kMaxMetadataCountBytes = 4;
 // callers differ only here - 32 for IPv4, 128 for IPv6.
 constexpr unsigned kIpv4BitCount = 32;
 constexpr unsigned kIpv6BitCount = 128;
+
+// An IPv6 tree contains the whole IPv4 space at a fixed place: ::/96, i.e. 96
+// zero bits from the root, which writers also alias at ::ffff:0:0/96. This is
+// how the IPv4 half is located when metadata does not say (and shipped
+// databases do not say - ipv4_start_node is not in the format's known-key
+// list, so no MaxMind database carries it).
+constexpr unsigned kIpv4InV6PrefixBits = 96;
 
 // No country key, ISO code or name this reader looks at comes close to this,
 // so a size field beyond it is a corrupt file rather than a long string.
@@ -149,8 +157,14 @@ struct Value {
 // the beginning of the metadata section, not the beginning of the data.
 class DataReader {
 public:
-    DataReader(const unsigned char* data, size_t size, size_t dataBase)
-        : data_(data), size_(size), dataBase_(dataBase) {}
+    // No base is carried. 'data' IS the start of the section being read and
+    // the spec makes pointer values relative to that section - the data
+    // section for data pointers, the metadata section for metadata ones - so a
+    // resolved target is already usable as an index into 'data'. Adding a file
+    // offset here (which is what the third parameter used to be) produced an
+    // absolute address that Resolve() then rejected as past the end.
+    DataReader(const unsigned char* data, size_t size)
+        : data_(data), size_(size) {}
 
     const unsigned char* data() const { return data_; }
     size_t size() const { return size_; }
@@ -180,6 +194,12 @@ public:
 
         uint32_t size = 0;
         if (!PayloadSize(ctrl, &pos, &size)) return false;
+        if (type == kTypeBool) {
+            // A boolean's five size bits are its VALUE (0 or 1), not a payload
+            // length - see SkipValue() for the damage reading them as a length
+            // caused.
+            size = 0;
+        }
 
         size_t payload = 0;
         if (!AddOvf(size, pos, &payload)) return false;
@@ -253,6 +273,26 @@ public:
     bool ValueAfterKey(size_t keyPos, size_t* valPos) const {
         if (keyPos >= size_) return false;
         const unsigned char ctrl = data_[keyPos];
+
+        // A key is usually an inline UTF-8 string, but it is very often a
+        // POINTER: writers dedup the sub-keys every country record repeats,
+        // so "continent" in the record at data offset 441 is literally a
+        // 2-byte pointer to the "continent" string that the record at offset 0
+        // already contains. This used to demand a UTF-8 control byte here and
+        // returned false, which MapFind reads as "no such key" - so one shared
+        // key on the FIRST entry made the whole lookup fail, and since the
+        // first key of a country record is always shared, no country was ever
+        // extracted from a real database.
+        //
+        // The key's extent is the pointer's own bytes; KeyIs() needs no change,
+        // because Decode() already follows a pointer to reach the string.
+        if (static_cast<uint8_t>(ctrl >> 5) == kTypePointer) {
+            const size_t payload =
+                static_cast<size_t>((ctrl >> kPtrSizeShift) & kPtrSizeMask) + 1;
+            if (keyPos + 1 + payload > size_) return false;
+            return AddOvf(keyPos, 1 + payload, valPos);
+        }
+
         if (static_cast<uint8_t>(ctrl >> 5) != kTypeUtf8) return false;
 
         size_t pos = keyPos + 1;
@@ -286,6 +326,26 @@ private:
     // pointer chain, and stops a file that nests containers into each other.
     bool SkipValue(size_t off, int depth, size_t* end) const {
         if (depth > kMaxPointerFollows) return false;
+        if (off >= size_) return false;
+
+        // A pointer is FOUR facts, but a skip only needs one of them: how many
+        // bytes it occupies HERE. 1 control byte plus (size code + 1) payload.
+        //
+        // This branch has to come BEFORE Resolve(), because Resolve() exists to
+        // throw the pointer away and report where it POINTS. Following it here
+        // made ValueEnd() return the end of the TARGET, and the container walk
+        // then resumed at that target instead of just past the pointer - a
+        // jump backwards into the middle of an unrelated value. Every real
+        // database has a 'languages' array of pointers, so metadata walking
+        // derailed there and node_count was never reached.
+        const unsigned char here = data_[off];
+        if (static_cast<uint8_t>(here >> 5) == kTypePointer) {
+            const size_t payload =
+                static_cast<size_t>((here >> kPtrSizeShift) & kPtrSizeMask) + 1;
+            if (off + 1 + payload > size_) return false;
+            *end = off + 1 + payload;
+            return true;
+        }
 
         size_t real = 0;
         if (!Resolve(off, &real)) return false;
@@ -303,6 +363,24 @@ private:
 
         uint32_t size = 0;
         if (!PayloadSize(ctrl, &pos, &size)) return false;
+        if (type == kTypeBool) {
+            // boolean - 14: "The length information for a boolean type will
+            // always be 0 or 1, indicating the value. There is no payload for
+            // this field." The five size bits in the control byte are the
+            // VALUE, so treating them as a payload length - which this did -
+            // stepped exactly one byte into the NEXT field.
+            //
+            // That one byte is all it takes to lose a record: a country record
+            // carrying 'is_in_european_union' is followed by 'iso_code', and
+            // resuming one byte late meant the key was read from the middle of
+            // the boolean itself, ValueAfterKey() refused it, MapFind() gave up
+            // on the whole map, and the row printed no country. The records
+            // without that flag worked, which is what made it look like only
+            // some countries were broken. (end marker - 13 needs no special
+            // case: its size is always 0, so the generic path already lands
+            // right after it.)
+            size = 0;
+        }
 
         if (type == kTypeMap || type == kTypeArray) {
             for (uint32_t i = 0; i < size; ++i) {
@@ -379,28 +457,57 @@ private:
     }
 
     // Spec readPointer(). 'pos' is the first byte after the control byte.
+    //
+    // A size code S stands for S+1 payload bytes, so the value is assembled
+    // from S+1 bytes - and the previous version of this function got that wrong
+    // three separate ways at once. That is not a rounding error: it is why no
+    // real MaxMind database could ever be opened by this program, while every
+    // self-test passed, because the synthetic database contains no pointers at
+    // all and this code was therefore never executed by a single test:
+    //
+    //   * it read S bytes rather than S+1, so a size-0 pointer - by far the
+    //     common case - consumed NO payload byte and the offset came out as
+    //     whatever the control bits alone described;
+    //   * ReadBytes() ASSIGNS its result, so seeding 'v' with the control
+    //     byte's low three bits and then calling it threw those three bits
+    //     away, contradicting the comment that used to sit right here;
+    //   * it added dataBase_ to a value the spec already defines relative to
+    //     the section, handing Resolve() a file-absolute offset that its own
+    //     'off >= size_' bound then rejected.
+    //
+    // Every real database carries a 'languages' array whose elements are
+    // pointers, so Load() derailed while skipping that array and reported the
+    // unrelated "metadata is missing node_count or record_size".
+    //
+    // Size 3 is the 4-byte form, where the payload is a plain 32-bit offset and
+    // the control byte's low three bits are IGNORED. It used to be refused
+    // outright as unimplemented, which is what the review flagged; all four
+    // forms are implemented now, and the two larger ones keep their spec bases
+    // (2048 = 2^11, past every 11-bit size-0 value; 526336 = 2^19 + 2048, past
+    // every 19-bit size-1 value) so the ranges cannot overlap.
     bool ReadPointer(unsigned char ctrl, size_t pos, size_t* out) const {
         const uint8_t size = static_cast<uint8_t>((ctrl >> kPtrSizeShift) &
                                                  kPtrSizeMask);
-        if (size > 2) return false;  // the 4-byte form is not implemented
-        if (pos + size > size_) return false;
+        const size_t payload = static_cast<size_t>(size) + 1;
+        if (pos + payload > size_) return false;
 
-        // The value continues in the next 1/2/3 bytes, and the control byte's
-        // own low three bits are its most significant bits, which is why this
-        // shifts the whole thing right by three.
-        uint64_t v = (static_cast<uint64_t>(ctrl) & 0x7u) << (8 * size);
-        ReadBytes(data_ + pos, size, &v);
-        if (size >= 2) v += kPtr2Base;
-        if (size >= 3) v += kPtr3Base;
+        uint64_t v = 0;
+        ReadBytes(data_ + pos, payload, &v);
+        if (size != 3) {
+            // ReadBytes() replaced 'v', so the control byte's three bits go on
+            // top of the payload now - they are the value's MOST significant
+            // bits, which is what the (8 * payload) shift expresses.
+            v |= (static_cast<uint64_t>(ctrl) & 0x7u) << (8 * payload);
+            if (size == 1) v += kPtr2Base;
+            else if (size == 2) v += kPtr3Base;
+        }
 
-        if (v > (std::numeric_limits<size_t>::max)() - dataBase_) return false;
-        *out = dataBase_ + static_cast<size_t>(v);
+        *out = static_cast<size_t>(v);
         return true;
     }
 
     const unsigned char* data_;
     size_t size_;
-    size_t dataBase_;
 };
 
 // Find 'key' in the map described by 'map' and leave its value's offset in
@@ -634,8 +741,10 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     }
 
     // The metadata is read as its own section, so a pointer in it cannot walk
-    // back into the data section and be mistaken for a record.
-    const DataReader meta(mappedView_ + metaStart, total - metaStart, metaStart);
+    // back into the data section and be mistaken for a record. The section's
+    // start is only the DATA pointer, not an offset to add: pointer values
+    // inside this section are already relative to it.
+    const DataReader meta(mappedView_ + metaStart, total - metaStart);
     Value metaMap;
     if (!meta.Decode(0, &metaMap) || metaMap.type != Value::Type::kMap) {
         return fail(L"The GeoIP database metadata is malformed.");
@@ -702,25 +811,41 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     }
     if (recordCount > static_cast<uint64_t>(dataSize)) recordCount = 0;
 
-    // ip_version decides whether the tree has an IPv4 half of its own. In a v6
-    // tree that half sits behind 96 zero bits, and the metadata's
-    // ipv4_start_node is the node it starts at. A file that claims a v6 tree but
-    // names no such node is not trusted on that point: the walk falls back to
-    // the root, which is where those 96 zero bits lead anyway.
+    // ip_version decides whether the tree has an IPv4 half of its own, and
+    // where it starts. A v6 tree puts IPv4 at ::/96 - 96 zero bits down from
+    // the root - and the metadata MAY confirm that as ipv4_start_node.
+    //
+    // It usually does not: the key is not in the format's known-key list, so no
+    // shipped MaxMind database carries it. When it was missing this did
+    // nothing, leaving IPv4 walks to start at the ROOT, on the stated reasoning
+    // that "those 96 zero bits lead there anyway". They do not lead there - they
+    // lead to a node 96 hops down - so a 32-bit walk from the top searched the
+    // upper reaches of the IPv6 space and never reached IPv4 data at all. Every
+    // IPv4 row came back empty against a real database, which is why this went
+    // unnoticed: the self-test's synthetic database is ip_version 4, has no
+    // such half, and passed. The node is therefore DERIVED when unnamed, by
+    // following 96 zero-bit branches.
     bool ipv6Tree = false;
     size_t v4Start = 0;
+    bool haveV4Start = false;
     uint64_t ipVersion = 0;
     if (MapFind(meta, metaMap, "ip_version", &pos) &&
         meta.ReadUint(pos, &ipVersion) && ipVersion == 6) {
+        ipv6Tree = true;
         uint64_t start = 0;
         if (MapFind(meta, metaMap, "ipv4_start_node", &pos) &&
             meta.ReadUint(pos, &start)) {
             if (start >= nodeCount) {
                 return fail(L"The GeoIP database points at a node that does not exist.");
             }
-            ipv6Tree = true;
             v4Start = static_cast<size_t>(start);
+            haveV4Start = true;
         }
+        // When the key is absent the node is derived further down, once the
+        // tree geometry has been written to this object: the derivation reads
+        // the tree through NodeRecord, which reads those members, so running it
+        // here would have seen them still at their reset values, concluded on
+        // step one that no IPv4 half exists, and recorded that as fact.
     }
 
     // Everything checked out, so take ownership of the buffer.
@@ -730,13 +855,39 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     dataSectionBase_ = base;
     dataSectionSize_ = dataSize;
     ipv6Tree_ = ipv6Tree;
-    v4StartNode_ = v4Start;
     recordBytes_ = recordBytes;
     record28_ = record28;
     nodeByteSize_ = nodeBytes;
     treeSize_ = treeSize;
     nodeCount_ = nodeCount;
     recordCount_ = recordCount;
+
+    // Derive the IPv4 half's root node when metadata did not name it. This runs
+    // AFTER the geometry above, because NodeRecord reads nodeByteSize_,
+    // treeSize_, record28_, recordBytes_ and nodeCount_ - every one of which is
+    // still a reset value earlier in Load.
+    //
+    // Only a full 96-step descent is accepted. A tree that branches to data on
+    // the way has no separate IPv4 half to find, and stopping partway down
+    // would misalign the remaining 32 bits, so the root is used instead - the
+    // pre-existing behaviour, and no worse than walking a subtree nothing leads
+    // to. This is not a reason to reject a file whose metadata and geometry
+    // already checked out.
+    if (ipv6Tree && !haveV4Start) {
+        size_t node = 0;
+        bool reached = true;
+        for (unsigned step = 0; step < kIpv4InV6PrefixBits; ++step) {
+            size_t child = 0;
+            if (!NodeRecord(node, 0, &child) ||
+                child >= static_cast<size_t>(nodeCount)) {
+                reached = false;
+                break;
+            }
+            node = child;
+        }
+        v4Start = reached ? node : 0;
+    }
+    v4StartNode_ = v4Start;
 
     // The version string is cosmetic: a database that answers lookups is still
     // usable if this one field is missing or odd.
@@ -749,79 +900,86 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     return true;
 }
 
+bool GeoIpDatabase::NodeRecord(size_t node, unsigned half, size_t* out) const {
+    if (nodeByteSize_ == 0 || treeSize_ == 0) return false;
+    if (node >= static_cast<size_t>(nodeCount_)) return false;
+    const size_t recPos = node * nodeByteSize_;
+    if (recPos + nodeByteSize_ > treeSize_) return false;
+
+    if (record28_) {
+        // A 28-bit record keeps the top four bits of both halves in the
+        // middle byte of the node, so a 28-bit file has to be reassembled
+        // from both halves rather than read straight out. This is the
+        // layout nearly every real database uses.
+        const unsigned char* p = mappedView_ + recPos;
+        if (half == 0) {
+            *out = (static_cast<size_t>(p[3] >> 4) << 24) |
+                   (static_cast<size_t>(p[0]) << 16) |
+                   (static_cast<size_t>(p[1]) << 8) |
+                   static_cast<size_t>(p[2]);
+        } else {
+            *out = (static_cast<size_t>(p[3] & 0x0Fu) << 24) |
+                   (static_cast<size_t>(p[4]) << 16) |
+                   (static_cast<size_t>(p[5]) << 8) |
+                   static_cast<size_t>(p[6]);
+        }
+        return true;
+    }
+    if (recordBytes_ == 4) {
+        *out = ReadU32BE(mappedView_ + recPos);
+        return true;
+    }
+    if (recordBytes_ == 3) {
+        // A 3-byte record is the 3 bytes of the node starting at the half this
+        // bit selects: bytes 0-2 for the left record, 3-5 for the right.
+        // Reading the same window for both (which is what this used to do)
+        // meant the right record was a copy of the left, so every walk stepped
+        // down the left half and found nothing. The 4-byte read at offset 3
+        // reaches one byte past this node, which is why the data-section
+        // geometry is checked before any walk runs.
+        *out = (ReadU32BE(mappedView_ + recPos + (half ? 3u : 0u)) >> 8) &
+               0x00FFFFFFu;
+        return true;
+    }
+    // Unreachable: recordBytes_ is derived as (32-bit ? 4 : 3) and a 28-bit
+    // record is caught above. It is a refusal rather than a fall-through so a
+    // future record size cannot quietly read as one of the others.
+    return false;
+}
+
 std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
-                                       unsigned bitCount) const {
+                                       unsigned bitCount,
+                                       size_t startNode) const {
     if (!Loaded() || nodeCount_ == 0 || recordBytes_ == 0) {
         return std::wstring();
     }
 
     const size_t nodeCount = static_cast<size_t>(nodeCount_);
-    size_t node = ipv6Tree_ ? v4StartNode_ : 0;
+    size_t node = startNode;
 
     for (unsigned depth = 0; depth < bitCount; ++depth) {
-        if (node >= nodeCount) return std::wstring();
-        // recordBytes_ is either 3 or 4, and 'node' was range-checked above, so
-        // the node bytes are inside both the buffer and the tree.
-        const size_t recPos = node * nodeByteSize_;
-        if (recPos + nodeByteSize_ > treeSize_) return std::wstring();
-
         const unsigned bit = (bits[depth / 8] >> (7 - (depth % 8))) & 1u;
         size_t record = 0;
-        if (record28_) {
-            // A 28-bit record keeps the top four bits of both halves in the
-            // middle byte of the node, so a 28-bit file has to be reassembled
-            // from both halves rather than read straight out. This is the
-            // layout nearly every real database uses.
-            const unsigned char* p = mappedView_ + recPos;
-            if (bit == 0) {
-                record = (static_cast<size_t>(p[3] >> 4) << 24) |
-                         (static_cast<size_t>(p[0]) << 16) |
-                         (static_cast<size_t>(p[1]) << 8) |
-                         static_cast<size_t>(p[2]);
-            } else {
-                record = (static_cast<size_t>(p[3] & 0x0Fu) << 24) |
-                         (static_cast<size_t>(p[4]) << 16) |
-                         (static_cast<size_t>(p[5]) << 8) |
-                         static_cast<size_t>(p[6]);
-            }
-        } else if (recordBytes_ == 4) {
-            record = ReadU32BE(mappedView_ + recPos);
-        } else if (recordBytes_ == 3) {
-            // A 3-byte record is the 3 bytes of the node starting at the half
-            // this bit selects: bytes 0-2 for the left record, 3-5 for the
-            // right. Reading the same window for both (which is what this used
-            // to do) meant the right record was a copy of the left, so every
-            // walk stepped down the left half and found nothing.
-            record = (ReadU32BE(mappedView_ + recPos + (bit ? 3u : 0u)) >> 8) &
-                     0x00FFFFFFu;
-        } else {
-            // A 28-bit record keeps the top four bits of both halves in the
-            // middle byte of the node, so a 28-bit file has to be reassembled
-            // from both halves rather than read straight out.
-            const unsigned char* p = mappedView_ + recPos;
-            if (bit == 0) {
-                record = (static_cast<size_t>(p[3] >> 4) << 24) |
-                         (static_cast<size_t>(p[0]) << 16) |
-                         (static_cast<size_t>(p[1]) << 8) |
-                         static_cast<size_t>(p[2]);
-            } else {
-                record = (static_cast<size_t>(p[3] & 0x0Fu) << 24) |
-                         (static_cast<size_t>(p[4]) << 16) |
-                         (static_cast<size_t>(p[5]) << 8) |
-                         static_cast<size_t>(p[6]);
-            }
-        }
+        if (!NodeRecord(node, bit, &record)) return std::wstring();
 
-        // Less than the node count is a node number, equal to it means the
-        // database has no data here, and anything above is a data pointer. Note
-        // the 16: record values below node_count + 16 exist only so a pointer
-        // can name the first byte of the data section, and are otherwise
-        // unassigned. offset_in_file = (record - node_count) + tree_bytes, and
-        // tree_bytes + 16 is the data section's own offset, so the
-        // subtraction below lands exactly on the data section's first byte.
+        // Three cases: below the node count it is a node number; equal to it
+        // the database has no data here; and node_count + 16 or above it is a
+        // data pointer, where offset_in_file = (record - node_count) +
+        // tree_bytes, and tree_bytes + 16 is where the data section starts -
+        // so the subtraction below lands on an offset inside that section.
+        //
+        // The boundary is >=, not >: node_count + 16 is EXACTLY offset 0, and
+        // offset 0 is the data section's first byte, which is a real record.
+        // Real databases do put one there - the record a whole IPv4 range in
+        // the test database resolves to sits at offset 0 - and reading that
+        // value as "no data", which this did, made the one country stored
+        // there unfindable while every other country in the same file worked.
+        // Records strictly between node_count and node_count + 16 would be
+        // offsets below the section's start, so they are unassigned and fall
+        // through to the no-data branch.
         if (record < nodeCount) {
             node = record;
-        } else if (record > nodeCount + kSeparatorLen) {
+        } else if (record >= nodeCount + kSeparatorLen) {
             const size_t offset = record - nodeCount - kSeparatorLen;
             if (offset >= dataSectionSize_) return std::wstring();
             return CountryAt(offset);
@@ -830,8 +988,14 @@ std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
         }
     }
 
-    if (node >= nodeCount) return std::wstring();
-    return CountryAt(node);
+    // Every address bit was consumed and the walk still stands on an internal
+    // node, so the address simply has no record. 'node' is a NODE NUMBER - it
+    // is only ever assigned when a record came back below node_count - so
+    // handing it to CountryAt decoded search-tree bytes as if they were a
+    // country record, naming a country for an address that has none (and, now
+    // that data offset 0 is a reachable record, naming whatever sits there for
+    // every address with no data at all).
+    return std::wstring();
 }
 
 std::wstring GeoIpDatabase::LookupV4(uint32_t hostOrderAddr) const {
@@ -858,7 +1022,10 @@ std::wstring GeoIpDatabase::LookupV4(uint32_t hostOrderAddr) const {
     bits[1] = static_cast<unsigned char>((be >> 8) & 0xFFu);
     bits[2] = static_cast<unsigned char>((be >> 16) & 0xFFu);
     bits[3] = static_cast<unsigned char>((be >> 24) & 0xFFu);
-    return LookupBits(bits, kIpv4BitCount);
+    // In an IPv6 tree the IPv4 space is a SUBTREE - the 96-zero-bit one - so an
+    // IPv4 walk starts there rather than at the root. v4StartNode_ is 0 for a
+    // plain IPv4 tree, where the root is the correct start anyway.
+    return LookupBits(bits, kIpv4BitCount, ipv6Tree_ ? v4StartNode_ : 0);
 }
 
 std::wstring GeoIpDatabase::LookupV6(const unsigned char addr[16]) const {
@@ -866,13 +1033,19 @@ std::wstring GeoIpDatabase::LookupV6(const unsigned char addr[16]) const {
     if (!Loaded()) return std::wstring();
     // No special case for ::ffff:a.b.c.d: a 128-bit walk lands in the IPv4
     // subtree of a v6 tree on its own, which is where the data is.
-    return LookupBits(addr, kIpv6BitCount);
+    // Always the root: the IPv6 half IS the tree. Passing v4StartNode_ here as
+    // well (which one stored flag and two identical call sites invited) walked
+    // 128 bits from inside the IPv4 half, where no IPv6 address leads.
+    return LookupBits(addr, kIpv6BitCount, 0);
 }
 
 std::wstring GeoIpDatabase::CountryAt(size_t dataOffset) const {
-    if (dataOffset == 0 || dataSectionSize_ == 0) return std::wstring();
-    const DataReader r(mappedView_ + dataSectionBase_, dataSectionSize_,
-                       dataSectionBase_);
+    // Offset 0 is NOT "no data" - it is the data section's first byte, and real
+    // databases store a country there. Excluding it was half of why the
+    // country at offset 0 could never be read, the other half being the
+    // tree-walk boundary. dataSectionSize_ only means "not loaded".
+    if (dataSectionSize_ == 0) return std::wstring();
+    const DataReader r(mappedView_ + dataSectionBase_, dataSectionSize_);
 
     Value rec;
     if (!r.Decode(dataOffset, &rec) || rec.type != Value::Type::kMap) {

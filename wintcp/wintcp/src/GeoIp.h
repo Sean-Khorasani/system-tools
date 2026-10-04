@@ -87,10 +87,24 @@ public:
 private:
     void MoveFrom(GeoIpDatabase& other) noexcept;
     // Walk the tree for 'bitCount' address bits taken from the front of
-    // 'bits' (network order), then resolve the record found there.
-    std::wstring LookupBits(const unsigned char bits[16], unsigned bitCount) const;
+    // 'bits' (network order), starting at 'startNode', then resolve the record
+    // found there.
+    //
+    // The start node is a parameter rather than something this reads off the
+    // object, because the correct answer depends on the ADDRESS FAMILY, not on
+    // the database: an IPv6 walk always starts at the root, while an IPv4 walk
+    // in an IPv6 tree starts inside the IPv4 half. Deriving it from a single
+    // stored flag (as this used to) sent one of the two families to the wrong
+    // place whichever way the flag was read.
+    std::wstring LookupBits(const unsigned char bits[16], unsigned bitCount,
+                            size_t startNode) const;
     // Resolve a data-section offset to a country code, or empty.
     std::wstring CountryAt(size_t dataOffset) const;
+    // Read one of a node's two child records. False when the node or the read
+    // itself falls outside the mapped tree. Shared by the tree walk and by
+    // Load's search for the IPv4 start node, so the 28-bit reassembly - the
+    // one layout that does not divide into whole bytes - is written once.
+    bool NodeRecord(size_t node, unsigned half, size_t* out) const;
 
     // The loaded database as a memory-mapped view of the file, not a heap
     // copy. A City database is ~70 MB and ISP-level files run to ~450 MB;
@@ -101,10 +115,11 @@ private:
     const unsigned char* mappedView_ = nullptr;
     size_t fileSize_ = 0;
 
-    // The 16-byte separator's last 8 bytes give where the data section starts;
-    // the section runs from there to the end of the file. Data-section
-    // pointers are relative to that start, so it is also the base every
-    // pointer inside the section resolves against.
+    // The data section starts after the tree and the 16-byte separator, and
+    // runs from there to the end of the file. Its start is where it starts -
+    // NOT an offset that pointers get added to: the spec defines a data pointer
+    // as already relative to this start, and a reader that added it produced a
+    // file-absolute address that its own bounds check then rejected.
     size_t dataSectionBase_ = 0;
     size_t dataSectionSize_ = 0;
 

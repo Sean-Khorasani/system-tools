@@ -203,25 +203,151 @@ void MmMap(std::vector<unsigned char>* out, const std::vector<MmPair>& pairs) {
     }
 }
 
+// The spec's pointer bases: an 11-bit, 19-bit and 27-bit value start at 0,
+// 2048 and 526336 so the three ranges cannot overlap. Not ours to choose.
+constexpr size_t kMmPtr2Base = 2048;
+constexpr size_t kMmPtr3Base = 526336;
+
+// Where each awkward record's shared key string is parked. One offset per
+// size code, each chosen to fall INSIDE that code's own range: if the bases
+// were wrong the pointer would resolve outside the range and land on padding
+// instead of on a string, so a wrong base cannot pass by accident.
+constexpr size_t kMmPtrTarget0 = 1000;                    // size 0 and size 3
+constexpr size_t kMmPtrTarget1 = kMmPtr2Base + 52;        // size 1
+constexpr size_t kMmPtrTarget2 = kMmPtr3Base + 64;        // size 2
+static_assert(kMmPtrTarget0 < kMmPtr2Base,
+              "a size-0 pointer target must stay in the 11-bit range");
+static_assert(kMmPtrTarget1 >= kMmPtr2Base && kMmPtrTarget1 < kMmPtr3Base,
+              "a size-1 pointer target must stay in the 19-bit range");
+static_assert(kMmPtrTarget2 >= kMmPtr3Base,
+              "a size-2 pointer target must start at the 27-bit range");
+
+// A data-section pointer: control byte 001SSVVV, then SS+1 bytes (four for
+// SS=3, where VVV is IGNORED rather than being the top of the value).
+void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
+               size_t target) {
+    constexpr unsigned char kCtrl = 0x20;  // 001_00_000: pointer, size code 0
+    if (sizeCode == 0) {
+        out->push_back(
+            static_cast<unsigned char>(kCtrl | ((target >> 8) & 0x07)));
+        out->push_back(static_cast<unsigned char>(target & 0xFF));
+    } else if (sizeCode == 1) {
+        const size_t v = target - kMmPtr2Base;
+        out->push_back(
+            static_cast<unsigned char>(kCtrl | 0x08 | ((v >> 16) & 0x07)));
+        out->push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
+        out->push_back(static_cast<unsigned char>(v & 0xFF));
+    } else if (sizeCode == 2) {
+        const size_t v = target - kMmPtr3Base;
+        out->push_back(
+            static_cast<unsigned char>(kCtrl | 0x10 | ((v >> 24) & 0x07)));
+        out->push_back(static_cast<unsigned char>((v >> 16) & 0xFF));
+        out->push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
+        out->push_back(static_cast<unsigned char>(v & 0xFF));
+    } else {
+        // SS=3 carries a plain 32-bit offset and the spec says VVV is ignored.
+        // It is deliberately written as 111: a reader that used those three
+        // bits as the top of the value would turn 1000 into 0x070003E8 and
+        // report no country, and this is the only way to notice.
+        out->push_back(static_cast<unsigned char>(kCtrl | 0x18 | 0x07));
+        for (int i = 3; i >= 0; --i) {
+            out->push_back(
+                static_cast<unsigned char>((target >> (8 * i)) & 0xFF));
+        }
+    }
+}
+
+// {"country": {"is_in_european_union": true, "iso_code": .., "names": ..}}
+// where the OUTER KEY is a pointer to the string "country" instead of the
+// string itself, and where a boolean sits ahead of iso_code.
+//
+// Two defects hide in this shape and neither of them throws:
+//   * a map key MAY be a pointer - writers dedupe the key every record repeats
+//     - so a reader insisting keys be inline UTF-8 strings gives up on the
+//     whole map. It gives up on the FIRST key, which is why every record in a
+//     real database failed at once while a hand-written one worked.
+//   * 'is_in_european_union' is a boolean: an extended type whose five size
+//     bits are its VALUE (0 or 1) and which has NO payload. Reading them as a
+//     length resumes one byte into the next field, so 'iso_code' is never
+//     reached and the row prints no country.
+// Each record also uses a different pointer size code for that key.
+void MmAwkwardCountry(std::vector<unsigned char>* out, unsigned ptrSize,
+                      size_t target, const char* iso, const char* name) {
+    out->push_back(kMmMap + 1);
+    MmPointer(out, ptrSize, target);
+    out->push_back(kMmMap + 3);
+    MmStr(out, "is_in_european_union");
+    out->push_back(0x01);  // extended (type 0), five size bits = 1
+    out->push_back(0x07);  // type 14 - 7: boolean, value 1 (true), no payload
+    MmStr(out, "iso_code");
+    MmStr(out, iso);
+    MmStr(out, "names");
+    out->push_back(kMmMap + 1);
+    MmStr(out, "en");
+    MmStr(out, name);
+}
+
 // Builds the database. 'depth' levels of tree, so a network is a /depth and a
 // 2**depth-1 node tree is only as large as that needs. 'recordBits' is 24 or 28:
 // modern databases are 28 and older ones 24, and the two have completely
 // different node byte layouts, both of which the reader claims to support.
+//
+// 'ipv6Tree' prepends the 96-node zero chain an ip_version 6 file carries in
+// front of its IPv4 half, and says ip_version 6 in the metadata. 'awkward'
+// writes each record as MmAwkwardCountry does and parks the shared key string
+// at the fixed offset its size code needs.
 std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entries,
-                                              int depth, unsigned recordBits) {
-    const int nodeCount = (1 << depth) - 1;
+                                              int depth, unsigned recordBits,
+                                              bool ipv6Tree = false,
+                                              bool awkward = false) {
+    // An ip_version 6 file holds the whole IPv4 space at ::/96, so the IPv4
+    // half sits 96 zero-bit steps below the root and the tree needs those 96
+    // nodes in front of it. Note that no shipped metadata says WHERE - the spec
+    // carries 'ipv4_start_node' in prose but every real file omits it - so the
+    // reader has to find it by walking. Starting an IPv4 lookup at the root
+    // instead walks 00001000... into the first half-1 branch four bits in and
+    // finds nothing, which is what every real database did.
+    const int chain = ipv6Tree ? 96 : 0;
+    const int subCount = (1 << depth) - 1;
+    const int nodeCount = chain + subCount;
     const size_t recBytes = recordBits / 8;
     // 28-bit records are not a whole number of bytes: the node is 7 bytes, with
     // the top nibble of each record in the shared middle byte.
     const size_t nodeBytes = (recordBits == 28) ? 7u : recBytes * 2;
 
-    // ---- data section. Offset 0 is reserved: a pointer to it reads as "no
-    // data", so one pad byte keeps every record strictly inside the section.
-    std::vector<unsigned char> data(1, 0);
+    // ---- data section ----
+    // The first record starts at offset 0, and that is the point: the spec
+    // says a tree record of node_count + 16 is a pointer to the data section's
+    // FIRST byte, so offset 0 is an ordinary record holding real data. This
+    // began with a pad byte, on the reasoning that a pointer to offset 0 meant
+    // "no data" - which made the record stored there unreadable while every
+    // other record in the same file worked, and hid it from every test. Real
+    // databases do store a country at offset 0. Taking the pad away pins that:
+    // the first entry below is read back from offset 0 or the check fails.
+    std::vector<unsigned char> data;
     std::vector<size_t> offsets;
-    for (const MmdbEntry& e : entries) {
-        offsets.push_back(data.size());
-        MmCountry(&data, e.iso, e.name);
+    if (awkward) {
+        // One shared copy of "country" per size code, at an offset chosen to
+        // sit inside that code's range. Records first, then the strings.
+        const size_t targets[4] = {kMmPtrTarget0, kMmPtrTarget1, kMmPtrTarget2,
+                                   kMmPtrTarget0};
+        for (size_t k = 0; k < entries.size(); ++k) {
+            offsets.push_back(data.size());
+            MmAwkwardCountry(&data, static_cast<unsigned>(k % 4),
+                             targets[k % 4], entries[k].iso, entries[k].name);
+        }
+        // The parked strings must come after every record, or a pointer would
+        // read the middle of one. Refuse to build a file where that happens
+        // rather than emit something the checks would blame the reader for.
+        if (data.size() > kMmPtrTarget0) return {};
+        data.resize(kMmPtrTarget0, 0); MmStr(&data, "country");
+        data.resize(kMmPtrTarget1, 0); MmStr(&data, "country");
+        data.resize(kMmPtrTarget2, 0); MmStr(&data, "country");
+    } else {
+        for (const MmdbEntry& e : entries) {
+            offsets.push_back(data.size());
+            MmCountry(&data, e.iso, e.name);
+        }
     }
 
     // ---- tree: a record is the next node, nodeCount ("no data"), or a pointer
@@ -253,22 +379,34 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     };
     for (int i = 0; i < nodeCount; ++i) {
         for (int b = 0; b < 2; ++b) {
-            const int child = 2 * i + 1 + b;
-            setRec((size_t)i, b,
-                   (size_t)(child < nodeCount ? child : nodeCount));
+            size_t value;
+            if (i < chain) {
+                // The chain: bit 0 walks down towards the IPv4 half, and the
+                // IPv6-only prefixes on the way have no data. The halves being
+                // the same node would let a reader that starts an IPv4 walk at
+                // the root drift down anyway and look correct, so they differ.
+                value = (b == 0) ? (size_t)(i + 1) : (size_t)nodeCount;
+            } else {
+                const int child = 2 * (i - chain) + 1 + b;
+                value = (size_t)(child < subCount ? chain + child : nodeCount);
+            }
+            setRec((size_t)i, b, value);
         }
     }
     // Each entry claims the node its first (depth-1) bits lead to; both halves
     // carry the pointer, so the prefix's last bit does not matter.
     for (size_t k = 0; k < entries.size(); ++k) {
-        int node = 0;
+        int sub = 0;
         for (int d = 0; d < depth - 1; ++d) {
             const int bit = (int)((entries[k].prefix >> (31 - d)) & 1u);
-            node = 2 * node + 1 + bit;
+            sub = 2 * sub + 1 + bit;
         }
+        // +chain: the subtree is laid out exactly as a bare IPv4 tree would be,
+        // just relocated behind the 96 zero bits that reach ::/96.
+        const size_t node = (size_t)(chain + sub);
         const size_t ptr = ptrBase + offsets[k];
-        setRec((size_t)node, 0, ptr);
-        setRec((size_t)node, 1, ptr);
+        setRec(node, 0, ptr);
+        setRec(node, 1, ptr);
     }
     // ---- metadata. Deliberately awkward, because these are the shapes the
     // reader has to survive: a uint64 (an extended type, whose size lives in
@@ -309,7 +447,7 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     epoch.push_back(0x65); epoch.push_back(0x53);
     epoch.push_back(0xA8); epoch.push_back(0x00);
     MmStr(&type_, "Country");
-    MmUint(&ver, kMmUint16, 4);                     // ip_version, uint16
+    MmUint(&ver, kMmUint16, ipv6Tree ? 6 : 4);  // ip_version, uint16
     MmUint(&count, kMmUint32, static_cast<uint64_t>(nodeCount));
     MmUint(&size_, kMmUint16, recordBits);          // record_size, uint16
     const std::vector<MmPair> meta = {
@@ -343,6 +481,46 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     return out;
 }
 
+// The one file every synthetic database below is written to. Fixed name, so a
+// run overwrites the last one; it lives in %TEMP%, which is already the
+// reader's scratch space for the real-file tests too.
+std::wstring SyntheticDbPath() {
+    wchar_t dir[MAX_PATH] = {0};
+    const DWORD n = ::GetTempPathW(MAX_PATH, dir);
+    std::wstring path =
+        (n > 0 && n < MAX_PATH) ? std::wstring(dir) : std::wstring(L".\\");
+    path += L"wintcp-selftest-geoip.mmdb";
+    return path;
+}
+
+// Writes 'db' to that file and loads it into '*out'. The tag names both checks
+// this reports, so a case that failed to BUILD says which database it was
+// instead of leaving the checks inside it quietly absent - which reads as a
+// higher pass rate, not as a failure, and is the worst way for a suite to break.
+bool LoadSyntheticDb(TestResult& r, const std::vector<unsigned char>& db,
+                     const char* tag, GeoIpDatabase* out) {
+    const std::wstring path = SyntheticDbPath();
+    bool wrote = false;
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD put = 0;
+        wrote = ::WriteFile(h, db.data(), (DWORD)db.size(), &put, nullptr) &&
+                put == db.size();
+        ::CloseHandle(h);
+    }
+    const std::string wroteTag = std::string(tag) + "-wrote";
+    if (!wrote) {
+        Check(r, wroteTag.c_str(), false, "temp file");
+        return false;
+    }
+    std::wstring err;
+    const bool loaded = out->Load(path, &err);
+    const std::string loadTag = std::string(tag) + "-load";
+    Check(r, loadTag.c_str(), loaded, WideToUtf8(err));
+    return loaded;
+}
+
 void CheckSyntheticGeoIp(TestResult& r) {
     // /11 networks, chosen so that the REVERSED form of each address lands on a
     // different network: 13.248.151.210 reversed is 210.151.248.13, which is not
@@ -355,37 +533,16 @@ void CheckSyntheticGeoIp(TestResult& r) {
         {0x05200000u, "DE", "Germany"},         // 5.32.0.0/11   -> 5.40.1.1
     };
     for (const unsigned bits : {24u, 28u}) {     // both record layouts
-        const std::vector<unsigned char> db = BuildSyntheticMmdb(entries, 11, bits);
-        wchar_t dir[MAX_PATH] = {0};
-        const DWORD n = ::GetTempPathW(MAX_PATH, dir);
-        std::wstring path =
-            (n > 0 && n < MAX_PATH) ? std::wstring(dir) : std::wstring(L".\\");
-        path += L"wintcp-selftest-geoip.mmdb";
-
-        HANDLE h = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                                 CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY,
-                                 nullptr);
-        bool wrote = false;
-        if (h != INVALID_HANDLE_VALUE) {
-            DWORD put = 0;
-            wrote = ::WriteFile(h, db.data(), (DWORD)db.size(), &put, nullptr) &&
-                    put == db.size();
-            ::CloseHandle(h);
-        }
-        if (!wrote) {
-            Check(r, "geoip.synthetic-wrote", false, "temp file");
-            continue;
-        }
-
         GeoIpDatabase g;
-        std::wstring err;
-        const bool loaded = g.Load(path, &err);
-        Check(r, "geoip.synthetic-load", loaded, WideToUtf8(err));
-        if (loaded) {
+        if (LoadSyntheticDb(r, BuildSyntheticMmdb(entries, 11, bits),
+                            "geoip.synthetic", &g)) {
             const std::string layout = (bits == 24) ? "rec24" : "rec28";
             // Each hit is in a different network, so one wrong byte anywhere in
             // the tree walk, the data pointer or the address byte order turns it
-            // into a miss instead of a wrong-but-plausible answer.
+            // into a miss instead of a wrong-but-plausible answer. 'geoip.hit-us'
+            // reads the record at DATA OFFSET 0, which is the whole reason the
+            // pad byte is gone: node_count + 16 points at the section's first
+            // byte and that byte may hold a country.
             Check(r, "geoip.hit-us", g.LookupV4(0x08080808u) == L"US", layout);
             Check(r, "geoip.hit-us-same-net", g.LookupV4(0x08080404u) == L"US",
                   layout);
@@ -407,7 +564,77 @@ void CheckSyntheticGeoIp(TestResult& r) {
                       g.DatabaseVersion() == L"Country",
                   layout);
         }
-        ::DeleteFileW(path.c_str());
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // The same IPv4 data inside an ip_version 6 file, behind the 96-zero-bit
+    // chain that puts the IPv4 half at ::/96. The two families must start from
+    // DIFFERENT places - an IPv6 address from the root, an IPv4 one from the
+    // node those 96 zeros lead to - and neither may start at the other's node.
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase g;
+        if (LoadSyntheticDb(r,
+                            BuildSyntheticMmdb(entries, 11, bits, true, false),
+                            "geoip.v6", &g)) {
+            const std::string layout = (bits == 24) ? "rec24v6" : "rec28v6";
+            // 1.1.1.1, not 8.8.8.8: the AU record sits after two others in the
+            // data section, so these two checks cannot be satisfied or spoiled
+            // by where the section's first byte happens to be.
+            //
+            // IPv4 starts BEHIND the chain. At the root instead, 1.1.1.1 walks
+            // 00000001..., meets the first half-1 branch seven bits in, and
+            // reports nothing - which is exactly what every real database did
+            // before the start node was derived rather than defaulted.
+            Check(r, "geoip.v6-ipv4-start-node",
+                  g.LookupV4(0x01010101u) == L"AU", layout);
+            // IPv6 starts at the ROOT, so ::1.1.1.1 spends all 96 leading zero
+            // bits on the chain and then lands in the same subtree. At the IPv4
+            // node instead it burns all 128 bits inside a subtree eleven levels
+            // deep, falls out of the bottom, and finds nothing.
+            unsigned char a6[16] = {0};
+            a6[12] = 0x01;
+            a6[13] = 0x01;
+            a6[14] = 0x01;
+            a6[15] = 0x01;
+            Check(r, "geoip.v6-ipv6-from-root",
+                  g.LookupV6(a6) == L"AU", layout);
+            Check(r, "geoip.v6-metadata",
+                  g.NodeCount() == 96u + (1u << 11) - 1 &&
+                      g.DatabaseVersion() == L"Country",
+                  layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // Records shaped the way real ones are: the map's first key is a pointer,
+    // a boolean sits ahead of iso_code, and one record per pointer size code
+    // 0..3 carries it. Distinct isos per record, so a pointer resolving to the
+    // wrong string is a wrong answer rather than a pass.
+    const std::vector<MmdbEntry> awkward = {
+        {0x08000000u, "AA", "Alpha"},     // data offset 0, pointer size 0
+        {0x0DC00000u, "BB", "Bravo"},     //                 pointer size 1
+        {0x01000000u, "CC", "Charlie"},   //                 pointer size 2
+        {0x05200000u, "DD", "Delta"},     //                 pointer size 3
+    };
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase g;
+        if (LoadSyntheticDb(r,
+                            BuildSyntheticMmdb(awkward, 11, bits, false, true),
+                            "geoip.awkward", &g)) {
+            const std::string layout = (bits == 24) ? "rec24" : "rec28";
+            // The record this reads back lives at data offset 0 and its key is
+            // an 11-bit pointer, so it fails for three separate reasons if any
+            // of the three fixes regresses.
+            Check(r, "geoip.awkward-offset-zero-ptr0",
+                  g.LookupV4(0x08080808u) == L"AA", layout);
+            Check(r, "geoip.awkward-ptr1",
+                  g.LookupV4(0x0DF897D2u) == L"BB", layout);
+            Check(r, "geoip.awkward-ptr2",
+                  g.LookupV4(0x01010101u) == L"CC", layout);
+            Check(r, "geoip.awkward-ptr3",
+                  g.LookupV4(0x05280101u) == L"DD", layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
     }
 }
 
