@@ -4853,6 +4853,151 @@ static const unsigned char kClientHello[] = {
         PcapngParse noShb = ParsePcapng(junk, sizeof(junk));
         Check(r, "pcapng.no-shb-rejected", !noShb.ok);
     }
+
+    // `capture --text` and `--dir`: the two pure pieces of the CLI stream dump
+    // (todo.md 8.7 G2). Both are pinned here because the reassembly itself
+    // already has coverage above and these are the parts that had never
+    // existed - and the ASCII gutter in particular is the kind of detail that
+    // is wrong in a way nobody notices by eye.
+    {
+        // (a) The hex dump.
+        //
+        // The payload is built from an explicit length, NOT from a bare
+        // `std::string(const char*)`. That constructor measures with strlen, so
+        // a literal containing \x00 silently becomes the 16 bytes before it -
+        // which is exactly how the first version of this check ended up
+        // asserting a one-line dump for an 18-byte stream and failing for
+        // reasons that had nothing to do with the formatter.
+        //
+        // Bytes: "GET / HTTP/1.1\r\n" then 0x00 and 0xFF.
+        const char raw[] = "GET / HTTP/1.1\r\n\x00\xFF";
+        const std::string payload(raw, sizeof(raw) - 1);
+        const std::string dump = FormatStreamHex(payload);
+        Check(r, "streamhex.payload-is-all-18-bytes", payload.size() == 18);
+
+        // 18 bytes at 16 per line = two lines.
+        {
+            int lines = 0;
+            for (char ch : dump) {
+                if (ch == '\n') ++lines;
+            }
+            Check(r, "streamhex.line-count", lines == 2);
+        }
+        Check(r, "streamhex.offset-is-the-stream-offset",
+              dump.rfind("00000000  ", 0) == 0 &&
+                  dump.find("\r\n00000010  ") != std::string::npos);
+
+        // The hex column. 0x47 is 'G' - the first version wrote 0x48 here,
+        // which is 'H', and so could never match.
+        Check(r, "streamhex.hex-bytes",
+              dump.find("47 45 54 20 2f 20 48 54") != std::string::npos);
+
+        // The half-way gap turns sixteen hex bytes into TWO columns of eight.
+        // It is a single space where there would otherwise be two, so the
+        // signature is the doubled space after byte 7.
+        Check(r, "streamhex.two-hex-columns",
+              dump.find("2f 20 48 54  54 50 2f 31") != std::string::npos);
+
+        // The ASCII gutter: printable passes through, and both 0x00 and 0xFF
+        // become '.', which is the hexdump(1) convention.
+        Check(r, "streamhex.ascii-gutter",
+              dump.find("|GET / HTTP/1.1..|\r\n") != std::string::npos);
+
+        // A short final line pads the hex field so the gutter still lines up,
+        // and omits the half-way gap rather than leaving it floating in the
+        // middle of empty space. So line 2 is "00000010  00 ff", 14 groups of
+        // padding, then " |..|".
+        Check(r, "streamhex.short-last-line-is-padded",
+              dump.find("\r\n00000010  00 ff") != std::string::npos &&
+                  dump.size() >= 4 && dump.compare(dump.size() - 6, 6, "|..|\r\n") == 0);
+
+        // An empty stream is empty output, not one blank line: a reader piping
+        // this into a file must not get a line they have to skip.
+        Check(r, "streamhex.empty-input-is-empty-output",
+              FormatStreamHex(std::string()).empty());
+
+        // bytesPerLine 0 and absurd values fall back rather than misbehaving.
+        // The absurd case mattered: the first version sized a C array FROM the
+        // parameter, which is a VLA - GCC accepts it, MSVC rejects it with
+        // C2131, and the whole file would not compile over a formatter.
+        Check(r, "streamhex.zero-width-falls-back",
+              FormatStreamHex("AB", 0) == FormatStreamHex("AB", 16));
+        Check(r, "streamhex.absurd-width-falls-back",
+              FormatStreamHex("AB", 100000) == FormatStreamHex("AB", 16));
+
+        // A non-default width still lays out one line per N bytes, so the
+        // parameter is not decorative.
+        {
+            const std::string eight = FormatStreamHex(payload, 8);
+            int lines = 0;
+            for (char ch : eight) {
+                if (ch == '\n') ++lines;
+            }
+            Check(r, "streamhex.honours-the-width", lines == 3 &&
+                  eight.find("\r\n00000008  ") != std::string::npos);
+        }
+
+        // The documented sample in docs\cookbook.md is copied from here, so a
+        // change to the formatter's spacing fails rather than quietly leaving
+        // the docs showing output the tool does not produce. The expected text
+        // below is the MEASURED form (captured from the formatter, not written
+        // by hand): the half-way gap falls after the eighth byte, and the ASCII
+        // gutter uses '.' for CR, LF, NUL and 0xFF.
+        {
+            const char req[] =
+                "GET / HTTP/1.1\r\n"
+                "Host: example.com\r\n"
+                "Connection: keep-alive\r\n"
+                "\r\n";
+            const std::string got = FormatStreamHex(std::string(req, sizeof(req) - 1));
+            const char want[] =
+                "00000000  47 45 54 20 2f 20 48 54  54 50 2f 31 2e 31 0d 0a  |GET / HTTP/1.1..|\r\n"
+                "00000010  48 6f 73 74 3a 20 65 78  61 6d 70 6c 65 2e 63 6f  |Host: example.co|\r\n"
+                "00000020  6d 0d 0a 43 6f 6e 6e 65  63 74 69 6f 6e 3a 20 6b  |m..Connection: k|\r\n"
+                "00000030  65 65 70 2d 61 6c 69 76  65 0d 0a 0d 0a           |eep-alive....|\r\n";
+            Check(r, "streamhex.documented-sample-is-current", got == want,
+                  got.size() <= 400 ? got : got.substr(0, 400));
+        }
+    }
+
+    // (b) --dir. Every accepted spelling must reach the right half, and anything
+    //     else must be refused - a typo that silently meant "both" would print
+    //     twice what was asked for.
+    {
+        auto dirIs = [](const wchar_t* v, CaptureDir want) {
+            CaptureDir got = CaptureDir::kBoth;
+            return ParseCaptureDir(v, &got) && got == want;
+        };
+        Check(r, "capturedir.both-is-the-default",
+              dirIs(L"both", CaptureDir::kBoth) &&
+                  dirIs(L"BOTH", CaptureDir::kBoth) &&
+                  dirIs(L"all", CaptureDir::kBoth));
+        Check(r, "capturedir.first-has-synonyms",
+              dirIs(L"first", CaptureDir::kFirst) &&
+                  dirIs(L"a", CaptureDir::kFirst) &&
+                  dirIs(L"1", CaptureDir::kFirst) &&
+                  dirIs(L"server", CaptureDir::kFirst) &&
+                  dirIs(L"to-server", CaptureDir::kFirst));
+        Check(r, "capturedir.second-has-synonyms",
+              dirIs(L"second", CaptureDir::kSecond) &&
+                  dirIs(L"b", CaptureDir::kSecond) &&
+                  dirIs(L"2", CaptureDir::kSecond) &&
+                  dirIs(L"client", CaptureDir::kSecond) &&
+                  dirIs(L"to-client", CaptureDir::kSecond));
+        Check(r, "capturedir.unknown-refused",
+              !ParseCaptureDir(L"sideways", nullptr) &&
+                  !ParseCaptureDir(L"", nullptr) &&
+                  !ParseCaptureDir(L"firsts", nullptr));
+
+        // A refused parse must leave the caller's value alone. CmdCapture
+        // re-checks with its own default and relies on that, so a parse that
+        // clobbered the output before failing would turn a typo into a
+        // different capture than the one asked for.
+        CaptureDir scratch = CaptureDir::kFirst;
+        const bool refused = ParseCaptureDir(L"nope", &scratch);
+        Check(r, "capturedir.refusal-leaves-the-target-alone",
+              !refused && scratch == CaptureDir::kFirst);
+    }
     //     button must agree with what the window draws, must survive an
     //     empty model, and must not claim to list more rows than it has.
     {
@@ -4897,6 +5042,126 @@ static const unsigned char kClientHello[] = {
         Check(r, "details.overflow-honest",
               t.find(L"and 2 more") != std::wstring::npos &&
                   m.connectionLines.size() == 1);
+
+        // Every field must carry a non-empty LABEL as well as a value.
+        //
+        // This is the model-side half of the 2026-10-05 Details rework. The
+        // window now draws one row per field with the label in a fixed-width
+        // left column, and a field with an empty label would render as a row
+        // that is all leader dots and value - which is exactly the "cheap and
+        // basic" look the rework set out to remove. The renderer cannot check
+        // this itself, because by the time a Line exists the label has already
+        // been thrown away; so it is asserted here, on the model every producer
+        // builds.
+        {
+            int fields = 0;
+            bool allLabelled = true;
+            for (const DetailSection& labelled : m.sections) {
+                for (const DetailField& f : labelled.fields) {
+                    ++fields;
+                    if (f.label.empty()) allLabelled = false;
+                }
+            }
+            Check(r, "details.every-field-has-a-label",
+                  fields > 0 && allLabelled);
+        }
+
+        // Label widths drive the gutter, so the longest label the real model
+        // emits is worth pinning against the window's kLabelGutter. If a future
+        // label is longer than the gutter, the window ellipsises it - correct,
+        // but worth knowing rather than discovering on screen. Measured on the
+        // model's own vocabulary rather than hardcoded, so this fails only when
+        // the labels themselves change.
+        {
+            size_t widest = 0;
+            for (const DetailSection& widthSrc : m.sections) {
+                for (const DetailField& f : widthSrc.fields) {
+                    widest = (std::max)(widest, f.label.size());
+                }
+            }
+            // The window's kLabelGutter is 172 logical px, which at the 96 dpi
+            // UI font holds about 26 characters. Asserted at 24 - just under the
+            // real vocabulary's longest ("Memory (working set)", 20) - because
+            // a label that overruns the column loses its leader dots, and that
+            // is the whole reason the gutter was widened from 148.
+            //
+            // NOTE this is asserted against a SYNTHETIC model's labels, not
+            // BuildDetailModel's: the real builder needs a live Connection plus
+            // a ConnectionStore, and the shared vocabulary is checked by
+            // details.reallabels-fit-too below.
+            Check(r, "details.labels-fit-the-gutter", widest > 0 && widest <= 24,
+                  "widest label is " + std::to_string(widest) + " chars");
+        }
+
+        // The check above reads a synthetic model, whose labels are short. This
+        // one reads the REAL vocabulary, by building a model from a synthetic
+        // Connection - which is the only way to catch a label added to
+        // BuildDetailModel that does not fit the gutter. A label that overruns
+        // is not fatal (the window ellipsises it) but it silently loses its
+        // leader dots, and the dot is what makes the row read as a pair rather
+        // than as a caption and a value that happen to share a line.
+        {
+            Connection rc;
+            rc.family = AF_INET;
+            rc.protocol = IPPROTO_TCP;
+            rc.state = MIB_TCP_STATE_ESTAB;
+            rc.pid = 1234;
+            rc.localPort = 52341;
+            rc.remotePort = 443;
+            rc.local4.S_un.S_addr = ::htonl(0x0A000005);
+            rc.remote4.S_un.S_addr = ::htonl(0x5DB8D822);
+            rc.localAddress = L"10.0.0.5";
+            rc.remoteAddress = L"93.184.216.34";
+            rc.processName = L"chrome.exe";
+            rc.processPath = L"C:\\Program Files\\Chrome\\chrome.exe";
+            // The optional fields are what carry the LONG labels - "Memory
+            // (working set)" is 20 chars and only appears when memKnown, and the
+            // TLS block (which has "Certificate subject", 19) only when the
+            // connection is known-secure. Left unset, this check would measure
+            // "PID" and pass while telling us nothing about the real widest
+            // label.
+            rc.memKnown = true;
+            rc.memWorkingSet = 128ull * 1024 * 1024;
+            rc.memPrivate = 200ull * 1024 * 1024;
+            rc.ioKnown = true;
+            rc.diskReadBytes = 1024;
+            rc.diskWriteBytes = 2048;
+            rc.trafficRx = 4096;
+            rc.trafficTx = 8192;
+            rc.bpsKnown = true;
+            rc.rxBps = 1000.0;
+            rc.txBps = 2000.0;
+            rc.cpuPct = 1.5;
+            rc.tls.known = true;
+            rc.tls.secure = true;
+            rc.tls.haveSni = true;
+            rc.tls.sni = L"example.com";
+            // One row, loaded through the snapshot path the app itself uses -
+            // FinalizeRow is not public, and a store with no rows would make
+            // BuildDetailModel emit an empty model, which would make this check
+            // pass for the wrong reason.
+            std::vector<Connection> rows;
+            rows.push_back(rc);
+            ConnectionStore cs;
+            cs.ReplaceSnapshot(std::move(rows));
+            const DetailModel real = BuildDetailModel(rc, cs);
+            size_t widest = 0;
+            size_t labelled = 0;
+            size_t total = 0;
+            for (const DetailSection& s2 : real.sections) {
+                for (const DetailField& f2 : s2.fields) {
+                    ++total;
+                    if (!f2.label.empty()) ++labelled;
+                    widest = (std::max)(widest, f2.label.size());
+                }
+            }
+            Check(r, "details.reallabels-all-present",
+                  total > 0 && labelled == total);
+            // 20 chars is "Memory (working set)", the real longest. Reported in
+            // the failure text so a future long label says which one it is.
+            Check(r, "details.reallabels-fit-too", widest > 0 && widest <= 24,
+                  "widest real label is " + std::to_string(widest) + " chars");
+        }
     }
 
     // The per-connection actions must take their addresses from the BINARY

@@ -109,10 +109,22 @@ BEGIN
         MENUITEM "Close &connection",            IDM_CTX_CLOSE_CONNECTION
         MENUITEM SEPARATOR
         MENUITEM "&Open file location",          IDM_OPEN_FILE_LOCATION
-        MENUITEM "Process &properties",          IDM_PROCESS_PROPERTIES
+        ; REMOVED 2026-10-05 (todo.md 8.7 G1): "Process &properties",
+        ; IDM_PROCESS_PROPERTIES. The "properties" shell verb cannot be
+        ; invoked with a bare path, so the entry never worked; removed rather
+        ; than repaired. "Open file location" above reaches the same file.
+        ; NOTE: no backticks in this file's comments - rc.exe rejects 0x60 as
+        ; an unknown character and fails the whole resource compile.
+        ; MENUITEM "Process &properties",          IDM_PROCESS_PROPERTIES
         MENUITEM SEPARATOR
         MENUITEM "&Details...",                  IDM_CTX_DETAILS
-        MENUITEM "Follow &stream...",            IDM_FOLLOW_STREAM
+        ; REMOVED 2026-10-05 (todo.md 8.7 G2): "Follow &stream...",
+        ; IDM_FOLLOW_STREAM. Moved to the CLI: "capture --text" prints the
+        ; reassembled stream to stdout the way "tcpflow -A" does, and
+        ; "capture --out FILE" writes the capture as pcapng. The GUI form
+        ; re-elevated the whole application and then blocked on a sampling
+        ; capture that can legitimately return nothing.
+        ; MENUITEM "Follow &stream...",            IDM_FOLLOW_STREAM
         MENUITEM SEPARATOR
         MENUITEM "&Bookmark this connection",    IDM_CTX_BOOKMARK
         MENUITEM "&Edit bookmark note...",       IDM_CTX_NOTE

@@ -303,6 +303,29 @@ call :t "capture no match" "capture --select pid:99999999" 1 "no live row"
 call :t "capture dry run missing" "capture --select pid:99999999 --dry-run" 1 "no live row"
 call :t "capture bad secs" "capture --select pid:1 --secs 0" 2 "bad --secs"
 
+REM `capture --text` / `--dir` / `--out` (2026-10-05). The strict per-verb
+REM switch allow-list is what these mostly exercise: all three used to be
+REM rejected as "unknown switch" the moment they were added to the parser and
+REM forgotten in kVerbSwitches, which is the whole reason --dir is checked here
+REM rather than only in the unit tests.
+REM
+REM The --dir refusal is asserted for the VALUE, not merely the exit code,
+REM because a typo silently falling back to "both" would exit 0 and print two
+REM directions to a reader who asked for one - a failure no exit-code test sees.
+REM
+REM The marker is the PARSER's message, "bad --dir", not the verb's "is not a
+REM direction". Both paths exist and both exit 2, but the parser's runs first, so
+REM the verb's copy is unreachable from the command line; it is a belt-and-braces
+REM check for a future caller that builds CaptureOptions directly.
+call :t "capture bad dir refused" "capture --select pid:1 --dir sideways" 2 "bad --dir"
+call :t "capture dir needs a value" "capture --select pid:1 --dir" 2 "missing value"
+call :t "text is capture-only" "list --text" 2 "not a switch of this command"
+call :t "dir is capture-only" "list --dir first" 2 "not a switch of this command"
+REM --out IS shared with list/export on purpose (same meaning: a file to write),
+REM so it is accepted here rather than refused. Dry run only: a real run starts
+REM pktmon, which the harness must not do unattended.
+call :t "capture accepts out" "capture --select pid:99999999 --out C:\nope.pcapng --dry-run" 1 "no live row"
+
 REM The test suite moved OUT of the product (2026-10-02): `selftest`, `bench`
 REM and `--uiharness` used to be compiled into wintcp.exe. wintcp-tests.exe now
 REM carries them, and these six checks assert the new product contract - the

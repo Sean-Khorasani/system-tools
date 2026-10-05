@@ -68,13 +68,26 @@ public:
     void ApplyFont(HFONT font);        // on DPI change
 
 private:
-    // One laid-out line. Values are pre-wrapped into as many physical lines
-    // as they need, so painting is a straight run of DT_SINGLELINE draws.
+    // One laid-out row. Everything is a single fixed-height row, so painting is
+    // a straight run of DT_SINGLELINE draws with no wrapping pass.
+    //
+    // FieldRow is the whole point of the 2026-10-05 rework. A field used to be
+    // TWO rows - a FieldLabel row and then a FieldValue row indented to
+    // kLabelGutter - so each field cost 2 x kLineH and read as a caption
+    // stacked over its own value. That is the "does not split correctly" report,
+    // and it doubled the content height, which is what made the second fault
+    // (painting under the button row) hit so easily. One row now carries both
+    // halves: `text` is the label, `value` is the value, and they are drawn in
+    // two columns separated by a dotted leader.
     struct Line {
-        enum Kind { SectionHeader, SectionNote, FieldLabel, FieldValue,
+        enum Kind { SectionHeader, SectionNote, FieldRow, FieldValue,
                     Connection, Blank };
         Kind kind = FieldValue;
         std::wstring text;
+        // The value column, for FieldRow only. Empty for every other kind,
+        // which is why it lives here rather than replacing `text`: the
+        // single-column rows (subtitle, note, connection) keep using `text`.
+        std::wstring value;
         // Section index, or -1 for a line that belongs to no section (the
         // title block, the connection list). Signed on purpose: -1 is a
         // meaningful "none" and is compared directly against hotSection_.
@@ -126,6 +139,7 @@ private:
     HBRUSH brushWindow_ = nullptr;      // background
     HBRUSH brushAlternate_ = nullptr;   // alternating row shading
     HBRUSH brushSection_ = nullptr;     // section header band
+    HBRUSH brushAccent_ = nullptr;      // section accent bar + collapse glyph
     COLORREF clrText_ = RGB(0, 0, 0);
     COLORREF clrDim_ = RGB(0x80, 0x80, 0x80);
     COLORREF clrHeader_ = RGB(0, 0, 0);

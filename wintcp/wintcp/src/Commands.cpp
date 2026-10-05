@@ -2708,7 +2708,8 @@ CommandResult CmdGeoIpInfo(SnapshotSource& /*source*/,
 }
 
 CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
-                         const MutateOptions& mo, unsigned secs) {
+                         const MutateOptions& mo, unsigned secs,
+                         const CaptureOptions& co) {
     if (select.empty()) {
         CommandResult r;
         r.exitCode = kExitArgs;
@@ -2734,15 +2735,33 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         return r;
     }
     const Connection& c = store.Rows()[idx];
+    // The direction selector is validated BEFORE any capture work, so a typo
+    // costs a parse error rather than fifteen seconds of pktmon. Refused
+    // explicitly rather than quietly defaulted to "both": a reader who asked for
+    // one direction and got two would have no way to notice the mistake.
+    CaptureDir dir = CaptureDir::kBoth;
+    if (!ParseCaptureDir(co.dir, &dir)) {
+        CommandResult r;
+        r.exitCode = kExitArgs;
+        r.err = "capture: --dir " + WideToUtf8(co.dir) +
+                " is not a direction. Use both, first (a) or second (b).\r\n";
+        return r;
+    }
     // One builder for both front ends (see StreamCapture.h): binary fields,
     // never the display strings that carry the port.
     const CaptureTarget t = MakeCaptureTarget(c);
     // The plan (and the --yes gate) come before the elevation gate: a
     // dry run must never demand elevation, and refusing must not either.
     // Order: resolve -> dry-run -> confirm -> availability -> start.
-    const std::string plan = "capture " + WideToUtf8(c.localEndpoint) +
-                             " -> " + WideToUtf8(c.remoteEndpoint) +
-                             " for " + std::to_string(secs) + "s\r\n";
+    std::string plan = "capture " + WideToUtf8(c.localEndpoint) +
+                       " -> " + WideToUtf8(c.remoteEndpoint) +
+                       " for " + std::to_string(secs) + "s\r\n";
+    // Say what the run WILL do, in the plan, before it does it. Without this a
+    // --text run's own framing lines arrive looking like payload, and a reader
+    // piping it somewhere would capture them too.
+    if (co.text) plan += "mode: print the reassembled stream to stdout\r\n";
+    if (!co.outPath.empty())
+        plan += "saving the capture to " + WideToUtf8(co.outPath) + "\r\n";
     if (mo.dryRun) {
         CommandResult r;
         r.out = plan;
@@ -2769,8 +2788,12 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
     // future in-process caller must get the same clamp the CLI promises.
     if (secs < kCaptureSecsMin) secs = kCaptureSecsMin;
     if (secs > kCaptureSecsMax) secs = kCaptureSecsMax;
-    ::Sleep(secs * 1000u);   // bounded capture window; the GUI uses a dialog
-    const CaptureResult cr = StopCapture(t);
+    ::Sleep(secs * 1000u);   // bounded capture window
+    // --out: hand the destination to StopCapture, which writes the capture
+    // while the converted file is still on disk. Passing the path (not the
+    // bytes) is deliberate - see StopCapture's header for the memory reason.
+    const CaptureResult cr =
+        StopCapture(t, co.outPath.empty() ? nullptr : &co.outPath);
     ClearCaptureFilter();
     CommandResult r;
     if (!cr.ok) {
@@ -2805,6 +2828,48 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         r.out += "note: " + capped +
                  " reached the reassembly cap, so that byte count is truncated "
                  "- a floor, not a total.\r\n";
+    }
+    // --text. This is the CLI replacement for the GUI's Follow TCP stream.
+    //
+    // Each direction is introduced by the ENDPOINT that sent it, not by
+    // "client"/"server": pktmon does not reliably report which end sent the SYN,
+    // so those words would be an assertion the capture cannot support (see
+    // ReasmResult's naming note). dir1Label/dir2Label come from the same
+    // canonicalisation ReassembleStream used, so the label cannot disagree with
+    // which half of the bytes this is.
+    if (co.text) {
+        const auto emit = [&r](const wchar_t* heading, const std::wstring& label,
+                               const ReasmResult& dir) {
+            r.out += "\r\n--- ";
+            r.out += WideToUtf8(heading);
+            r.out += ": ";
+            r.out += label.empty() ? std::string("(unknown endpoint)")
+                                   : WideToUtf8(label);
+            r.out += " ---\r\n";
+            // The honesty notes come BEFORE the bytes, not after, so a reader
+            // who stops reading at the first block has still been told the
+            // stream is incomplete.
+            if (dir.bytes.empty()) {
+                r.out += "(no payload captured in this direction)\r\n";
+                return;
+            }
+            if (dir.hasGap || dir.bytesMissing != 0) {
+                r.out += "NOTE: " + std::to_string(dir.bytesMissing) +
+                         " byte(s) were never observed; the stream has a hole "
+                         "at offset " + std::to_string(dir.firstSeq) +
+                         " and every decode after it is unreliable.\r\n";
+            }
+            if (dir.truncated) {
+                r.out +=
+                    "NOTE: this direction hit the reassembly cap, so what "
+                    "follows is a prefix, not the whole stream.\r\n";
+            }
+            r.out += FormatStreamHex(dir.bytes);
+        };
+        if (dir == CaptureDir::kBoth || dir == CaptureDir::kFirst)
+            emit(L"to first endpoint", cr.dir1Label, cr.toServer);
+        if (dir == CaptureDir::kBoth || dir == CaptureDir::kSecond)
+            emit(L"from first endpoint", cr.dir2Label, cr.toClient);
     }
     return r;
 }

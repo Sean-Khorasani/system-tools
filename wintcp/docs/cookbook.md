@@ -662,13 +662,14 @@ wintcp.exe list --watch 2 --changes --event appear,state --format json --count 5
 
 ```bat
 wintcp.exe list --filter "state:estab exclude:127." --columns pid,process,local,remote,rport,state --limit 3
-wintcp.exe capture --select "pid:5172 remote:20.47.110.73 remote:port:443" --secs 8 --dry-run
+wintcp.exe capture --select "pid:5172 remote:20.47.110.73 remote:port:443" --secs 8 --text --dir first --yes
 ```
 
 `--dry-run` stops after printing the plan, so you can see which conversation the selector picked before spending the window on it. Run once by hand, and this is the line:
 
 ```text
 capture 10.0.0.92:16921 -> 20.47.110.73:443 for 8s
+mode: print the reassembled stream to stdout
 ```
 
 The real run prints that same plan, then a summary once the window closes:
@@ -691,10 +692,35 @@ Reassembly stops at a per-direction byte cap. A stream that reaches it reports t
 |---|---|
 | `capture --select` | `pktmon` filters on ports and addresses, not on process, so the process-to-4-tuple step is the whole added value. It is the same step you do by eye in recipe 1. |
 | `capture --secs 8` | A **fixed** window of 1 to 60 seconds (default 5), not an interactive one. The command starts, waits, stops and exits on its own, which is what makes it scriptable. |
+| `capture --text` | Prints the reassembled stream to stdout, which is the point of the recipe - the counters alone tell you the capture happened, not what was said. |
+| `capture --dir first` | One direction instead of both, so a request/response exchange is readable in order rather than interleaved. |
+| `capture --out c:\tmp\stream.pcapng` | Keeps the capture as pcapng for Wireshark, when you want the packets rather than the reassembled bytes. |
 | `capture --yes` | Confirms, because it installs a global capture filter and starts a capture. Same refusal contract as recipe 4. |
 | `capture --dry-run` | Prints the plan (`capture <local> -> <remote> for Ns`) and touches nothing: one line that tells you whether the selector picked the socket you meant before you spend 8 seconds on the wrong one. |
 
 The packet-size limit is disabled in the underlying `pktmon` run, because the default truncates each packet and a truncated stream cannot be reassembled. The filter is always removed afterwards, even on failure, so an abandoned capture cannot skew a later one.
+
+#### Reading the bytes
+
+Add `--text` and the summary is followed by one hex block per direction, each headed by the **endpoint that sent it**:
+
+```text
+--- to first endpoint: 10.0.0.92:16921 ---
+00000000  47 45 54 20 2f 20 48 54  54 50 2f 31 2e 31 0d 0a  |GET / HTTP/1.1..|
+00000010  48 6f 73 74 3a 20 65 78  61 6d 70 6c 65 2e 63 6f  |Host: example.co|
+00000020  6d 0d 0a 43 6f 6e 6e 65  63 74 69 6f 6e 3a 20 6b  |m..Connection: k|
+00000030  65 65 70 2d 61 6c 69 76  65 0d 0a 0d 0a           |eep-alive....|
+```
+
+Three details in that output are deliberate, and each of them prevents a specific misreading:
+
+- **The heading names an endpoint, not `client` or `server`.** `pktmon` does not reliably report which end sent the SYN, so those words would be a claim the capture cannot support. The two headings can therefore arrive in either order, and that is not a bug.
+- **The offsets are that direction's own stream offsets**, so they line up with the TCP sequence base. Line `00000010` is 16 bytes into that direction, not into the capture.
+- **A `NOTE:` line comes before the bytes, never after.** A gap in a reassembled stream silently corrupts every decode after it, so the note is placed where a reader who stops early still sees it.
+
+The ASCII gutter uses `.` for every non-printable byte, the `hexdump(1)` convention, so the right-hand column is comparable at a glance across many lines.
+
+`--out` writes the capture **byte-for-byte** as pcapng while it is still on disk, so the file you get is the file that was parsed - not a re-serialisation that could differ. It opens in Wireshark or `tshark` with no conversion step.
 
 ### 17. Bounded scripted capture
 

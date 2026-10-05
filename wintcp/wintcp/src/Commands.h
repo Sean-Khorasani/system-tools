@@ -348,9 +348,35 @@ CommandResult CmdGeoIpInfo(SnapshotSource& source,
                            const std::wstring& geoIpPath);
 
 // ---- capture (follow stream) -----------------------------------------------
+//
+// `capture` grew from "print some counters" into the command-line replacement
+// for the GUI's Follow TCP stream, which was removed 2026-10-05 (todo.md 8.7
+// G2). The three switches below are that replacement, and the reasons they are
+// switches rather than defaults are worth keeping:
+//
+//   text  - the payload was already in memory and was being thrown away. On the
+//           command line, printing it costs nothing extra and makes the verb
+//           worth running without piping into anything.
+//   out   - the capture file was deleted immediately after parsing. Saving it is
+//           the difference between "here are the bytes" and "here is the
+//           capture, open it in Wireshark".
+//   dir   - a stream has two halves and most questions are about one of them.
+//           Default is both, because guessing for the user is worse than
+//           printing twice.
+struct CaptureOptions {
+    // Print the reassembled stream to stdout as a hex dump, one block per
+    // direction (or just the one --dir selects).
+    bool text = false;
+    // Save the capture as pcapng here. Empty = do not keep it.
+    std::wstring outPath;
+    // Which half --text prints. Parsed by ParseCaptureDir.
+    std::wstring dir = L"both";
+};
+
 CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
                          const MutateOptions& mo,
-                         unsigned secs = kCaptureSecsDefault);
+                         unsigned secs = kCaptureSecsDefault,
+                         const CaptureOptions& co = CaptureOptions());
 
 // ---- stat (system CPU/mem/disk/net) ----------------------------------------
 CommandResult CmdStat(SystemStatsSampler& sampler, const std::string& format);

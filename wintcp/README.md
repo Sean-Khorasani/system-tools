@@ -223,6 +223,8 @@ Every recipe in the cookbook answers a question that cannot be answered with one
 | What connections appeared in the last 30 seconds? | Poll and diff by hand. | `list --watch 1 --changes --event appear --count 30` |
 | RTT, congestion window and retransmits per connection | Not shown by `netstat` or `Get-NetTCPConnection`. | `list --traffic --sort rtt --desc --columns process,remote,rport,rtt,minrtt,cwnd,retrans` |
 | Capture one process's connection | `pktmon` filters by address and port, not by process. | `capture --select … --secs 8 --yes` |
+| Read one TCP stream's bytes | Nothing in the built-in tools reassembles a stream. | `capture --select . --secs 8 --text --yes` |
+| Keep a capture to open in Wireshark | Same, plus a manual conversion step. | `capture --select . --secs 8 --out c:\tmp\s.pcapng --yes` |
 
 ## Documentation
 

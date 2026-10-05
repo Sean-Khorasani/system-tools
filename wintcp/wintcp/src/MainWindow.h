@@ -181,9 +181,13 @@ private:
     void CopySelectionToClipboard(bool copyAll);
     void KillSelectedProcess();            // PID-reuse verification
     void ShowDetailsOfSelectedRow();       // modeless details window
-    void FollowSelectedStream();           // pktmon + hex view
+    // REMOVED 2026-10-05 (todo.md 8.7 G2). The capability moved to the CLI as
+    // `capture --text` / `capture --out`.
+    // void FollowSelectedStream();        // pktmon + hex view
     void OpenSelectedFileLocation();      // 4.6: ShellExecute "explore"
-    void ShowSelectedProcessProperties(); // 4.6: ShellExecute "properties"
+    // REMOVED 2026-10-05 (todo.md 8.7 G1): the `properties` shell verb cannot
+    // be invoked with a bare path, so this action never worked.
+    // void ShowSelectedProcessProperties(); // 4.6: ShellExecute "properties"
     void BlockSelectedConnection();       // 4.4: firewall block
     // sectioned builder + silent live-update while open.
     DetailModel BuildDetails(const Connection& c) const;

@@ -256,6 +256,21 @@ A sectioned dossier for **exactly one** connection: process identity, command li
 - The packet-size limit is disabled in the underlying `pktmon` run, because truncated packets cannot be reassembled. The capture filter is always removed afterward, even on failure.
 - Output: `packets=…` (total), `toServer` and `toClient` (the reassembly result in each direction), and `blocks` (the number of TCP segments parsed).
 
+`pktmon` is a **sampling driver, not a tap**: only what happens after the filter is armed is recorded. A connection that has gone quiet during the window legitimately returns nothing, and an empty result is not evidence of a fault. Generate traffic during the window, or widen `--secs`.
+
+#### Reading the stream
+
+| Switch | Behavior |
+|---|---|
+| `--text` | Print the reassembled stream to stdout as a hex dump, one block per direction. This is the command-line equivalent of the GUI's *Follow TCP stream*, which was removed on 2026-10-05. |
+| `--dir both\|first\|second` | Which direction `--text` prints. `first`/`a` and `second`/`b` are accepted, as are the `server`/`client` spellings. Default `both`. An unrecognised value is refused, never treated as `both`. |
+| `--out FILE` | Save the capture as **pcapng**, byte-for-byte, so it opens in Wireshark or `tshark` with no conversion by the reader. |
+
+- **Each direction is labelled by the endpoint that sent it**, not by `client`/`server`. `pktmon` does not reliably report which end sent the SYN, so those words would be a claim the capture cannot support. The labels are derived from the same endpoint ordering the reassembler used, so a label cannot disagree with which half of the bytes it is.
+- The offsets in the dump are that direction's **own** stream offsets, so they line up with the TCP sequence base when a SYN was seen.
+- **A hole in the stream is reported before the bytes, not after.** A gap or a truncated direction prints a `NOTE:` line before its dump; a reader who stops at the first block is still told the stream is incomplete. Silence about it would be worse than the gap itself, since every decode after a hole is wrong.
+- `--text` and `--out` compose: one run can print the stream and save the capture.
+
 ### `export`
 
 `export --out FILE` writes a **view**, not a dump.

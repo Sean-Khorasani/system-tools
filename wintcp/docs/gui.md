@@ -104,8 +104,15 @@ Right-click a row (or double-click to open Details):
 | **Copy selected / Copy all** | Copies rows to the clipboard. |
 | **End process** | Ends the owning process after verifying that the PID still refers to the same process (PID-reuse check). |
 | **Close connection** | Deletes the TCP entry with `SetTcpEntry(DELETE_TCB)`. IPv4 only, and requires administrator rights. |
-| **Export selection…** | Writes the selected rows to a file. See [Export](#export). |
+| **Open file location** | Opens Explorer on the row's executable. |
+| **Block this connection** | Adds a firewall block rule. IPv4 only, and requires administrator rights. |
+| **Export selection.** | Writes the selected rows to a file. See [Export](#export). |
 | **Refresh** | Same as F5. |
+
+Two commands were **removed on 2026-10-05** after being reported not to work. Neither was repaired in place, and the reasoning is worth stating because both look like features one could still want:
+
+- ***Process properties*** is gone from both the Process menu and the context menu. `properties` is a shell **verb**, run through a shell item rather than by handing `ShellExecuteW` a bare path - which is exactly the case where it fails. The old handler reported one indistinguishable message box for that, for a missing path, and for PID 4's placeholder `System` path.
+- ***Follow TCP stream*** is gone from both menus. The capability is not lost: it is the [`capture`](cli.md#capture) verb on the command line, where the blocking it requires is the point rather than the defect. `capture --text` prints the reassembled stream to stdout the way `tcpflow -A` does, and `capture --out FILE` keeps the capture as pcapng for Wireshark or `tshark`.
 
 ## Details window
 
@@ -114,7 +121,23 @@ A sectioned, modeless window with the process identity, command line, creation t
 - The header line reads `process.exe (PID n)`.
 - It opens centered over the main window and scales with DPI.
 - While open it **refreshes silently on every auto-refresh**. If the tracked process exits, a note appears once.
-- **Copy** and **Open file location** buttons are provided.
+- **Copy** and **Open file location** buttons are provided, in a row below the body.
+
+### Layout
+
+Fields are laid out as a **two-column table**, one row per field:
+
+- The label sits in a fixed-width left column, so every value in the window starts at the same horizontal position regardless of how long its label is. The two are joined by a **dotted leader**, which is what makes a row read as a pair rather than as a caption with a value that happens to share a line.
+- A **hairline rule** separates the label column from the value column.
+- Values are drawn in a fixed-pitch face only where alignment matters (byte counts, timestamps, addresses); everything else uses the UI font, including the labels.
+- Every section header carries an **accent bar** down its left edge, so the sections read as separated at a glance without hovering anything. Hovering a header highlights it, which is the cue that it can be collapsed.
+- Sections are collapsible by clicking their header. The state is per-window and is never persisted.
+- Long values are elided rather than wrapped; a visibly shortened value beats a silent cut. Copy the value to the clipboard to get all of it.
+
+Two layout faults were fixed on 2026-10-05, both of which had been reported as "the window doesn't split correctly":
+
+- Each field used to be **two** stacked rows - the label, then the value indented beneath it - so a section cost 34 px of captions and read as text rather than as a table. It is now one row per field.
+- The body painted down to the **full client height** rather than to the bottom of the content region, so the last visible fields were drawn behind *Copy* / *Open file location* / *Close*. The click and hover handlers had the same missing bound, so a click in the button row could toggle a section hidden behind it.
 
 The same report is available from the command line with `wintcp.exe details`; see the [cookbook](cookbook.md#11-full-dossier-for-one-connection).
 

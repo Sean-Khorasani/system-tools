@@ -6,12 +6,14 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
 #include "Elevate.h"
 #include "Pcapng.h"
+#include "Utils.h"   // FormatSystemError, for the --out write failure
 
 namespace wintcp {
 namespace {
@@ -115,6 +117,28 @@ std::wstring FormatAddrForFilter(const unsigned char* a, bool v4) {
     return buf;
 }
 
+
+// "10.0.0.92:52417" or "[2606:b740::1]:443" for one endpoint of a canonical
+// TcpKey. Needed because the reassembly directions are named for the SORTED
+// pair, and a caller holding only a CaptureTarget (local/remote) cannot work
+// out which half is which - so the labels have to come from the place that did
+// the sorting.
+std::wstring KeyEndpoint(const unsigned char* addr, uint16_t port, bool v4) {
+    wchar_t buf[96] = {0};
+    if (v4) {
+        ::swprintf_s(buf, L"%u.%u.%u.%u:%u", addr[0], addr[1], addr[2], addr[3],
+                     static_cast<unsigned>(port));
+    } else {
+        IN6_ADDR a6 = {};
+        std::memcpy(a6.s6_addr, addr, 16);
+        wchar_t ip[64] = {0};
+        if (::InetNtopW(AF_INET6, &a6, ip, 64) != nullptr)
+            ::swprintf_s(buf, L"[%s]:%u", ip, static_cast<unsigned>(port));
+        else
+            ::swprintf_s(buf, L"[?]:%u", static_cast<unsigned>(port));
+    }
+    return buf;
+}
 }  // namespace
 
 // Elevation is delegated to Elevate.cpp, which owns the token logic and the
@@ -178,6 +202,11 @@ bool StartCapture(const CaptureTarget& target, std::wstring* error) {
 }
 
 CaptureResult StopCapture(const CaptureTarget& target) {
+    return StopCapture(target, nullptr);
+}
+
+CaptureResult StopCapture(const CaptureTarget& target,
+                          const std::wstring* savePcapngAs) {
     CaptureResult res;
     const std::wstring exe = PktmonPath();
 
@@ -263,6 +292,47 @@ CaptureResult StopCapture(const CaptureTarget& target) {
     ::CloseHandle(f);
     res.fileBytes = got;
 
+    // --out: keep the capture BEFORE the temp files are deleted, and write it
+    // from the buffer already in hand rather than re-reading the file - so the
+    // bytes saved are provably the bytes that were parsed.
+    if (savePcapngAs != nullptr && !savePcapngAs->empty()) {
+        HANDLE out = ::CreateFileW(savePcapngAs->c_str(), GENERIC_WRITE, 0,
+                                   nullptr, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (out == INVALID_HANDLE_VALUE) {
+            RemoveIfPresent(etl);
+            RemoveIfPresent(pcapng);
+            res.stage = L"write --out";
+            res.error = L"Could not create the capture file: " +
+                        FormatSystemError(::GetLastError());
+            return res;
+        }
+        DWORD wrote = 0;
+        // Chunked rather than one WriteFile, and the length checked: a short
+        // write would otherwise be reported as a saved capture that is
+        // silently truncated.
+        bool writeOk = true;
+        size_t off = 0;
+        while (off < buffer.size()) {
+            const DWORD chunk = static_cast<DWORD>(
+                (std::min)(buffer.size() - off, size_t(1u << 20)));
+            if (::WriteFile(out, buffer.data() + off, chunk, &wrote,
+                            nullptr) == FALSE || wrote != chunk) {
+                writeOk = false;
+                break;
+            }
+            off += chunk;
+        }
+        ::CloseHandle(out);
+        if (!writeOk) {
+            RemoveIfPresent(etl);
+            RemoveIfPresent(pcapng);
+            res.stage = L"write --out";
+            res.error = L"Could not write the whole capture file.";
+            return res;
+        }
+    }
+
     // Temp files go away now regardless of what follows: they can be tens of
     // megabytes and are not worth keeping after a parse.
     RemoveIfPresent(etl);
@@ -306,6 +376,14 @@ CaptureResult StopCapture(const CaptureTarget& target) {
             want.portB = tp;
         }
     }
+    // Name each direction by the endpoint that SENT it. toServer is direction
+    // 'a', which is now whichever of local/remote sorted first - so this has to
+    // be derived from the canonicalised key, never from target.label, or the
+    // two halves of the dump come out the wrong way round on every connection
+    // whose remote address sorts below its local one.
+    res.dir1Label = KeyEndpoint(want.addrA, want.portA, target.ipV4);
+    res.dir2Label = KeyEndpoint(want.addrB, want.portB, target.ipV4);
+
     res.stats = ReassembleStream(parse.packets, want, &res.toServer,
                                  &res.toClient);
     res.complete = res.stats.sawSyn && res.stats.sawFin && !res.stats.sawRst;
@@ -339,6 +417,85 @@ CaptureTarget MakeCaptureTarget(const Connection& c) {
     // would render "10.0.0.5:52341:52341". Use them as-is.
     t.label = c.localEndpoint + L"  \xE2\x86\x94  " + c.remoteEndpoint;
     return t;
+}
+
+
+
+std::string FormatStreamHex(const std::string& bytes, size_t bytesPerLine) {
+    std::string out;
+    // Clamped, not merely defaulted: the line buffer below is sized from the
+    // bound. The first version declared it as
+    //     char line[16 + 1 + (bytesPerLine * 3) + ...]
+    // which is a variable-length array - accepted by GCC, rejected by MSVC with
+    // C2131, so the entire file failed to compile over a formatting helper.
+    constexpr size_t kMaxPerLine = 64;
+    if (bytesPerLine == 0 || bytesPerLine > kMaxPerLine) bytesPerLine = 16;
+    out.reserve(bytes.size() / bytesPerLine * 80 + 32);
+
+    // Worst case per line: 8 for the offset, 2 spaces, three characters per hex
+    // byte, two for the gutter bars, one per ASCII byte, and the CRLF.
+    char line[8 + 2 + kMaxPerLine * 3 + 2 + kMaxPerLine + 8];
+
+    const size_t n = bytes.size();
+    for (size_t off = 0; off < n; off += bytesPerLine) {
+        const size_t run = (std::min)(bytesPerLine, n - off);
+        const size_t room = sizeof(line);
+        int at = 0;
+        // The offset is this direction's OWN offset, not the direction index,
+        // so it lines up with the TCP sequence base when a SYN was seen.
+        at += ::snprintf(line + at, room - static_cast<size_t>(at), "%08zx  ", off);
+
+        for (size_t i = 0; i < bytesPerLine; ++i) {
+            // The half-way gap is what makes two hex columns instead of one
+            // blob. It is skipped on a short final line rather than left
+            // floating in the middle of nothing.
+            if (i == (bytesPerLine / 2) && run > i)
+                at += ::snprintf(line + at, room - static_cast<size_t>(at), " ");
+            if (i < run) {
+                at += ::snprintf(line + at, room - static_cast<size_t>(at), "%02x ",
+                                 static_cast<unsigned>(
+                                     static_cast<unsigned char>(bytes[off + i])));
+            } else {
+                at += ::snprintf(line + at, room - static_cast<size_t>(at), "   ");
+            }
+        }
+        // Then the ASCII gutter and the closing bar. A byte that is not
+        // printable becomes '.', the hexdump(1) convention readers expect.
+        at += ::snprintf(line + at, room - static_cast<size_t>(at), " |");
+        for (size_t i = 0; i < run; ++i) {
+            const unsigned char c = static_cast<unsigned char>(bytes[off + i]);
+            const bool printable = (c >= 0x20 && c < 0x7F);
+            at += ::snprintf(line + at, room - static_cast<size_t>(at), "%c",
+                             printable ? static_cast<char>(c) : '.');
+        }
+        at += ::snprintf(line + at, room - static_cast<size_t>(at), "|\r\n");
+        if (at > 0) out.append(line, static_cast<size_t>(at));
+    }
+    return out;
+}
+
+bool ParseCaptureDir(const std::wstring& value, CaptureDir* out) {
+    if (out == nullptr) return false;
+    const std::wstring v = ToLowerW(value);
+    if (v == L"both" || v == L"all" || v == L"0") {
+        *out = CaptureDir::kBoth;
+        return true;
+    }
+    // "first"/"a"/"1" and "second"/"b"/"2", plus the client/server spellings
+    // that people reach for first. The synonyms are the point: this switch
+    // exists to be typed quickly, and every accepted name here is unambiguous
+    // about which half it means.
+    if (v == L"first" || v == L"a" || v == L"1" || v == L"server" ||
+        v == L"to-server" || v == L"toserver") {
+        *out = CaptureDir::kFirst;
+        return true;
+    }
+    if (v == L"second" || v == L"b" || v == L"2" || v == L"client" ||
+        v == L"to-client" || v == L"toclient") {
+        *out = CaptureDir::kSecond;
+        return true;
+    }
+    return false;
 }
 
 }  // namespace wintcp

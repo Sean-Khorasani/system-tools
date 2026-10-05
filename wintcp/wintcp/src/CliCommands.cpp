@@ -21,6 +21,7 @@
 #include "Elevate.h"
 #include "Snapshot.h"
 #include "SocketTraffic.h"
+#include "StreamCapture.h"   // ParseCaptureDir, for capture --dir
 #include "SysStats.h"
 #include "Utils.h"
 
@@ -436,6 +437,8 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe capture --select <filter> [--secs N]\r\n"
      "                          [--yes] [--dry-run]\r\n"
+     "                          [--text] [--dir both|first|second]\r\n"
+     "                          [--out FILE]\r\n"
      "\r\n"
      "Installs a pktmon filter for the selected connection, records N\r\n"
      // Keep-in-step: default 5 / 1..60 restate kCaptureSecsDefault/Min/Max
@@ -445,9 +448,25 @@ const CommandHelp kCommandHelps[] = {
      "exactly one live row. Unelevated runs exit 1 with a plain message -\r\n"
      "the command never tries to elevate itself. Without --yes exits 3.\r\n"
      "\r\n"
+     "Output switches:\r\n"
+     "  --text         print the reassembled stream to stdout as a hex dump,\r\n"
+     "                 one block per direction, labelled by the endpoint that\r\n"
+     "                 sent it. This is the command-line equivalent of the\r\n"
+     "                 GUI's Follow TCP stream, removed 2026-10-05.\r\n"
+     "  --dir LIST     which direction --text prints: both (default), first\r\n"
+     "                 (a) or second (b).\r\n"
+     "  --out FILE     save the capture as pcapng, byte-for-byte, so it opens\r\n"
+     "                 in Wireshark or tshark.\r\n"
+     "\r\n"
+     "pktmon is a sampling driver, not a tap: only what happens AFTER the\r\n"
+     "filter is armed is recorded, so a quiet connection legitimately returns\r\n"
+     "nothing. Generate traffic during the window, or widen --secs.\r\n"
+     "\r\n"
      "Examples:\r\n"
      "  wintcp.exe capture --select \"pid:1234\" --dry-run\r\n"
-     "  wintcp.exe capture --select \"pid:1234 remote:port:443\" --secs 10 --yes\r\n"},
+     "  wintcp.exe capture --select \"pid:1234 remote:port:443\" --secs 10 --yes\r\n"
+     "  wintcp.exe capture --select \"pid:1234\" --secs 20 --text --dir b --yes\r\n"
+     "  wintcp.exe capture --select \"pid:1234\" --secs 20 --out c:\\tmp\\s.pcapng --yes\r\n"},
     {"stat sys",
      "stat - system CPU / memory / disk / network (one sample, then exit)\r\n"
      "\r\n"
@@ -527,7 +546,8 @@ bool TakesValue(const std::wstring& t) {
            t == L"--count" || t == L"--out" || t == L"--select" ||
            t == L"--pid" || t == L"--address" || t == L"--port" ||
            t == L"--tag" || t == L"--note" || t == L"--name" ||
-           t == L"--db" || t == L"--secs" || t == L"--event";
+           t == L"--db" || t == L"--secs" || t == L"--event" ||
+           t == L"--dir";
 }
 
 // D25: "appear", "disappear", "state", in any case, comma-separated, in any
@@ -620,6 +640,12 @@ struct Args {
     std::wstring sub;     // bookmark/preset/geoip subverb
     bool quiet = false;   // list/ps: no output, rc answers
     unsigned secs = kCaptureSecsDefault;   // recording window; range in Commands.h
+    // capture: the CLI replacement for the removed GUI Follow TCP stream
+    // (todo.md 8.7 G2). `--out` is NOT re-declared here - it already exists as
+    // `out` for list/export, means the same thing (a file to write), and giving
+    // one switch two homes is how a reader ends up with two different defaults.
+    bool captureText = false;
+    std::wstring captureDir = L"both";
     bool traffic = false; // list/details: per-PID byte totals (bounded scan)
     bool dns = false;     // list/details: reverse-DNS the printed rows
     // F5.3: verify each process image with WinVerifyTrust. OFF by default and
@@ -738,6 +764,21 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             a->force = true;
         } else if (t == L"--out") {
             if (!need(&a->out)) return "missing value for --out";
+        } else if (t == L"--text") {
+            // capture only. No value: the only question is whether to print the
+            // stream, and "how much of it" is --dir's job, not this switch's.
+            a->captureText = true;
+        } else if (t == L"--dir") {
+            std::wstring v;
+            if (!need(&v)) return "missing value for --dir";
+            // Parsed HERE rather than only in the verb, so a typo is refused
+            // before anything is captured. ParseCaptureDir is the single
+            // spelling table, so the parser and the verb cannot disagree about
+            // which names are valid.
+            CaptureDir ignored = CaptureDir::kBoth;
+            if (!ParseCaptureDir(v, &ignored))
+                return "bad --dir (use both, first/a, or second/b)";
+            a->captureDir = v;
         } else if (t == L"--select") {
             if (!need(&a->select)) return "missing value for --select";
         } else if (t == L"--pid") {
@@ -918,6 +959,7 @@ const wchar_t* const kSwitchNames[] = {
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
+    L"--text", L"--dir",
     L"--event", L"--yes", L"-y", L"--dry-run", L"--force",
 };
 constexpr size_t kSwitchNameCount =
@@ -964,7 +1006,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"block", L"--select --yes --dry-run"},
     {L"unblock", L"--address --port --yes --dry-run"},
     {L"blocks", L""},     // takes no switches
-    {L"capture", L"--select --secs --yes --dry-run"},
+    {L"capture", L"--select --secs --yes --dry-run --text --dir --out"},
     {L"follow", nullptr},  // alias: same as capture
     {L"bookmark", L"--address --port --tag --note --format"},
     {L"preset",
@@ -1669,7 +1711,11 @@ int RunCliCommand(int argc, wchar_t** argv) {
         mo.yes = a.yes;
         mo.dryRun = a.dryRun;
         SnapshotSource src;
-        const CommandResult r = CmdCapture(src, a.select, mo, a.secs);
+        CaptureOptions co;
+        co.text = a.captureText;
+        co.outPath = a.out;
+        co.dir = a.captureDir;
+        const CommandResult r = CmdCapture(src, a.select, mo, a.secs, co);
         Emit(r);
         return r.exitCode;
     }

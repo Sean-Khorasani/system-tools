@@ -1950,14 +1950,27 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             CloseSelectedConnection();
             break;
         case IDM_FOLLOW_STREAM:
-            FollowSelectedStream();
+            // REMOVED 2026-10-05: this case is unreachable - the menu entry
+            // that sent IDM_FOLLOW_STREAM is gone (see OnContextMenu). Kept as
+            // a comment rather than deleted so the removal is reversible and so
+            // anyone re-adding the entry finds this note. The capability itself
+            // was NOT lost: it is the `capture` verb, which now prints the
+            // reassembled stream to stdout (--text) and can write the capture
+            // out as pcapng (--out). See todo.md 8.7 G2 for why the GUI form
+            // was not salvageable: it re-elevated the whole application, then
+            // blocked modally on a sampling capture that can legitimately come
+            // back empty.
+            // FollowSelectedStream();
             break;
         case IDM_OPEN_FILE_LOCATION:
             OpenSelectedFileLocation();
             break;
-        case IDM_PROCESS_PROPERTIES:
-            ShowSelectedProcessProperties();
-            break;
+        // REMOVED 2026-10-05: IDM_PROCESS_PROPERTIES / ShowSelectedProcessProperties.
+        // See the note in OnContextMenu for why the verb was removed rather than
+        // repaired, and todo.md 8.7 G1.
+        // case IDM_PROCESS_PROPERTIES:
+        //     ShowSelectedProcessProperties();
+        //     break;
         case IDM_BLOCK_CONNECTION:
             BlockSelectedConnection();
             break;
@@ -2533,14 +2546,20 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     ::AppendMenuW(menu, MF_STRING | gray, IDM_CTX_EXPORT_SELECTION,
                   L"&Export selection...");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    // Follow TCP stream. Enabled only for an established-ish TCP
-    // connection AND when pktmon is usable. When the process is not elevated
-    // the entry stays visible but greyed rather than hidden, and choosing it
-    // explains why - a missing item would read as "this connection has no
-    // stream", which is not what is happening.
-    const bool canFollow = closable && CaptureAvailable(nullptr);
-    ::AppendMenuW(menu, MF_STRING | (canFollow ? MF_ENABLED : MF_GRAYED),
-                  IDM_FOLLOW_STREAM, L"Follow TCP &stream...");
+    // REMOVED 2026-10-05 (todo.md 8.7 G2). Both menu entries that used to live here
+    // are gone; the capability was moved to the CLI rather than dropped.
+    //
+    // REMOVED: "Follow TCP &stream..." (IDM_FOLLOW_STREAM). It re-elevated the
+    // whole application to get at pktmon - losing the window, the filter and the
+    // column layout to read hex bytes - and then blocked modally on a sampling
+    // capture that returns nothing unless the connection is still carrying data
+    // after the filter is armed. See `FollowSelectedStream` below for the full
+    // chain, and `capture --text` / `capture --out` in cli.md for what replaced
+    // it.
+    //
+    // const bool canFollow = closable && CaptureAvailable(nullptr);
+    // ::AppendMenuW(menu, MF_STRING | (canFollow ? MF_ENABLED : MF_GRAYED),
+    //               IDM_FOLLOW_STREAM, L"Follow TCP &stream...");
 
     // Shell navigation (4.6). Both need a real path, which a row does not
     // always have: PID 4 and some service processes report a name but no
@@ -2551,8 +2570,22 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (hasPath ? MF_ENABLED : MF_GRAYED),
                   IDM_OPEN_FILE_LOCATION, L"Open file &location");
-    ::AppendMenuW(menu, MF_STRING | (hasPath ? MF_ENABLED : MF_GRAYED),
-                  IDM_PROCESS_PROPERTIES, L"Process &properties...");
+    // REMOVED 2026-10-05: "Process &properties..." (IDM_PROCESS_PROPERTIES).
+    // The user reported it does not work, and the cause is structural rather
+    // than a bug to repair: `properties` is a shell VERB, registered against
+    // shell object types, and calling it directly with a bare path is the case
+    // where it fails - silently, since ShellExecuteW returns <= 32 instead of
+    // raising. The old handler collapsed that, a missing path, and PID 4's
+    // placeholder "System" path into one identical message box.
+    //
+    // Removed rather than fixed on purpose. A menu entry offering an action the
+    // app cannot perform teaches the reader to distrust the rest of the menu,
+    // which costs more than the feature is worth. "Open file location" above
+    // still reaches the same file through Explorer, where the verb does exist,
+    // so nothing that ever worked is lost.
+    //
+    // ::AppendMenuW(menu, MF_STRING | (hasPath ? MF_ENABLED : MF_GRAYED),
+    //               IDM_PROCESS_PROPERTIES, L"Process &properties...");
     ::AppendMenuW(menu, MF_STRING | (row != nullptr && row->protocol == IPPROTO_TCP
                                          ? MF_ENABLED : MF_GRAYED),
                   IDM_BLOCK_CONNECTION, L"&Block this connection...");
@@ -2921,32 +2954,46 @@ void MainWindow::OpenSelectedFileLocation() {
     }
 }
 
-void MainWindow::ShowSelectedProcessProperties() {
-    const std::optional<Connection> sel = SelectedCopy();
-    if (!sel.has_value()) return;
-    const Connection& c = *sel;
-    if (c.processPath.empty() || c.processPath == L"System") {
-        ::MessageBoxW(hwnd_,
-                      L"This row has no process path, so there are no file "
-                      L"properties to show.",
-                      L"Process properties", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    const std::wstring verb = L"properties";
-    // shell32.dll is delay-loaded; gate before the call so its absence is
-    // reported rather than raised. Same reason as ShowSelectedFileLocation.
-    if (!DllAvailable("shell32.dll")) {
-        ::MessageBoxW(hwnd_, L"Windows could not show properties for that file.",
-                      L"Process properties", MB_OK | MB_ICONWARNING);
-        return;
-    }
-    const HINSTANCE rc = ::ShellExecuteW(hwnd_, verb.c_str(), c.processPath.c_str(),
-                                          nullptr, nullptr, SW_SHOWNORMAL);
-    if (reinterpret_cast<INT_PTR>(rc) <= 32) {
-        ::MessageBoxW(hwnd_, L"Windows could not show properties for that file.",
-                      L"Process properties", MB_OK | MB_ICONWARNING);
-    }
-}
+// REMOVED 2026-10-05 (todo.md 8.7 G1). Kept, commented, for the same reason as
+// the menu entry: the reasoning is the valuable part and deleting it would lose
+// the answer to "why doesn't Process properties work?".
+//
+// void MainWindow::ShowSelectedProcessProperties() {
+//     const std::optional<Connection> sel = SelectedCopy();
+//     if (!sel.has_value()) return;
+//     const Connection& c = *sel;
+//     if (c.processPath.empty() || c.processPath == L"System") {
+//         ::MessageBoxW(hwnd_,
+//                       L"This row has no process path, so there are no file "
+//                       L"properties to show.",
+//                       L"Process properties", MB_OK | MB_ICONINFORMATION);
+//         return;
+//     }
+//     const std::wstring verb = L"properties";
+//     // shell32.dll is delay-loaded; gate before the call so its absence is
+//     // reported rather than raised. Same reason as ShowSelectedFileLocation.
+//     if (!DllAvailable("shell32.dll")) {
+//         ::MessageBoxW(hwnd_, L"Windows could not show properties for that file.",
+//                       L"Process properties", MB_OK | MB_ICONWARNING);
+//         return;
+//     }
+//     const HINSTANCE rc = ::ShellExecuteW(hwnd_, verb.c_str(), c.processPath.c_str(),
+//                                           nullptr, nullptr, SW_SHOWNORMAL);
+//     if (reinterpret_cast<INT_PTR>(rc) <= 32) {
+//         ::MessageBoxW(hwnd_, L"Windows could not show properties for that file.",
+//                       L"Process properties", MB_OK | MB_ICONWARNING);
+//     }
+// }
+//
+// What was wrong with it, having read it rather than guessed: `properties` is a
+// shell verb, and the way to invoke one is through a shell item
+// (ShellExecuteEx on an IShellItem, or "explorer /select,"), not by handing
+// ShellExecuteW a raw path. Given a path it returns <= 32, which the three boxes
+// above collapsed into a single indistinguishable message - so a user could not
+// tell a genuinely missing file from a verb the shell declined to run, which is
+// exactly the "it does not work" report. There was also no working version of
+// the idea to fall back on: "Open file location" opens Explorer on the same
+// file, and Explorer does have the verb.
 
 void MainWindow::BlockSelectedConnection() {
     const std::optional<Connection> sel = SelectedCopy();
@@ -3157,6 +3204,21 @@ void MainWindow::ShowDetailsOfSelectedRow() {
                   c.processPath.empty() ? std::wstring() : c.processPath);
 }
 
+/* REMOVED 2026-10-05 (todo.md 8.7 G2) - the modal "capturing..." countdown
+   window, and the whole of FollowSelectedStream's wait step.
+
+   This existed for one caller: the GUI's Follow TCP stream action, which is
+   gone. It could not simply be left in place, because an unreferenced function
+   with internal linkage is C4505 - a warning, and /WX makes every warning an
+   error. So it is commented rather than deleted: the timer handling and the
+   countdown arithmetic are worth keeping a record of, and a future caller that
+   wants a non-modal capture window should start from this instead of from
+   nothing.
+
+   Reinstating it means unwrapping this block, re-enabling IDM_FOLLOW_STREAM in
+   wintcp.rc and OnContextMenu, and answering the question this window never
+   did: how the user knows when to generate traffic. Better answered on the
+   command line, which is where the feature went.
 namespace {
 
 // A small modal "capturing" window with a live countdown. Written here
@@ -3288,59 +3350,72 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return ::DefWindowProcW(hwnd, msg, w, l);
 }
 
-}  // namespace
 
-void MainWindow::FollowSelectedStream() {
-    const std::optional<Connection> sel = SelectedCopy();
-    if (!sel.has_value()) return;
-    const Connection& c = *sel;
+*/
 
-    // Re-check rather than trusting the menu's greyed state: keyboard
-    // invocation can arrive after the row under the cursor changed.
-    std::wstring why;
-    if (!CaptureAvailable(&why)) {
-        // If the user CAN elevate, offer the relaunch instead of just
-        // explaining. The whole process is replaced, not a helper spawned,
-        // so the window state, filter and column layout are all still there
-        // on the other side - the command line is carried across.
-        if (IsAdminMember() && Reelevate(L"Follow TCP stream")) {
-            // A new elevated instance owns the work from here. This one has
-            // served its purpose; closing it avoids two windows and two
-            // refresh loops fighting over the same display.
-            ::DestroyWindow(hwnd_);
-            return;
-        }
-        ::MessageBoxW(hwnd_, why.c_str(), L"Follow TCP stream",
-                      MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    if (c.protocol != IPPROTO_TCP || c.state == MIB_TCP_STATE_LISTEN ||
-        c.state == 0) {
-        ::MessageBoxW(hwnd_,
-                      L"Only an established TCP connection has a stream to "
-                      L"follow.\n\nA listening socket has no peer yet.",
-                      L"Follow TCP stream", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
 
-    CaptureTarget target = MakeCaptureTarget(c);
-
-    std::wstring startError;
-    if (!StartCapture(target, &startError)) {
-        ::MessageBoxW(hwnd_, startError.c_str(), L"Follow TCP stream",
-                      MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    ShowCaptureWait(hwnd_, target.label);
-
-    // StopCapture clears the filter and deletes the temp files on every path,
-    // including the ones where the user closed the wait window immediately.
-    const CaptureResult result = StopCapture(target);
-    stream_.SetDark(ThemeIsDark());
-    stream_.Show(hwnd_, font_, L"WinTCP - TCP stream - " + target.label,
-                 result, target.label);
-}
+// REMOVED 2026-10-05 (todo.md 8.7 G2): FollowSelectedStream, the GUI half of
+// "Follow TCP stream". Commented, not deleted, because the chain of reasons it
+// failed IS the argument for moving the feature to the CLI:
+//
+//  1. It re-elevated the ENTIRE application to reach pktmon. Reelevate replaces
+//     the process, so the window, the filter box, the column layout and the
+//     scroll position are all gone - to look at hex bytes. The original comment
+//     claimed the state "is still there on the other side"; the command line is,
+//     the user's working state is not.
+//  2. Even elevated it is modal: arm the filter, show a wait dialog, sleep, and
+//     only THEN show the bytes. pktmon is a sampling driver, not a tap, so
+//     anything before `pktmon filter add` is simply not recorded - and a
+//     connection that goes quiet in the meantime yields an empty window that the
+//     user cannot distinguish from a bug.
+//  3. The bytes then land in a hand-rolled hex window. The hex window is the
+//     right tool for the job; the flow around it is what made the feature read
+//     as broken even when it worked.
+//
+// The capability was NOT dropped. `capture` already ran this exact pipeline
+// (StartCapture -> StopCapture -> Pcapng -> TcpReasm) and then printed one line
+// of counters, throwing the payload away. It now has `--text`, which writes the
+// reassembled direction to stdout the way `tcpflow -A` does, and `--out FILE`,
+// which keeps the pcapng for Wireshark or tshark. On the command line the
+// blocking is the point rather than the defect.
+//
+// void MainWindow::FollowSelectedStream() {
+//     const std::optional<Connection> sel = SelectedCopy();
+//     if (!sel.has_value()) return;
+//     const Connection& c = *sel;
+//
+//     std::wstring why;
+//     if (!CaptureAvailable(&why)) {
+//         if (IsAdminMember() && Reelevate(L"Follow TCP stream")) {
+//             ::DestroyWindow(hwnd_);
+//             return;
+//         }
+//         ::MessageBoxW(hwnd_, why.c_str(), L"Follow TCP stream",
+//                       MB_OK | MB_ICONINFORMATION);
+//         return;
+//     }
+//     if (c.protocol != IPPROTO_TCP || c.state == MIB_TCP_STATE_LISTEN ||
+//         c.state == 0) {
+//         ::MessageBoxW(hwnd_,
+//                       L"Only an established TCP connection has a stream to "
+//                       L"follow.\n\nA listening socket has no peer yet.",
+//                       L"Follow TCP stream", MB_OK | MB_ICONINFORMATION);
+//         return;
+//     }
+//
+//     CaptureTarget target = MakeCaptureTarget(c);
+//     std::wstring startError;
+//     if (!StartCapture(target, &startError)) {
+//         ::MessageBoxW(hwnd_, startError.c_str(), L"Follow TCP stream",
+//                       MB_OK | MB_ICONERROR);
+//         return;
+//     }
+//     ShowCaptureWait(hwnd_, target.label);
+//     const CaptureResult result = StopCapture(target);
+//     stream_.SetDark(ThemeIsDark());
+//     stream_.Show(hwnd_, font_, L"WinTCP - TCP stream - " + target.label,
+//                  result, target.label);
+// }
 
 // ---- 5.2 presets + 5.3 bookmarks -----------------------------------------
 

@@ -26,6 +26,8 @@ list --watch 1 --changes --event appear --count 3 --filter "proto:tcp state:esta
 list --filter "process:cloudflared.exe" --columns pid,process,local,remote,rport,state --limit 2
 capture --select "pid:22180" --dry-run
 capture --select "proto:tcp state:estab" --dry-run
+capture --select "pid:22180" --text --dir b --dry-run
+capture --select "pid:22180" --out "c:\tmp\stream.pcapng" --dry-run
 list --filter "state:listen lport:445" --columns process,path,pid,local,state
 list --filter "state:listen exclude:127." --sort lport --columns pid,process,lport,local --limit 8
 list --filter "proto:udp" --columns process,pid,local,lport,proto --limit 5
