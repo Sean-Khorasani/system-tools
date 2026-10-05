@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Executes every command listed in readme_cmds.txt against the real binary
+    Executes every command listed in examples.txt against the real binary
     and reports any the product rejects.
 
 .DESCRIPTION
-    Invoked by readmegolden.bat, which owns the reporting and the exit code.
+    Invoked by examples.bat, which owns the reporting and the exit code.
     This is a separate file because a batch `for /f` loop cannot carry a
-    nested double quote, and the README legitimately contains one:
+    nested double quote, and the documentation legitimately contains one:
 
         --filter "note:""corporate dns"""
 
@@ -62,7 +62,7 @@ function Invoke-Documented {
     # rc 2 is the only failure this harness hunts: bad arguments. rc 1 means
     # "no live row matched", which is a correct answer to a filter question and
     # must not fail the gate - the studies are examples, not fixtures, and the
-    # README says so.
+    # The documentation says so.
     if ($rc -eq 2) {
         Write-Host "REJECTED  $t"
         foreach ($l in $out) { Write-Host "          $l" }
@@ -73,7 +73,7 @@ function Invoke-Documented {
 }
 
 # ---- self-test: prove this harness can actually FAIL --------------------------
-Write-Host "READMEGOLDEN: self-test - proving the harness detects a rejection"
+Write-Host "EXAMPLES: self-test - proving the harness detects a rejection"
 # BOTH commands run before either verdict is read. The first attempt checked
 # the rejection count between the two calls, so the second never ran and the
 # "ran 1 command, expected 2" check below fired on its own harness. A
@@ -84,13 +84,13 @@ Invoke-Documented 'list --pid 1'              # must be REJECTED (rc 2)
 Invoke-Documented 'list --filter "tcp:" --quiet'  # must be accepted (rc 0)
 if ($script:Runs -ne 2) {
     Write-Host ""
-    Write-Host "READMEGOLDEN: FAIL - the self-test ran $($script:Runs) command(s), expected 2."
+    Write-Host "EXAMPLES: FAIL - the self-test ran $($script:Runs) command(s), expected 2."
     Write-Host "COUNTS: 0 1"
     exit 1
 }
 if ($script:Rejections -ne 1) {
     Write-Host ""
-    Write-Host "READMEGOLDEN: FAIL - the self-test's known-bad command (`list --pid 1`)"
+    Write-Host "EXAMPLES: FAIL - the self-test's known-bad command (`list --pid 1`)"
     Write-Host "          was NOT detected as a rejection ($($script:Rejections) rejection(s)"
     Write-Host "          from 2 commands, expected 1). This harness is not measuring"
     Write-Host "          what it claims to, so every verdict below is meaningless."
@@ -98,7 +98,7 @@ if ($script:Rejections -ne 1) {
     Write-Host "COUNTS: 0 1"
     exit 1
 }
-Write-Host "READMEGOLDEN: self-test ok - a known rc-2 rejection is detected and a"
+Write-Host "EXAMPLES: self-test ok - a known rc-2 rejection is detected and a"
 Write-Host "                 known rc-0 run is not. The verdict below is meaningful."
 Write-Host ""
 

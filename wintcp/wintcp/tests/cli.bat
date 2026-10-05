@@ -1,7 +1,7 @@
 @echo off
-REM golden.bat - Golden CLI tests: run the real binary, assert stdout markers
-REM and exit codes. Fast, no desktop, CI-safe. Row counts are NEVER asserted
-REM (live machine); only shapes, headers, markers and exit codes.
+REM cli.bat - the CLI behaviour gate: run the real binary, assert stdout
+REM markers and exit codes. Fast, no desktop, CI-safe. Row counts are NEVER
+REM asserted (live machine); only shapes, headers, markers and exit codes.
 REM
 REM Exit codes of the product: 0 ok, 1 failure/empty, 2 bad args,
 REM 3 refused (--yes missing).
@@ -11,10 +11,10 @@ REM HEADLESS BY CONSTRUCTION, with no opt-out flag. The trailing `--uiharness`
 REM smoke used to live here and was skipped by passing a magic `quick`
 REM argument - which meant every "headless" run still popped a window unless
 REM the caller knew to opt out. That flag needs a real window, so it now has
-REM its own file: uigolden.bat. This one no longer launches the GUI at all,
+REM its own file: gui.bat. This one no longer launches the GUI at all,
 REM which is what the contract at the top always claimed.
 REM
-REM Safety rule: golden never passes --yes to a mutating verb (kill/close/
+REM Safety rule: this gate never passes --yes to a mutating verb (kill/close/
 REM block/unblock/capture). Destructive paths are verified by hand, not CI.
 REM
 REM NOT RUN BY THIS SUITE: d2probe.bat, which produced the measurements behind
@@ -26,13 +26,14 @@ REM different host will have different ones and may need a different pool size.
 REM It is kept, and buildable, precisely so that re-measuring is a command
 REM rather than an archaeology exercise.
 REM
-REM Usage: golden.bat [path-to-exe]   (default: build\wintcp.exe)
+REM Usage: cli.bat [path-to-exe]   (default: ..\..\build\wintcp.exe, resolved
+REM        from this script's own directory, so it runs from anywhere)
 
 setlocal EnableExtensions
 set BIN=%~1
-if "%BIN%"=="" set BIN=build\wintcp.exe
+if "%BIN%"=="" set BIN=%~dp0..\..\build\wintcp.exe
 if not exist "%BIN%" (
-    echo GOLDEN: missing %BIN% - run build.bat first.
+    echo CLI: missing %BIN% - run build.bat first.
     exit /b 1
 )
 set OUT=%TEMP%\wngolden_out_%RANDOM%.txt
@@ -646,10 +647,10 @@ call :t "export format not inferred" "export --out %TEMP%\wngolden_noext --filte
 if exist "%TEMP%\wngolden_noext" del "%TEMP%\wngolden_noext"
 
 echo.
-echo GOLDEN: %CHECKS% checks, %FAILS% failures.
+echo CLI: %CHECKS% checks, %FAILS% failures.
 if not "%FAILS%"=="0" exit /b 1
 if exist "%OUT%" del "%OUT%"
-echo GOLDEN: PASS
+echo CLI: PASS
 exit /b 0
 
 REM :t <name> <args> <rc> <marker>

@@ -59,7 +59,7 @@ ps --sort mem --limit 1 --quiet
 # wintcp-tests.exe. It is no longer a documented wintcp.exe command, so
 # asserting it here would assert a rejection.
 #
-# Note the `#`, not `REM`: readmegolden.ps1 skips lines starting with `#` only.
+# Note the `#`, not `REM`: examples.ps1 skips lines starting with `#` only.
 # Three `REM` lines here were executed as commands and the harness rejected all
 # three with "unexpected argument" - which is exactly what it is for.
 list --watch 2 --changes --event appear,state --format json --count 3

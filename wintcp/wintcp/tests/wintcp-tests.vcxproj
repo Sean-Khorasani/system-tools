@@ -164,7 +164,7 @@
        testing: its only testable expression was the uiharness argv scan,
        which moved out with the harness. Everything else in it is process
        lifecycle, which only a real process can exercise - and that is what
-       golden.bat does, driving wintcp.exe as a black box.
+       wintcp\tests\cli.bat does, driving wintcp.exe as a black box.
 
        This list must stay in step with the product project. It is written out
        rather than globbed because MSBuild has no reliable glob for ClCompile

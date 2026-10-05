@@ -236,7 +236,8 @@ set_target_properties(wintcp PROPERTIES
 #     error, and there is nothing in main.cpp worth unit-testing: its only
 #     testable expression is the --uiharness argv scan, which moved with the
 #     harness. Everything else in it is process lifecycle that only a real
-#     process can exercise - which is what golden.bat does, as a black box.
+#     process can exercise - which is what wintcp/tests/cli.bat does, as a
+#     black box.
 #
 #   * wintcp/src is on the include path so the moved files keep writing
 #     #include "Connection.h". Rewriting those to ../src/ would touch 30 lines
@@ -293,8 +294,8 @@ set_target_properties(wintcp-tests PROPERTIES
     # Per-config variants as well as the base property: with only
     # RUNTIME_OUTPUT_DIRECTORY set, CMake appends the configuration name for
     # multi-config generators, so Release landed in tests\Release\ and Debug
-    # would have landed somewhere else. uigolden.bat points at one fixed path,
-    # so the path must not depend on the configuration.
+    # would have landed somewhere else. wintcp\tests\gui.bat points at one fixed
+    # path, so the path must not depend on the configuration.
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/tests"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/tests"

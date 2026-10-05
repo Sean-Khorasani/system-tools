@@ -1352,7 +1352,7 @@ Two details that matter more than they look:
 - **CSV and TSV carry a UTF-8 BOM; JSON never does.** Without the BOM, Excel
   on a Western locale mangles a UTF-8 path or a process name; with a BOM in
   JSON, half the parsers reject the file. Both verified byte-wise by
-  `golden.bat`.
+  `wintcp\tests\cli.bat`.
 - **`--limit` is refused, not ignored.** An export always writes the whole
   view, because a file that quietly holds 5 of 300 rows while the tool reports
   success is a lie about the machine. Narrow with `--filter`, or pipe
@@ -1736,19 +1736,21 @@ build\tests\wintcp-tests.exe ui                :: GUI checks (needs a desktop se
 build\tests\wintcp-tests.exe bench 100000 10   :: time the view pipeline
 ```
 
-Four gate scripts, all runnable from a Developer Command Prompt:
+Four gates, runnable from a Developer Command Prompt. Each script resolves its
+own default binary and data paths from `%~dp0..\..\`, so it launches correctly
+from any working directory:
 
-| Script | What it asserts |
+| Gate | What it asserts |
 |---|---|
-| `golden.bat` | CLI behaviour: every command, exit code and refusal message against the real `wintcp.exe` |
-| `uigolden.bat` | the GUI harness; fails loudly if the harness cannot start, rather than reporting a vacuous pass |
-| `readmegolden.bat` | every command shown in this README is accepted by the binary |
+| `wintcp\tests\cli.bat` | CLI behaviour: every command, exit code and refusal message against the real `wintcp.exe` |
+| `wintcp\tests\gui.bat` | the GUI harness; fails loudly if the harness cannot start, rather than reporting a vacuous pass |
+| `wintcp\tests\examples.bat` | every example command printed in this documentation (the list lives in `wintcp\tests\examples.txt`) is accepted by the binary |
 | `wintcp-tests.exe unit` | parser, snapshot diff, sort, grouping, filters, formatting, joins, GeoIP, TLS decode, reassembly, capability report |
 
-`readmegolden.bat` and `uigolden.bat` both begin with a **self-test**: each
-deliberately provokes a known rejection and confirms the harness notices, so a
-green run means the gate can still fail. Never run two instances of one script
-at once - stdout interleaves.
+`wintcp\tests\examples.bat` and `wintcp\tests\gui.bat` both begin with a
+**self-test**: each deliberately provokes a known rejection and confirms the
+harness notices, so a green run means the gate can still fail. Never run two
+instances of one script at once - stdout interleaves.
 
 `tools\` holds the measurement helpers used while developing: `pe-size.ps1`
 decodes a PE's sections and import table, and `size-matrix.ps1` builds flag
