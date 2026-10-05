@@ -2,6 +2,8 @@ list --filter "process:AnyDesk.exe state:estab" --columns pid,process,local,remo
 close --select "pid:5168 remote:107.155.105.90" --dry-run
 kill --select "local:port:49665" --dry-run
 kill --select "ipv4: local:port:49665" --dry-run
+kill --pid 999999
+kill --pid 999999 --dry-run
 block --select "remote:20.47.110.73 state:estab" --dry-run
 blocks
 unblock --address 20.47.110.73 --port 443 --dry-run
@@ -12,6 +14,9 @@ list --group --traffic --filter "tx:500GB" --columns pid,process,tx
 list --group --traffic --filter "process:svchost.exe" --sort tx --desc --limit 3 --columns pid,process,tx --watch 1 --count 2
 list --traffic --watch 2 --count 4 --sort bandwidth --desc --limit 3 --columns pid,process,remote,rport,bandwidth
 geoip info --db GeoLite2-Country.mmdb
+list --db GeoLite2-Country.mmdb --filter "country:US" --columns remote,country,process --limit 3
+list --db GeoLite2-Country.mmdb --filter "country:US" --quiet && echo us-traffic
+list --dns --db GeoLite2-Country.mmdb --traffic --filter "state:estab" --limit 4 --columns remote,host,country,process,nettotal
 list --dns --traffic --filter "state:estab" --limit 4 --columns remote,host,process,nettotal
 details --select "process:AnyDesk.exe state:estab" --traffic --dns
 list --watch 1 --changes --event appear,state --count 4
@@ -42,6 +47,7 @@ preset save --name rmcheck --filter "port:443" --sort pid
 preset list
 preset show --name rmcheck
 preset apply --name rmcheck --limit 10 --columns pid,process,remote,rport
+preset save --name rmcheck --filter "port:80"
 preset save --name rmcheck --filter "port:80" --force
 preset delete --name rmcheck
 export --out %TEMP%\rmc_a.csv --filter "tcp: state:listen"
@@ -70,3 +76,4 @@ list --traffic --filter "rtt:100" --columns process,rtt,cwnd
 list --traffic --filter "retrans:1KB" --columns process,retrans
 list --traffic --watch 1 --count 3 --filter "state:estab" --columns process,bandwidth,procspeed --limit 8
 list --traffic --group --sort procspeed --desc --limit 6 --columns pid,process,procspeed
+version

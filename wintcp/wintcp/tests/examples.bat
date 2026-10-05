@@ -42,8 +42,10 @@ REM     would make the gate fail every time the machine changed.
 REM   * Output content is NOT asserted. A study's example output is captured
 REM     on one machine and is explicitly documented as machine-specific; a
 REM     harness that pinned it would break on every refresh. The documentation
-REM     says so too ("Output varies per machine; the PIDs, process names, ports
-REM     and byte totals below are from one Windows 11 host").
+REM     says so - docs\cookbook.md:9: "Output was captured by running each
+REM     command on one Windows 11 host. PIDs, process names, ports and byte
+REM     totals are machine-specific and will differ on yours" - restated as a
+REM     convention in docs\development.md.
 REM   * Mutating verbs run in --dry-run / non-destructive form only. The
 REM     commands file is checked-in data and this runs unattended; nothing here
 REM     may kill a process or write a firewall rule. The `bookmark` and

@@ -39,14 +39,14 @@ Usage: wintcp.exe <command> [switches]
 |---|---|---|
 | Monitor | `list` (alias `conn`) | Connections table: filter, sort, group, choose columns. The widest verb; the others take subsets of its switches. |
 | | `ps` | One row per process: connection count, CPU, memory, disk. |
-| | `top` | Like `ps`, hottest CPU first. |
+| | `top` | Synonym for `ps`: same rows, same switches, same defaults. |
 | | `stat` (alias `sys`) | System CPU, memory, disk and network rates. |
 | | `details` | Full report for exactly one connection. |
 | Act | `kill` | End the process that owns a connection, or a PID. |
 | | `close` | Tear down one TCP connection; the process survives. Admin, IPv4. |
 | | `block` | Close a live connection **and** add an outbound firewall rule for its remote endpoint. Admin. |
 | | `unblock` | Remove the rules `block` created for an address and port. Admin. |
-| | `capture` | Record and reassemble one TCP stream for a fixed window. Admin. |
+| | `capture` (alias `follow`) | Record and reassemble one TCP stream for a fixed window. Admin. |
 | Audit | `blocks` | Count firewall rules carrying the WinTCP tag. Read-only; exits `0`; needs no elevation and no `--yes`. |
 | Library | `bookmark` | Pin a remote endpoint with a color and a note. |
 | | `preset` | Save, show, apply and delete named views. |
@@ -205,7 +205,7 @@ The aligned `list --group` **table** and the GUI are exempt: there the row is vi
 
 ### `ps` and `top`
 
-One row per process: PID, name, connection count, CPU %, working set, disk I/O. `top` is `ps` sorted by CPU, hottest first.
+One row per process: PID, name, connection count, CPU %, working set, disk I/O. `top` is a **synonym for `ps`** - one code path, so the rows, the switches and the defaults are identical; both already sort by CPU, hottest first. `top` exists so that muscle memory from the Unix command lands somewhere useful, and `ps` is the spelling the rest of the documentation uses.
 
 `ps --sort` takes its own vocabulary: `cpu`, `mem`, `disk`, `conns`, `pid`, `process`. It has no `--group`; it is already grouped. `--filter` selects **connection rows**, and `ps` then aggregates the processes that own them.
 

@@ -76,7 +76,7 @@ wintcp.exe kill --select "ipv4: local:port:49665" --dry-run
 wintcp.exe list --filter "port:443" --quiet && echo someone-is-on-https
 ```
 
-`wintcp.exe help` prints the overview and `wintcp.exe help <command>` prints full help with examples. The [cookbook](docs/cookbook.md) walks through 34 worked recipes with real output; the two that measure the tool rather than the machine (the benchmark and the self-check, formerly recipes 31 and 32) live in [development](docs/development.md).
+`wintcp.exe help` prints the overview and `wintcp.exe help <command>` prints full help with examples. The [cookbook](docs/cookbook.md) walks through 36 worked recipes with real output; the two that measure the tool rather than the machine (the benchmark and the self-check, formerly recipes 31 and 32) live in [development](docs/development.md).
 
 ## Requirements and permissions
 
@@ -179,7 +179,7 @@ Every recipe in the cookbook answers a question that cannot be answered with one
 | [CLI reference](docs/cli.md) | Commands, switches, exit codes, output formats, JSON conventions, switch dependencies, column reference. |
 | [Filter language](docs/filters.md) | The full grammar, units, and the rules that keep filters from returning wrong answers silently. |
 | [Traffic counters](docs/traffic.md) | ETW versus the per-socket fallback, what each can and cannot measure, status-bar states and limits. |
-| [Cookbook](docs/cookbook.md) | 34 worked recipes with real output and an explanation of every load-bearing switch. Recipes 31 and 32 were the benchmark and the self-check; being developer tools rather than user features, they moved to [Development](docs/development.md). |
+| [Cookbook](docs/cookbook.md) | 36 worked recipes with real output and an explanation of every load-bearing switch. Recipes 31 and 32 were the benchmark and the self-check; being developer tools rather than user features, they moved to [Development](docs/development.md). |
 | [Architecture](docs/architecture.md) | Design principles, concurrency model, row identity, source layout. |
 | [Development](docs/development.md) | Building, test binaries, gate scripts, benchmarks, documentation conventions. |
 

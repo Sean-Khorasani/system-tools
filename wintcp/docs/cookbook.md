@@ -50,11 +50,13 @@ Background pages: [filter language](filters.md), [CLI reference](cli.md), [traff
 | [23](#23-process-table-with-cpu--and-connection-counts) | Processes with CPU % and connection counts | no |
 | [24](#24-one-shot-system-health-as-json) | System health as JSON | no |
 | [25](#25-the-filter-grammar-ranges-excludes-prefixes-quoting) | The filter grammar in action | no |
+| [37](#37-what-can-this-build-do-on-this-machine-and-what-is-missing) | What can this build do on this machine, and what is missing? | no |
 | **Library and automation** | | |
 | [26](#26-pin-a-peer-with-a-tag-and-a-note-and-find-it-again) | Annotate a peer and find it again | no |
 | [27](#27-save-and-reuse-a-triage-view) | Save and reuse a triage view | no |
 | [28](#28-excel-ready-export-with-column-selection) | Excel-ready export | no |
 | [29](#29-a-stable-json-schema-for-dashboards) | JSON for dashboards | no |
+| [38](#38-why-does-my-json-parser-wait-for-the-array-to-close) | Why does my JSON parser wait for the array to close? | no |
 | [30](#30-quiet-exit-code-automation) | Exit-code automation | no |
 
 The benchmark and self-test (formerly recipes 31 and 32) are developer tools, not user features; they are documented in [Development](development.md#test-and-benchmark-binary).
@@ -1075,3 +1077,69 @@ wintcp.exe ps --sort mem --limit 1 --quiet || echo no-processes
 | `list --group` | Per-process, so a threshold hits the process total. `--filter "tx:1GB"` over connections and over processes are different questions; grouping is how you ask the second. |
 | `ps --quiet` | The same contract on the process table. `ps --quiet` alone is an "is the process table readable" gate. |
 | `\|\|` / `&&` | The branch. The shell is the control flow. |
+
+### 37. What can this build do on this machine, and what is missing?
+
+A feature that is missing and a feature that is broken look identical from the outside: the column is empty either way. `version` reports the state of **this run** instead of a feature list, so the reason is read rather than guessed at, and it is the first thing to run on an unfamiliar Windows install.
+
+`version` takes no switches at all, so the table below breaks down what it prints instead.
+
+```bat
+wintcp.exe version
+```
+
+```text
+WinTCP 1.0.0
+
+A live view of every TCP and UDP endpoint on this machine (IPv4 + IPv6), with the process that owns it, read through the IP Helper API (GetExtendedTcpTable / GetExtendedUdpTable).
+Plain Win32 API and the common controls. No MFC, ATL or Qt.
+
+This run
+Administrator     yes — traffic counters and connection closing are available
+Traffic source    none (no collector is running)
+GeoIP database    not loaded (Country column shows —)
+Saved presets     available
+Optional features all available
+Connections       304
+```
+
+| Line | What it reports |
+|---|---|
+| `Administrator` | The **security token**, not "was this process relaunched". Whoever opened an already-elevated console sees `yes` here *and* on the two capabilities that line names. |
+| `Traffic source` | The collector this run has. An elevated run reads `none (no collector is running)`, because `version` opens no session and does not name one it did not start. The other two values are `ETW kernel logger (full, including UDP)` and `socket fallback (TCP only)`, the latter being what an unelevated run would use. |
+| `GeoIP database` | Whether a `.mmdb` was loaded **by this run**, with the symptom printed beside the state (`Country column shows —`) rather than a bare `no`. |
+| `Saved presets` | The preset store is in-process, so it reads `available` whenever the binary runs. |
+| `Optional features` | Counted from the capabilities probed in this process. `all available` means the count was zero; on a machine that is missing one, each absence prints its own detail line above the summary, naming what is absent and what would provide it. |
+| `Connections` | One real enumeration taken for this call, so it is a measured number rather than a placeholder. The `Columns shown` line is absent for the same reason: a CLI run has no persisted view mask to count, so the line is omitted instead of faked. |
+
+`version` always exits `0` - it is a report, not a test, so a wrapper can call it before deciding whether anything is wrong. The `Optional features` line is the one that separates *the binary cannot do this* from *this machine cannot*, which is the distinction a blank column never makes on its own.
+
+### 38. Why does my JSON parser wait for the array to close?
+
+`--format json` emits a single array, so nothing can be read until the closing `]` - and on a `--watch` run that closing bracket does not arrive until the process exits. `jsonl` is NDJSON: one complete object per line, no wrapper, so a line-oriented consumer gets whole records as they are produced.
+
+```bat
+wintcp.exe list --format json  --columns proto,local,lport,remote,rport,state,pid,process --limit 2
+wintcp.exe list --format jsonl --columns proto,local,lport,remote,rport,state,pid,process --limit 2
+```
+
+```text
+[
+  {"proto":"TCPv4","local":"10.0.0.92","lport":"6495","remote":"18.64.67.41","rport":"443","state":"TIME_WAIT","pid":"0","process":"—"},
+  {"proto":"TCPv4","local":"10.0.0.92","lport":"24753","remote":"64.59.144.91","rport":"53","state":"TIME_WAIT","pid":"0","process":"—"}
+]
+```
+
+```text
+{"proto":"TCPv4","local":"10.0.0.92","lport":"1515","remote":"64.59.144.91","rport":"53","state":"TIME_WAIT","pid":"0","process":"—"}
+{"proto":"TCPv4","local":"10.0.0.92","lport":"6495","remote":"18.64.67.41","rport":"443","state":"TIME_WAIT","pid":"0","process":"—"}
+```
+
+| Switch | Why it is in this recipe |
+|---|---|
+| `list --format jsonl` | NDJSON: every line is a complete object, so `while read` or any line-buffered reader never has to match brackets or buffer across reads. `json` holds the identical objects inside one array a parser cannot finish until the process ends. |
+| `list --format json` | Kept in the same recipe as the contrast - same rows, same keys, different framing. Choosing between them is a framing decision, not a data decision. |
+| `--columns a,b,c` | Fixes which keys appear and in which order. Because both formats render the same column set, switching `json` to `jsonl` does not move the consumer's field list. |
+| `--limit 2` | Bounds the sample. In a real script `--watch` supplies the stream instead and `--limit` stays off. |
+
+`jsonl` is `json` with a different renderer, not a fourth format: same keys, same types, and the same em dash `—` for a stat nobody could measure rather than `0` or `null`. One consequence is worth knowing - **with `--changes` both formats are already NDJSON**, because a change feed is a stream by nature and there is no array to close; the difference only shows up on the snapshot forms above. See [the change feed as JSON](#33-a-machine-readable-change-feed) for that feed in either format.
