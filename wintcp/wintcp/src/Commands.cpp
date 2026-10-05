@@ -695,6 +695,13 @@ const char* JsonKeyFor(int column) {
         case COL_TLS: return "tls";
         case COL_COUNTRY: return "country";
         case COL_PINNED: return "pinned";
+        // F5.1/F5.2/F5.3. JSON keys match the --columns spellings, not the CELL
+        // HEADERS, for the same reason the ss -i keys do: the header says
+        // "Parent" and "Integrity", and the machine-readable name is the flat
+        // one a jq author would type.
+        case COL_PPID: return "ppid";
+        case COL_INTEGRITY: return "integrity";
+        case COL_SIGNATURE: return "signature";
         default: return nullptr;
     }
 }
@@ -951,7 +958,16 @@ bool DependsOnEnrichment(FilterField f) {
            f == FilterField::Host || f == FilterField::Duration ||
            f == FilterField::Rtt || f == FilterField::MinRtt ||
            f == FilterField::Cwnd || f == FilterField::Retrans ||
-           f == FilterField::Speed;
+           f == FilterField::Speed ||
+           // F5.3 only. Ppid, Parent and Integrity are deliberately ABSENT:
+           // they are filled by the process resolver during the snapshot
+           // itself, which runs before any filter is applied, so a clause on
+           // one of them sees a populated column and must not be deferred.
+           // Marking them enrichment-dependent would be actively harmful - the
+           // pre-join path would filter on the still-empty column, produce an
+           // empty view, and skip the resolver, so the filter could only ever
+           // answer "no match" for the same reason `cwnd:` did.
+           f == FilterField::Signature;
 }
 
 // True when any clause of 'filter' needs an enrichment join first. Negated
@@ -1023,7 +1039,7 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
                 if (!named.empty()) named += ", ";
                 named += n;
             };
-            bool anyRtt = false, anyByte = false, anySpeed = false;
+            bool anyRtt = false, anyByte = false, anySpeed = false, anySig = false;
             for (const FilterClause& cl : all) {
                 if (!DependsOnEnrichment(cl.field)) continue;
                 switch (cl.field) {
@@ -1039,10 +1055,26 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
                     // naming --traffic alone would send the reader into a
                     // second silent-empty run. Both facts go in the note.
                     case FilterField::Speed:  addName("\"speed:\""); anySpeed = true; break;
+                    // F5.3. Its own note, and NOT the traffic wording: the
+                    // signature verdict is read during the snapshot rather than
+                    // by the socket scan, so telling the reader to add
+                    // --traffic would send them down a switch that cannot
+                    // possibly change the answer.
+                    case FilterField::Signature:
+                        addName("\"signature:\"");
+                        anySig = true;
+                        break;
                     default: break;
                 }
             }
-            if (anyRtt) {
+            // Signature is checked FIRST, and separately from the rest: the
+            // advice is a sentence about one switch, and a filter mixing
+            // `signature:` with `rx:` is two questions that need two answers.
+            if (anySig) {
+                out += "filter: " + named +
+                       " match Authenticode verdicts, which are not read unless "
+                       "you ask for them; add --signatures.\r\n";
+            } else if (anyRtt) {
                 out += "filter: " + named +
                        " match TCP congestion state read from the kernel's "
                        "SIO_TCP_INFO; add --traffic.\r\n";
@@ -1067,7 +1099,7 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
     // Speed/TLS are deliberately absent: Bandwidth only ever fills in a
     // --watch poll (it is a delta between samples), so "add --traffic" would
     // not be enough of an answer, and no list switch decodes TLS at all.
-    bool colHost = false, colGeo = false;
+    bool colHost = false, colGeo = false, colSig = false;
     std::string colTraffic;
     auto addColName = [](std::string& s, const char* n) {
         if (!s.empty()) s += ", ";
@@ -1086,6 +1118,10 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
         else if (c == COL_MINRTT)  addColName(colTraffic, "\"minrtt\"");
         else if (c == COL_CWND)    addColName(colTraffic, "\"cwnd\"");
         else if (c == COL_RETRANS) addColName(colTraffic, "\"retrans\"");
+        // F5.3, and NOT folded into colTraffic: this column is empty because the
+        // trust provider was never asked, which is a different problem from the
+        // socket scan not having run, and the fix is a different switch.
+        else if (c == COL_SIGNATURE) colSig = true;
     }
     if (colHost && !opt.dns)
         out += "column: \"host\" without --dns: reverse DNS never ran, so the "
@@ -1094,6 +1130,10 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
     if (colGeo && opt.geoIpPath.empty())
         out += "column: \"country\" without --db: GeoIP never ran, so the cell "
                "stays empty; add --db <path to a .mmdb database>.\r\n";
+    if (colSig && !opt.signatures)
+        out += "column: \"signature\" without --signatures: WinVerifyTrust was "
+               "never called, so the cell is \"—\" rather than a verdict; add "
+               "--signatures (slow; paid once per distinct binary).\r\n";
     if (!colTraffic.empty() && !opt.traffic)
         out += "column: " + colTraffic +
                " without --traffic: the socket scan never ran, so every value "
@@ -1367,6 +1407,12 @@ CommandResult CmdListInto(SnapshotSource& source, ConnectionStore& store,
                           const ListOptions& opt) {
     CommandResult r;
     std::wstring err;
+    // F5.3. Before the pass, because the resolver reads the flag while it
+    // resolves - and on EVERY pass, not just the first: `list --watch` re-enters
+    // this function per tick against the same source, so setting it once at
+    // startup would be fine, but the GUI shares a source with `details` and
+    // resetting it here keeps each pass independent of how the last one ran.
+    source.SetVerifySignatures(opt.signatures);
     if (!BuildStoreSnapshot(source, store, /*procStats=*/true,
                             /*resolveDns=*/false, /*geoIp=*/false, nullptr,
                             &err)) {
@@ -1726,6 +1772,9 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
     }
     ConnectionStore store;
     std::wstring err;
+    // F5.3, same reason and same position as in CmdListInto: the flag reaches
+    // the resolver, not the row join, so it must be set before the pass.
+    source.SetVerifySignatures(eo.signatures);
     if (!BuildStoreSnapshot(source, store, eo.procStats, /*resolveDns=*/false,
                             /*geoIp=*/false, nullptr, &err)) {
         r.exitCode = kExitFail;
@@ -2810,6 +2859,15 @@ int ColumnIdForName(const std::wstring& name) {
     if (n == L"tls") return COL_TLS;
     if (n == L"country") return COL_COUNTRY;
     if (n == L"pinned" || n == L"bookmark") return COL_PINNED;
+    // F5.1/F5.2/F5.3. Several spellings each, on the same principle as
+    // procspeed/rtt above: refusing a name someone can reasonably guess is the
+    // friction D24 exists to remove. "parent" is accepted for the column whose
+    // header is "Parent", and "signed" for the one whose header is "Signature",
+    // because those are the words the two things are actually called.
+    if (n == L"ppid" || n == L"parent" || n == L"parentpid") return COL_PPID;
+    if (n == L"integrity" || n == L"il" || n == L"integritylevel")
+        return COL_INTEGRITY;
+    if (n == L"signature" || n == L"signed" || n == L"sig") return COL_SIGNATURE;
     return -1;
 }
 

@@ -173,6 +173,7 @@ target_link_libraries(wintcp PRIVATE
     shell32
     advapi32
     crypt32
+  wintrust
     pdh
     ole32
     oleaut32
@@ -278,7 +279,7 @@ target_compile_options(wintcp-tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-
                                        /Zc:__cplusplus)
 target_link_libraries(wintcp-tests PRIVATE
     iphlpapi ws2_32 comctl32 psapi user32 gdi32 comdlg32 shell32 advapi32
-    crypt32 pdh ole32 oleaut32 delayimp)
+    crypt32 wintrust pdh ole32 oleaut32 delayimp)
 target_link_options(wintcp-tests PRIVATE
     # Same reason as the product target above: wintcp.rc already embeds
     # RT_MANIFEST id 1, and letting the linker generate a second one gives

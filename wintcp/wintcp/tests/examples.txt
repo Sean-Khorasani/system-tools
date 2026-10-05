@@ -76,4 +76,14 @@ list --traffic --filter "rtt:100" --columns process,rtt,cwnd
 list --traffic --filter "retrans:1KB" --columns process,retrans
 list --traffic --watch 1 --count 3 --filter "state:estab" --columns process,bandwidth,procspeed --limit 8
 list --traffic --group --sort procspeed --desc --limit 6 --columns pid,process,procspeed
+# F5.1 / F5.2 / F5.3: the parent, integrity and signature columns, and the
+# filters that read them. `--signatures` is in the list because Authenticode
+# verification is opt-in - without it the signature cell is an em-dash, and a
+# documented command must show the switch that makes it mean something.
+list --columns pid,process,ppid,integrity --limit 5
+list --signatures --columns process,integrity,signature --limit 5
+list --signatures --filter "integrity:high" --columns process,integrity --limit 5
+list --signatures --filter "signed:" --columns process,signature --limit 5
+list --filter "parent:services" --columns process,ppid --limit 5
+list --signatures --sort signature --desc --columns process,signature --limit 5
 version

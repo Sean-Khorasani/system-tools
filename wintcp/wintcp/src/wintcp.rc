@@ -82,6 +82,10 @@ BEGIN
             MENUITEM "&Bookmarks",        IDM_COL_PINNED
             MENUITEM "Note",              IDM_COL_NOTE
             MENUITEM SEPARATOR
+            MENUITEM "Par&ent process",   IDM_COL_PPID
+            MENUITEM "&Integrity",        IDM_COL_INTEGRITY
+            MENUITEM "&Signature",        IDM_COL_SIGNATURE
+            MENUITEM SEPARATOR
             MENUITEM "&Memory",           IDM_COL_MEM
             MENUITEM "Di&sk I/O",         IDM_COL_DISK
             MENUITEM "&Received (net)",   IDM_COL_RX

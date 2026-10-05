@@ -146,7 +146,7 @@ const CommandHelp kCommandHelps[] = {
      "                proto,local,lport,remote,rport,state,pid,process,\r\n"
      "                service,host,path,traffic,rx,tx,nettotal,cpu,mem,\r\n"
      "                disk,duration,bandwidth,procspeed,tls,country,pinned,\r\n"
-     "                note,rtt,minrtt,cwnd,retrans.\r\n"
+     "                note,rtt,minrtt,cwnd,retrans,ppid,integrity,signature.\r\n"
      "                Applies to every shape, json included.\r\n"
      // B6: the CLI has no saved column default and no widths. That is the
      // joint consequence of B2 (CLI stays hive-independent) and B3 (no config
@@ -161,6 +161,13 @@ const CommandHelp kCommandHelps[] = {
      "                procspeed is the PROCESS rate summed over its sockets,\r\n"
      "                so it differs from bandwidth whenever a process holds\r\n"
      "                more than one connection.\r\n"
+     "                ppid shows the parent as \"<pid> <name>\" and integrity\r\n"
+     "                the mandatory level (\"+AC\" marks an AppContainer); both\r\n"
+     "                are read on every pass. signature is the Authenticode\r\n"
+     "                verdict - Signed, unsigned, or BAD SIG for a signed\r\n"
+     "                image whose chain does not verify. \"unsigned\" is the\r\n"
+     "                absence of a signature, not a finding, and needs\r\n"
+     "                --signatures: without it the cell is \"—\".\r\n"
      "  --limit N     at most N rows.\r\n"
      "  --quiet       print nothing; exit 0 when any row matches, else 1.\r\n"
      "  --traffic     per-PID byte totals via one bounded socket scan over\r\n"
@@ -170,6 +177,11 @@ const CommandHelp kCommandHelps[] = {
      "  --dns         reverse-DNS the printed rows only (slow; bound cost\r\n"
      "                with --limit).\r\n"
      "  --db FILE     load this .mmdb and join country codes for printed rows.\r\n"
+     "  --signatures  verify each distinct process image with WinVerifyTrust\r\n"
+     "                so the signature column and signed: filter have an\r\n"
+     "                answer. SLOW: a certificate chain per image, cached per\r\n"
+     "                image path for the run. Revocation is NOT checked, so a\r\n"
+     "                revoked certificate can still read Signed.\r\n"
      "  --changes     with --watch/--count: print only APPEAR / DISAPPEAR /\r\n"
      "                STATE deltas between polls (table or json). The first\r\n"
      "                snapshot is the silent baseline.\r\n"
@@ -610,6 +622,11 @@ struct Args {
     unsigned secs = kCaptureSecsDefault;   // recording window; range in Commands.h
     bool traffic = false; // list/details: per-PID byte totals (bounded scan)
     bool dns = false;     // list/details: reverse-DNS the printed rows
+    // F5.3: verify each process image with WinVerifyTrust. OFF by default and
+    // opt-in for a measured reason: WinVerifyTrust builds a certificate chain
+    // and would otherwise be paid for every process on every refresh. Cached per
+    // image path, so the cost is once per distinct binary, not once per row.
+    bool signatures = false;   // list/details: Authenticode verdicts
     bool changes = false; // list --watch: deltas only
     // D25: which change kinds to print, as a bitmask of RowChangeKind. The
     // default is all three. Before this there was NO way to select a kind, so
@@ -759,6 +776,12 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             a->traffic = true;
         } else if (t == L"--dns") {
             a->dns = true;
+        } else if (t == L"--signatures") {
+            // F5.3. No value: the only question is whether to pay for the
+            // verification. A threshold for "how trusted is it" would be a
+            // second, differently-worded way of asking the same thing, and the
+            // `signed:` filter already covers "give me the good ones".
+            a->signatures = true;
         } else if (t == L"--changes") {
             a->changes = true;
         } else if (t == L"--event") {
@@ -825,6 +848,10 @@ ListOptions ToListOptions(const Args& a) {
     o.dns = a.dns;
     o.geoIpPath = a.db;
     o.changes = a.changes;
+    // F5.3. Carried on ListOptions rather than applied at the parse site,
+    // because the SnapshotSource owns the resolver and is created further down;
+    // ListOptions is what survives from here to the pass that builds the rows.
+    o.signatures = a.signatures;
     return o;
 }
 
@@ -890,6 +917,7 @@ const wchar_t* const kSwitchNames[] = {
     L"--columns", L"--limit", L"--quiet", L"--watch", L"--count", L"--out",
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--secs", L"--traffic", L"--dns", L"--changes",
+    L"--signatures",
     L"--event", L"--yes", L"-y", L"--dry-run", L"--force",
 };
 constexpr size_t kSwitchNameCount =
@@ -913,7 +941,8 @@ struct VerbSwitches {
 const VerbSwitches kVerbSwitches[] = {
     {L"list",
      L"--filter --sort --asc --desc --group --format --columns --limit "
-     L"--quiet --watch --count --traffic --dns --db --changes --event"},
+     L"--quiet --watch --count --traffic --dns --db --changes --event "
+     L"--signatures"},
     {L"conn", nullptr},   // alias: same as list
     {L"ps",
      // --columns is deliberately absent. ps renders one fixed set of six
@@ -929,7 +958,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"top", nullptr},    // alias: same as ps
     {L"stat", L"--format --watch --count"},
     {L"sys", nullptr},    // alias: same as stat
-    {L"details", L"--select --traffic --dns --db"},
+    {L"details", L"--select --traffic --dns --db --signatures"},
     {L"kill", L"--pid --select --yes --dry-run"},
     {L"close", L"--select --yes --dry-run"},
     {L"block", L"--select --yes --dry-run"},
@@ -1387,6 +1416,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         eo.traffic = a.traffic;
         eo.dns = a.dns;
         eo.geoIpPath = a.db;
+        eo.signatures = a.signatures;
         const CommandResult r = CmdDetails(src, a.select, eo);
         Emit(r);
         return r.exitCode;

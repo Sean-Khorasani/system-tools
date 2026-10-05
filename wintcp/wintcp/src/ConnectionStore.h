@@ -95,7 +95,11 @@ enum class FilterField {
     // matching what the columns show - the microseconds the kernel reports are
     // converted at the sampler boundary (see SocketTcpInfo), so a filter and a
     // displayed cell can never disagree about the unit.
-    Rtt, MinRtt, Cwnd, Retrans
+    Rtt, MinRtt, Cwnd, Retrans,
+    // F5.1/F5.2/F5.3. Per-PROCESS facts joined onto every row of that process,
+    // so they filter exactly like the Process column they sit beside rather
+    // than needing a separate process view of their own.
+    Ppid, Parent, Integrity, Signature
 };
 
 struct FilterClause {

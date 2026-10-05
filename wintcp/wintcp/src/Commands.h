@@ -115,9 +115,15 @@ struct ListOptions {
     //   traffic: per-PID byte totals via the bounded socket sampler
     //   dns:     blocking reverse-DNS for the printed rows (use --limit!)
     //   geoIpPath: load this .mmdb and join country codes ("" = off)
+    //   signatures: verify each distinct process image (F5.3, "" = off)
     bool traffic = false;
     bool dns = false;
     std::wstring geoIpPath;
+    // F5.3: verify each distinct process image with WinVerifyTrust, so the
+    // Signature column and the `signed:` filter have something to report.
+    // Opt-in because the trust provider is far too slow to run per pass by
+    // default; cached per image path, so the cost is once per binary.
+    bool signatures = false;
     // changes: with --watch/--count, print only APPEAR/DISAPPEAR/STATE
     // deltas between polls instead of full snapshots.
     bool changes = false;
@@ -203,6 +209,8 @@ struct EnrichOptions {
     bool traffic = false;
     bool dns = false;
     std::wstring geoIpPath;
+    // F5.3, for `details`, which shares this shape with `list`.
+    bool signatures = false;
 };
 
 // Build the Details model for the single row matching 'select' (filter

@@ -47,7 +47,8 @@ mdns.exe    0.1 %  0 B / 4.0 KB      UDPv4  0.0.0.0        5353  *:*            
 - **As much as possible works without admin.** Per-PID byte totals, connection age, per-socket rate and RTT/cwnd/retransmit figures come from the kernel's own per-socket TCP counters (`SIO_TCP_INFO`) and need no privileges. Elevation adds ETW-based totals that include UDP.
 - **Scriptable by contract.** One command takes one snapshot and exits. Exit codes are documented, data goes to stdout and advice to stderr, `--quiet` turns any filter into a zero-output predicate, and output is table, CSV, TSV or JSON. A switch a command does not use is an error, not a silent no-op.
 - **Safe actions.** Destructive verbs refuse to run without `--yes` (exit 3), support `--dry-run`, check PIDs against process creation time, and never try to elevate themselves.
-- **Joins that no single built-in tool performs.** Process path, service, reverse DNS, GeoIP country, byte counters, kernel connection age, bookmarks and notes in one row.
+- **Joins that no single built-in tool performs.** Process path, service, parent process, integrity level, reverse DNS, GeoIP country, byte counters, kernel connection age, bookmarks and notes in one row.
+- **Answers "should I trust this process".** A Parent column for who launched it, Integrity for the level Windows gives it (`High` means it could have written to `HKLM`), and an Authenticode Signature column that separates *unsigned* (normal for most software) from *BAD SIG* (a chain that does not verify). `--signatures` is opt-in because a certificate chain is not a per-refresh cost.
 - **Built for busy machines.** A virtual list view stays responsive with tens of thousands of rows. Row identity is *endpoint + PID*, so dozens of identical sockets (every browser binds its own mDNS socket) do not produce false change events.
 
 ## Quick start

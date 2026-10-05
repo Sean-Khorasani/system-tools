@@ -242,6 +242,13 @@ bool Settings::Load() {
     // Historical schema ids (< 1, < 2, < 3 above) stay literal: they name
     // frozen past versions, not a tunable. Only the CURRENT version is a
     // constant, because it is the one future code must keep in step.
+    //
+    // Version 5 (F5.1/F5.2/F5.3) added Parent, Integrity and Signature, and
+    // follows version 4's precedent exactly: the bits are NOT granted. All
+    // three are opt-in for the same class of reason - a parent id, a trust
+    // level and a signature verdict are audit columns, and an upgrade that
+    // switched them on would put three more columns on screen for everyone to
+    // ask about. The bump alone is deliberate.
     if (colVersion < kCurrentColVersion) {
         // Bump the version and nothing else. The G6/G5 columns are intentionally
         // NOT added to colVisible - see above - and leaving this block empty but

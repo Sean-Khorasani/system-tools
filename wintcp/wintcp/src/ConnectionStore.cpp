@@ -12,6 +12,10 @@
 
 #include "TcpTable.h"
 #include "Utils.h"
+// F5.1/F5.2/F5.3: the column cells below need the integrity and signature
+// LABELS, and those are defined next to the enums they describe rather than in
+// a presentation header - so the labels and the states cannot drift apart.
+#include "ProcessInfo.h"
 
 namespace wintcp {
 namespace {
@@ -45,7 +49,7 @@ void RebuildLowerAll(Connection& c) {
     c.lowerAll = c.lowerLocal + L" " + c.lowerRemote + L" " + c.lowerState +
                  L" " + c.pidText + L" " + c.lowerProcess + L" " +
                  c.lowerPath + L" " + c.lowerService + L" " + c.lowerHost +
-                 L" " + c.lowerProto;
+                 L" " + c.lowerProto + L" " + c.lowerParent;
 }
 
 bool StartsWithCi(const std::wstring& s, const wchar_t* prefix, std::wstring& rest) {
@@ -144,6 +148,16 @@ constexpr FilterKeyword kFilterKeywords[] = {
     {FilterField::Cwnd,     L"window"},
     {FilterField::Retrans,  L"retrans"},
     {FilterField::Retrans,  L"retransmits"},
+    // F5.1/F5.2/F5.3. `ppid` is also the column's underlying number, so
+    // `ppid:1234` is an exact threshold rather than a substring; `parent` is the
+    // image name beside it. `signed` is an alias of `signature` because the
+    // question people actually ask is "is it signed", not "what is its
+    // signature state" - the same reason `latency` aliases `rtt`.
+    {FilterField::Ppid,      L"ppid"},
+    {FilterField::Parent,    L"parent"},
+    {FilterField::Integrity, L"integrity"},
+    {FilterField::Signature, L"signature"},
+    {FilterField::Signature, L"signed"},
 };
 
 constexpr size_t kFilterKeywordCount =
@@ -876,6 +890,17 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
         case FilterField::State:   hay = &c.lowerState;  break;
         case FilterField::Proto:   hay = &c.lowerProto;  break;
         case FilterField::Pid:     hay = &c.pidText;     break;
+        // F5.1. `parent` searches the parent's IMAGE NAME. It is in the hay
+        // switch rather than a case of its own because, like Process, it is a
+        // precomputed lowercase string and needs no formatting.
+        case FilterField::Parent:  hay = &c.lowerParent; break;
+        // F5.1. `ppid` is a NUMBER, so it formats on demand exactly like the
+        // ports do - including the same reuse of `tmp`, since that buffer is
+        // already what this switch formats digits into.
+        case FilterField::Ppid:
+            if (!c.ppidKnown) return false;
+            ::swprintf_s(tmp, L"%lu", static_cast<unsigned long>(c.ppid));
+            return HasLowerSubstring(tmp, cl.text);
         // Ports are formatted digits: they have no case, so match the
         // buffer directly instead of paying for a ToLowerW copy of every
         // row, per clause, on every keystro.e.
@@ -1012,6 +1037,53 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // the whole point of writing one.
             if (cl.text.empty()) return !c.lowerNote.empty();
             return Has(c.lowerNote, cl.text);
+        // F5.2. The level is a WORD, so it is matched as the text the column
+        // prints - `integrity:high`, `integrity:system` - and never as the RID,
+        // because "12288" is not an answer to any question a reader asks. The
+        // bare form means "has a readable level", which is how `note:` and
+        // `country:` behave: the useful query is "show me everything running as
+        // System".
+        case FilterField::Integrity: {
+            if (c.integrity == 0 ||
+                c.integrity >= static_cast<unsigned>(kIntegrityCount))
+                return false;
+            if (cl.text.empty()) return true;
+            // ToLowerW, not a bare HasLowerSubstring: the parameter is named
+            // `haystackLower` and does NOT fold case itself. The labels are
+            // capitalised ("High", "Protected"), so matching the raw label
+            // against a lower-case needle never found anything - `integrity:high`
+            // returned 0 rows on a machine with eleven High processes, which is
+            // precisely the "silently matches nothing" failure help list
+            // forbids.
+            //
+            // The needle is matched against the CELL, marker included, so a
+            // filter and the column cannot disagree: `integrity:ac` finds the
+            // AppContainer rows because "+AC" is literally what the column
+            // prints beside the level.
+            std::wstring cell =
+                ToLowerW(IntegrityLabel(static_cast<IntegrityLevel>(c.integrity)));
+            if (cell.empty()) return false;
+            if (c.appContainer) cell += L"+ac";
+            return cell.find(cl.text) != std::wstring::npos;
+        }
+        // F5.3. Same shape: match the printed verdict, and let the bare form ask
+        // the question worth asking - `signed:` alone means "WinTCP actually
+        // verified this image", which is NOT the same as "the verdict was good".
+        // A row whose image was never checked matches neither, because
+        // reporting it would mean passing off an unasked question as an answer.
+        case FilterField::Signature: {
+            if (c.signature == 0 ||
+                c.signature >= static_cast<unsigned>(kSigCount))
+                return false;
+            if (cl.text.empty())
+                return c.signature == static_cast<unsigned>(kSigValid);
+            // ToLowerW for the same reason as the integrity case above: the
+            // haystack parameter does not fold case, and "BAD SIG" is the label
+            // that needs folding most.
+            const std::wstring label =
+                ToLowerW(SignatureLabel(static_cast<SignatureState>(c.signature)));
+            return label.find(cl.text) != std::wstring::npos;
+        }
         default: return false;
     }
     return hay != nullptr && Has(*hay, cl.text);
@@ -1045,6 +1117,11 @@ void ConnectionStore::FinalizeRow(Connection& c) {
     c.lowerHost    = ToLowerW(c.hostname);
     c.lowerState   = ToLowerW(c.stateLabel);
     c.lowerProto   = ToLowerW(c.protoLabel);
+    // F5.1. Precomputed here for the same reason every other lower* field is:
+    // MatchClause runs per row per clause, and ToLowerW allocates a fresh
+    // string every time - doing it once per refresh instead of once per
+    // keystroke is the whole reason this row of fields exists.
+    c.lowerParent  = ToLowerW(c.parentName);
 
     RebuildLowerAll(c);
 }
@@ -1778,6 +1855,9 @@ const wchar_t* ConnectionStore::ColumnTitle(int column) {
         case COL_TLS:     return L"TLS";
         case COL_COUNTRY: return L"Country";
         case COL_PINNED:  return L"bookmarks";
+        case COL_PPID:    return L"Parent";
+        case COL_INTEGRITY: return L"Integrity";
+        case COL_SIGNATURE: return L"Signature";
         default:          return L"?";
     }
 }
@@ -1910,6 +1990,48 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             // together and a note without a bookmark is not a state that can
             // exist - showing one would imply it could.
             set(c.note.empty() ? L"—" : c.note);
+            break;
+        // F5.1. "<ppid> <parent image name>". The name is omitted when the
+        // snapshot did not contain the parent, which is NOT the same as having
+        // no parent - so the number still prints on its own, because collapsing
+        // the cell to a dash would tell a reader "this process has no parent",
+        // which is the one answer the snapshot cannot actually give.
+        case COL_PPID:
+            if (!c.ppidKnown) {
+                set(L"—");
+            } else if (c.parentName.empty()) {
+                ::swprintf_s(buf, bufChars, L"%lu",
+                             static_cast<unsigned long>(c.ppid));
+            } else {
+                ::swprintf_s(buf, bufChars, L"%lu %s",
+                             static_cast<unsigned long>(c.ppid),
+                             c.parentName.c_str());
+            }
+            break;
+        // F5.2. The level, plus "+AC" when the process is AppContainer. Shown
+        // WITH the level rather than instead of it: a sandboxed process still
+        // has an integrity level, and replacing it with the marker would lose
+        // the answer to "how much is it trusted".
+        case COL_INTEGRITY: {
+            if (c.integrity >= static_cast<unsigned>(kIntegrityCount)) {
+                set(L"—");
+                break;
+            }
+            std::wstring s =
+                IntegrityLabel(static_cast<IntegrityLevel>(c.integrity));
+            if (c.appContainer && s != L"—") s += L"+AC";
+            set(s);
+            break;
+        }
+        // F5.3. Unchecked renders as the dash like every other unreadable
+        // reading. That is the honest default: WinTCP has not looked at this
+        // image, which is different from having looked and found nothing.
+        case COL_SIGNATURE:
+            if (c.signature >= static_cast<unsigned>(kSigCount)) {
+                set(L"—");
+            } else {
+                set(SignatureLabel(static_cast<SignatureState>(c.signature)));
+            }
             break;
         default: break;
     }
@@ -2078,6 +2200,48 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             const bool nb = !b.note.empty();
             if (na != nb) { unknownLast = true; cmp = na ? -1 : 1; }
             else if (na) cmp = CmpStr(a.lowerNote, b.lowerNote);
+            break;
+        }
+        // F5.1. Sorts by the NUMBER, not by the cell text. The cell is
+        // "<ppid> <name>", so a string sort would order "1000 svchost.exe"
+        // before "900 wininit.exe" by the leading digit run only by accident -
+        // and would order "12 a.exe" after "12.exe" for reasons that have
+        // nothing to do with the hierarchy. Rows the snapshot did not cover sort
+        // last, like every other "no reading" column.
+        case COL_PPID: {
+            if (a.ppidKnown != b.ppidKnown) {
+                unknownLast = true;
+                cmp = a.ppidKnown ? -1 : 1;
+            } else if (a.ppidKnown) {
+                cmp = CmpInt(a.ppid, b.ppid);
+                if (cmp == 0) cmp = CmpStr(a.lowerParent, b.lowerParent);
+            }
+            break;
+        }
+        // F5.2. Orders by the enum, which is already in trust order
+        // (Untrusted < Low < Medium < High < System < Protected), so sorting
+        // ascending on the column puts the least trusted first - the direction
+        // a reader wants when auditing. Unknown is last.
+        case COL_INTEGRITY: {
+            const bool ka = a.integrity != 0 &&
+                            a.integrity < static_cast<unsigned>(kIntegrityCount);
+            const bool kb = b.integrity != 0 &&
+                            b.integrity < static_cast<unsigned>(kIntegrityCount);
+            if (ka != kb) { unknownLast = true; cmp = ka ? -1 : 1; }
+            else if (ka) cmp = CmpInt(a.integrity, b.integrity);
+            break;
+        }
+        // F5.3. Orders by the enum (Unchecked < Valid < Invalid < Unsigned <
+        // Error), then puts the AppContainer-ish detail aside - there is none
+        // here, the state is the whole answer. A reviewer sorting descending
+        // gets the BAD SIG rows first, which is the point of the highlight.
+        case COL_SIGNATURE: {
+            const bool ka = a.signature != 0 &&
+                            a.signature < static_cast<unsigned>(kSigCount);
+            const bool kb = b.signature != 0 &&
+                            b.signature < static_cast<unsigned>(kSigCount);
+            if (ka != kb) { unknownLast = true; cmp = ka ? -1 : 1; }
+            else if (ka) cmp = CmpInt(a.signature, b.signature);
             break;
         }
         default:          cmp = 0; break;

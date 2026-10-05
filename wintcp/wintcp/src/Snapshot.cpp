@@ -46,7 +46,18 @@ bool SnapshotSource::Build(const SnapshotOptions& options, Snapshot* out) {
 
     if (!EnumerateEndpoints(out->rows, out->error)) return false;
 
-    if (options.resolveProcesses) resolver_.ResolveBatch(out->rows);
+    if (options.resolveProcesses) {
+        // F5.3 is configured by SnapshotSource::SetVerifySignatures, NOT here.
+        //
+        // It was briefly read from SnapshotOptions as well, and having two ways
+        // to say the same thing was immediately a bug: CmdListInto set the
+        // resolver's flag for --signatures, and this line then overwrote it with
+        // options.verifySignatures - which no CLI caller fills in, because
+        // BuildStoreSnapshot has no such parameter. So `--signatures` printed an
+        // em-dash on every row while the advice had already promised a verdict.
+        // One mechanism, set by each entry point before Build.
+        resolver_.ResolveBatch(out->rows);
+    }
 
     // The service map is one SCM enumeration regardless of how many rows ask
     // for it, and an empty result is not an error - the Service column is

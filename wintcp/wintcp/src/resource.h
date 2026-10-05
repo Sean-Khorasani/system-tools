@@ -105,10 +105,16 @@
 #define IDM_COL_GROUPRATE       (IDM_COL_BASE + 27)
 // 5.5: the bookmark note as its own column.
 #define IDM_COL_NOTE            (IDM_COL_BASE + 28)
+// F5.1/F5.2/F5.3: the parent id, the mandatory integrity level and the
+// Authenticode verdict. Appended, never renumbered, for the reason the G6 block
+// above gives.
+#define IDM_COL_PPID            (IDM_COL_BASE + 29)
+#define IDM_COL_INTEGRITY       (IDM_COL_BASE + 30)
+#define IDM_COL_SIGNATURE       (IDM_COL_BASE + 31)
 // One past the last column command. Checked against COL_COUNT at compile
 // time in MainWindow.cpp so a column added without a menu entry is an error
 // rather than a checkbox that never appears.
-#define IDM_COL_COUNT           29
+#define IDM_COL_COUNT           32
 
 // Row context menu. Placed after the column block so the
 // IDM_COL_BASE..+COUNT range check cannot swallow it.

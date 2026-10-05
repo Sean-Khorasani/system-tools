@@ -97,6 +97,22 @@ struct Connection {
     FILETIME processCreate = {};
     bool processCreateKnown = false;
 
+    // --- per-process security metadata (F5.1 / F5.2 / F5.3) ---------------
+    // All three are properties of the PROCESS, resolved once per distinct PID
+    // and copied onto each of its rows - the same relationship PID and the
+    // process name already have. That is why they are columns rather than a
+    // separate process view: the unit that matters ("who owns this socket") is
+    // the row, so a reader looking at one socket should not have to go looking
+    // for its process elsewhere.
+    DWORD ppid = 0;                 // F5.1: parent PID
+    bool ppidKnown = false;
+    std::wstring parentName;       // parent's image name; "" when the snapshot
+                                    // did not contain it (which is NOT the same
+                                    // as "has no parent")
+    unsigned integrity = 0;         // F5.2: IntegrityLevel, 0 = unknown
+    bool appContainer = false;      // F5.2: sandboxed, whatever the level says
+    unsigned signature = 0;         // F5.3: SignatureState, 0 = not checked
+
     // --- traffic counters --------------------------
     ULONGLONG trafficRx = 0;
     ULONGLONG trafficTx = 0;
@@ -211,6 +227,7 @@ struct Connection {
     std::wstring lowerLocal;
     std::wstring lowerRemote;
     std::wstring lowerProcess;
+    std::wstring lowerParent;           // F5.1: lower-cased parent image name
     std::wstring lowerPath;
     std::wstring lowerService;
     std::wstring lowerHost;

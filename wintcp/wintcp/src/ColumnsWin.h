@@ -26,6 +26,33 @@
 
 namespace wintcp {
 
+// The persisted column mask is a UINT32, so COL_COUNT may not exceed 32 - and
+// the obvious spelling of the mask is a trap at exactly that value:
+//
+//     ((1u << COL_COUNT) - 1u)
+//
+// is `1u << 32` once there are 32 columns. That is undefined behaviour, and on
+// MSVC it both warns (C4293) and evaluates to 1, so the mask becomes 0 and
+// ClampVisibleCols collapses every visible column to a single bit - a persisted,
+// silent and catastrophic default that no "the default set is non-empty" test
+// would catch, because 1 IS non-empty.
+//
+// F5.1-F5.3 took COL_COUNT from 29 to exactly 32, so this is now load-bearing
+// rather than theoretical, and /WX turns the C4293 into a build failure - which
+// is how it was caught. The 64-bit shift below is well defined at 32 and is cast
+// back down; the assert is the reminder that a 33rd column needs the stored mask
+// widened first, not just a bigger shift.
+static_assert(COL_COUNT <= 32,
+              "ColumnId values are persisted in a UINT32 mask, and kAllColMask "
+              "below caps at 32. Widen the stored mask (and Settings' "
+              "ColVersion migration) BEFORE adding a 33rd column.");
+
+// Mask restricted to the columns that actually exist, with at least one bit
+// set: a mask of 0 would persist a list view with no columns at all and no
+// way back except the Columns menu.
+constexpr UINT32 kAllColMask =
+    static_cast<UINT32>((static_cast<UINT64>(1) << COL_COUNT) - 1u);
+
 // Default visible-column mask. Everything the user can act on out of the box
 // is shown: identity, the live per-process stats, the combined Traffic
 // column, a connection's age and its bookmark state. The split per-PID
@@ -40,22 +67,22 @@ namespace wintcp {
 // everyone else - and on a machine whose socket scan could not read them, a
 // default-visible set would look broken on first launch.
 constexpr UINT32 kDefaultVisibleCols =
-    ((1u << COL_COUNT) - 1u) & ~(1u << COL_RX) &
+    kAllColMask & ~(1u << COL_RX) &
     ~(1u << COL_TX) & ~(1u << COL_NETTOTAL) & ~(1u << COL_MEM) &
     ~(1u << COL_DISK) & ~(1u << COL_BANDWIDTH) & ~(1u << COL_TLS) &
     ~(1u << COL_COUNTRY) & ~(1u << COL_RTT) & ~(1u << COL_MINRTT) &
     ~(1u << COL_CWND) & ~(1u << COL_RETRANS) & ~(1u << COL_GROUPRATE) &
+    // F5.1/F5.2/F5.3 join TLS and Country as opt-in enrichment: a parent id,
+    // an integrity level and a signature verdict are what you switch on to
+    // audit a few processes, not three more columns of mostly em-dashes spread
+    // across three hundred rows.
+    ~(1u << COL_PPID) & ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) &
     // 5.5: the Note column is HIDDEN by default, unlike the Bookmarks column
     // beside it. A pin or a colour tag is a two-character signal worth seeing
     // always; a note is prose that is empty on nearly every row, and a column
     // of em-dashes costs horizontal space that the connection identity needs.
     // It is one click away in View > Columns, and `note:` filters without it.
     ~(1u << COL_NOTE);
-
-// Mask restricted to the columns that actually exist, with at least one bit
-// set: a mask of 0 would persist a list view with no columns at all and no
-// way back except the Columns menu.
-constexpr UINT32 kAllColMask = (1u << COL_COUNT) - 1u;
 
 inline UINT32 ClampVisibleCols(UINT32 mask) {
     mask &= kAllColMask;

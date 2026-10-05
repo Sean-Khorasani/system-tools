@@ -17,6 +17,7 @@ A `--select` selector must resolve to **exactly one live row**; see [Selectors](
 
 - [Syntax](#syntax)
 - [Field matches](#field-matches)
+- [Trust: integrity and signature](#trust-integrity-and-signature)
 - [Sides: local and remote](#sides-local-and-remote)
 - [Protocol and family prefixes](#protocol-and-family-prefixes)
 - [Numeric thresholds](#numeric-thresholds)
@@ -49,6 +50,49 @@ A `--select` selector must resolve to **exactly one live row**; see [Selectors](
 | `country:` | GeoIP country code | `country:de`. CLI: needs `--db` — where to get a database and what `--db` does is in [GeoIP database](../README.md#geoip-database). |
 | `tls:` | TLS summary | `tls:1.3`. |
 | `note:` | A bookmark's note | `note:vendor`. A bare `note:` means "has a note". |
+| `ppid:` | Parent process ID | `ppid:1588`. Accepts ranges: `ppid:1000-2000`. An exact number, not a substring. |
+| `parent:` | Parent's image name | `parent:services`. |
+
+### Trust: integrity and signature
+
+Three questions about a process come up together — *who started it*, *how much
+is it trusted by Windows*, and *is its binary signed* — so they are filtered
+together. All three are read per **process** and joined onto each of its rows.
+
+| Form | Meaning |
+|---|---|
+| `integrity:high` | Mandatory integrity level: `untrusted`, `low`, `medium`, `high`, `system`, `protected`. A prefix works (`integrity:med`). |
+| `integrity:ac` | AppContainer processes, at any level. The cell prints `+AC` beside the level, and the filter searches that same cell. |
+| `integrity:` | Rows whose level could be read at all. |
+| `signed:` | **Verified, and the verdict was good.** This is the useful query, and it is narrower than it looks — see below. |
+| `signature:unsigned` | The image carries no Authenticode signature. |
+| `signature:bad sig` | The image is signed but its chain does not verify. |
+
+Three things about these two that are easy to get wrong:
+
+- **`signed:` does not mean "a verdict exists".** Bare, it means the verdict is
+  *Signed*. A row whose image was never verified matches nothing, because
+  reporting an unasked question as though it had been asked is exactly the
+  failure this document exists to prevent.
+- **`unsigned` is not a finding.** Most of what runs — script hosts, portable
+  binaries, anything built without a certificate — is unsigned, and that is
+  normal. Folding it into "invalid" would paint most of a machine red and teach
+  the reader to ignore the colour, which is the only thing the highlight is for.
+  `bad sig` is the state that means something.
+- **The CLI needs `--signatures`.** Signature verification is opt-in because
+  `WinVerifyTrust` builds a certificate chain; see the `list` verb in
+  [cli.md](cli.md). Integrity and parent are read on every pass and need no
+  switch.
+
+A row whose process could not be opened at all — a protected or elevated service
+this shell cannot query — has **no** integrity level and **no** signature, and
+therefore matches neither field. It shows `—`, never a guess. On a typical
+elevated session that is a substantial minority of all rows.
+
+**Revocation is not checked.** Verification runs offline (`WTD_REVOKE_NONE`), so
+a certificate that has been revoked but not yet expired can still read `Signed`.
+That is a deliberate trade — a background check that may reach a CRL or OCSP
+endpoint can outlive the refresh that asked for it — not a silent gap.
 
 ## Sides: local and remote
 

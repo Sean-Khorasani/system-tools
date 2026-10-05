@@ -103,6 +103,14 @@ const ColDef kColumns[COL_COUNT] = {
     // user typed, not a code or a number; anything longer elides and the
     // tooltip shows it whole.
     { COL_NOTE,    ConnectionStore::ColumnTitle(COL_NOTE),  180, LVCFMT_LEFT },
+  // F5.1. 150 is generous for "<pid> <name>" because the name is an unbounded
+  // process name; it elides with a tooltip beyond that.
+  { COL_PPID,    ConnectionStore::ColumnTitle(COL_PPID),   150, LVCFMT_LEFT },
+  // F5.2/F5.3. Both are short words, sized from their longest possible cell
+  // ("Protected+AC" and "BAD SIG") rather than from a typical row, so enabling
+  // either never shows a truncated header.
+  { COL_INTEGRITY, ConnectionStore::ColumnTitle(COL_INTEGRITY), 90, LVCFMT_LEFT },
+  { COL_SIGNATURE, ConnectionStore::ColumnTitle(COL_SIGNATURE), 90, LVCFMT_LEFT },
 };
 
 // Every column needs exactly one IDM_COL_* command (View > Columns) and one
@@ -134,6 +142,9 @@ const int kDisplayOrder[COL_COUNT] = {
     COL_DURATION, COL_BANDWIDTH, COL_GROUPRATE,
     COL_RTT, COL_MINRTT, COL_CWND, COL_RETRANS,
     COL_TLS, COL_COUNTRY, COL_PINNED, COL_NOTE,
+    // F5.1/F5.2/F5.3 join the other per-process identity and trust columns:
+    // after the bookmark fields, before the raw stat columns.
+    COL_PPID, COL_INTEGRITY, COL_SIGNATURE,
     COL_MEM, COL_DISK, COL_RX, COL_TX, COL_NETTOTAL,
 };
 

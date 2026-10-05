@@ -98,7 +98,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <GenerateManifest>false</GenerateManifest>
       <EnableControlFlowGuard>true</EnableControlFlowGuard>
-      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;wintrust.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>comdlg32.dll;crypt32.dll;ole32.dll;oleaut32.dll;pdh.dll;shell32.dll</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
@@ -132,7 +132,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <GenerateManifest>false</GenerateManifest>
       <EnableControlFlowGuard>true</EnableControlFlowGuard>
-      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;wintrust.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>comdlg32.dll;crypt32.dll;ole32.dll;oleaut32.dll;pdh.dll;shell32.dll</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
@@ -162,7 +162,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <GenerateManifest>false</GenerateManifest>
       <EnableControlFlowGuard>true</EnableControlFlowGuard>
-      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;wintrust.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>comdlg32.dll;crypt32.dll;ole32.dll;oleaut32.dll;pdh.dll;shell32.dll</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
@@ -196,7 +196,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <GenerateManifest>false</GenerateManifest>
       <EnableControlFlowGuard>true</EnableControlFlowGuard>
-      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;wintrust.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>comdlg32.dll;crypt32.dll;ole32.dll;oleaut32.dll;pdh.dll;shell32.dll</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>

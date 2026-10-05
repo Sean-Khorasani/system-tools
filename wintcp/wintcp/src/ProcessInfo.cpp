@@ -15,6 +15,11 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 
+// F5.3: WinVerifyTrust and the file-info wrapper. softpub.h supplies
+// WINTRUST_ACTION_GENERIC_VERIFY_V2, wintrust.h the entry point.
+#include <softpub.h>
+#include <wintrust.h>
+
 #include <algorithm>
 
 #include "Utils.h"
@@ -30,12 +35,170 @@ std::wstring BaseName(const std::wstring& path) {
     return path.substr(pos + 1);
 }
 
+// F5.3: turn a WinVerifyTrust LONG into one of the five states. The
+// distinction that matters is NOSIGNATURE vs everything else: an unsigned
+// binary is the normal case for most of what runs and is NOT a finding, so it
+// gets its own state instead of being folded into "invalid".
+SignatureState StateFromTrustLONG(LONG rc) {
+    if (rc == ERROR_SUCCESS) return kSigValid;
+    // TRUST_E_NOSIGNATURE (0x800B0100) is the "there is no signature here"
+    // answer; TRUST_E_SUBJECT_FORMUNKNOWN (0x800B0003) is the same idea for a
+    // file that could not be a signed PE at all. Both HRESULTs have the
+    // severity bit set, so they are compared as raw DWORDs.
+    const DWORD code = static_cast<DWORD>(rc);
+    if (code == 0x800B0100UL || code == 0x800B0003UL) return kSigUnsigned;
+    if ((code & 0x80000000UL) != 0) return kSigInvalid;   // a TRUST_E_* verdict
+    return kSigError;                                     // the provider failed
+}
+
+// F5.3: a cheap fingerprint of the FILE, so a path whose contents were
+// replaced is re-verified rather than inheriting the old verdict. A path is
+// not a stable identity for a file - which is why Windows ships versioned
+// side-by-side directories and why "same path" cannot mean "same binary".
+ImageStamp StampOf(const std::wstring& path) {
+    ImageStamp s;
+    WIN32_FILE_ATTRIBUTE_DATA fad = {};
+    if (::GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad) == 0)
+        return s;
+    s.size = (static_cast<ULONGLONG>(fad.nFileSizeHigh) << 32) |
+             fad.nFileSizeLow;
+    s.write = (static_cast<ULONGLONG>(fad.ftLastWriteTime.dwHighDateTime) << 32) |
+              fad.ftLastWriteTime.dwLowDateTime;
+    s.valid = true;
+    return s;
+}
+
+bool SameStamp(const ImageStamp& a, const ImageStamp& b) {
+    return a.valid && b.valid && a.size == b.size && a.write == b.write;
+}
+
+// F5.2: what a process token says about its integrity.
+struct IntegrityReading {
+    IntegrityLevel level = kIntegrityUnknown;
+    bool appContainer = false;
+};
+
+// F5.2. TOKEN_QUERY is the only access this needs, which is why an unelevated
+// WinTCP can usually still read the answer - the token is opened for reading
+// only, never asked for anything the caller does not already hold on its own
+// process.
+//
+// The RID is the LAST subauthority of a mandatory label whose authority is
+// (SECURITY_NT_AUTHORITY, SECURITY_MANDATORY_LABEL_AUTHORITY_RID); that is the
+// documented encoding of S-1-16-<rid>. Anything else - a token with no label, a
+// label from a different authority, a zero-length SID - is reported as unknown
+// rather than defaulted to Medium, because "Medium" for a process whose level
+// could not be read is a guess dressed as a measurement.
+IntegrityReading ReadIntegrity(HANDLE process) {
+    IntegrityReading out;
+    HANDLE tok = nullptr;
+    if (::OpenProcessToken(process, TOKEN_QUERY, &tok) == 0) return out;
+
+    BYTE isApp = 0;
+    DWORD got = 0;
+    if (::GetTokenInformation(tok, TokenIsAppContainer, &isApp,
+                              sizeof(isApp), &got) != 0) {
+        out.appContainer = (isApp != 0);
+    }
+
+    // THE TWO-CALL PATTERN IS REQUIRED, not tidy. A mandatory label is a
+    // TOKEN_MANDATORY_LABEL followed by the SID itself, and that SID is LONGER
+    // than the PSID field that points at it - S-1-16-8192 is 12 bytes where the
+    // pointer is 8. So a buffer of exactly sizeof(TOKEN_MANDATORY_LABEL) is
+    // always too small, GetTokenInformation fails with ERROR_INSUFFICIENT_BUFFER,
+    // and the obvious-looking code then reports "unknown integrity" for every
+    // process on the machine. That is what the first version of this function
+    // did, and the column rendered as an em-dash down both sides of the table.
+    DWORD need = 0;
+    ::GetTokenInformation(tok, TokenIntegrityLevel, nullptr, 0, &need);
+    if (need == 0) { ::CloseHandle(tok); return out; }
+    std::vector<BYTE> buf(need);
+    got = 0;
+    const BOOL ok = ::GetTokenInformation(tok, TokenIntegrityLevel, buf.data(),
+                                          need, &got);
+    ::CloseHandle(tok);
+    if (ok == 0) return out;
+
+    const TOKEN_MANDATORY_LABEL* tml =
+        reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(buf.data());
+    if (tml->Label.Sid == nullptr) return out;
+
+    // `Label` is a SID_AND_ATTRIBUTES rather than a bare PSID in this SDK, and
+    // the attributes are not used here.
+    PSID sid = tml->Label.Sid;
+    PSID_IDENTIFIER_AUTHORITY auth = ::GetSidIdentifierAuthority(sid);
+    if (auth == nullptr) return out;
+    // A SID's IdentifierAuthority is SIX bytes, not a number: S-1-16-8192 encodes
+    // it as {0,0,0,0,0,16} and carries 8192 as the single subauthority. So the
+    // authority value being tested is the LAST byte - Value[5] - and both of the
+    // two earlier versions of this check were wrong: one compared Value[0]
+    // against SECURITY_NT_AUTHORITY read as a brace list (a syntax error), and
+    // the next compared Value[0]/Value[1] against 5 and 16, which are zero in
+    // every real mandatory label. Either way the function answered "unknown"
+    // for every process on the machine, and the column was an em-dash down both
+    // sides of a 310-row table while looking entirely plausible in review.
+    //
+    // Comparing Value[5] against the mandatory-label RID IS the whole test: an
+    // integrity label carrying any other authority is not something this column
+    // has an opinion about.
+    constexpr UCHAR kAuthorityLastByte = 5;
+    constexpr UCHAR kMandatoryLabelAuthorityRid = 16;
+    if (auth->Value[kAuthorityLastByte] != kMandatoryLabelAuthorityRid)
+        return out;
+
+    const DWORD subCount = *::GetSidSubAuthorityCount(sid);
+    if (subCount == 0) return out;
+    out.level = IntegrityFromRid(*::GetSidSubAuthority(sid, subCount - 1));
+    return out;
+}
+
 }  // namespace
+
+const wchar_t* IntegrityLabel(IntegrityLevel lvl) {
+    switch (lvl) {
+        case kIntegrityUntrusted: return L"Untrusted";
+        case kIntegrityLow:       return L"Low";
+        case kIntegrityMedium:    return L"Medium";
+        case kIntegrityHigh:      return L"High";
+        case kIntegritySystem:    return L"System";
+        case kIntegrityProtected: return L"Protected";
+        default:                  return L"—";
+    }
+}
+
+const wchar_t* SignatureLabel(SignatureState state) {
+    switch (state) {
+        case kSigValid:    return L"Signed";
+        case kSigInvalid:  return L"BAD SIG";
+        case kSigUnsigned: return L"unsigned";
+        case kSigError:    return L"sig?";
+        default:           return L"—";
+    }
+}
+
+IntegrityLevel IntegrityFromRid(DWORD rid) {
+    // Exact equality, not >= : these are fixed constants of the security
+    // model, and an unfamiliar future RID must read as "unknown" rather than
+    // silently claiming the nearest known level.
+    switch (rid) {
+        case 0:     return kIntegrityUntrusted;
+        case 4096:  return kIntegrityLow;
+        case 8192:  return kIntegrityMedium;
+        case 12288: return kIntegrityHigh;
+        case 16384: return kIntegritySystem;
+        case 28672: return kIntegrityProtected;
+        default:    return kIntegrityUnknown;
+    }
+}
 
 void ProcessResolver::Clear() {
     cache_.clear();
     snapshot_.clear();
     snapshotBuilt_ = false;
+    // F5.3. signatureCache_ is deliberately NOT cleared: it is keyed by path
+    // and carries the file stamp each verdict was taken against, so a stale
+    // entry is detected and re-verified on the next hit rather than trusted.
+    // Dropping it would only buy re-verification work.
 }
 
 void ProcessResolver::BuildSnapshotIfNeeded() {
@@ -48,7 +211,15 @@ void ProcessResolver::BuildSnapshotIfNeeded() {
     pe.dwSize = sizeof(pe);
     if (::Process32FirstW(snap, &pe)) {
         do {
-            snapshot_.emplace(pe.th32ProcessID, std::wstring(pe.szExeFile));
+            SnapEntry se;
+            se.name = pe.szExeFile;
+            // F5.1. th32ParentProcessID comes free on the entry already being
+            // walked, so the parent costs nothing beyond this snapshot. The
+            // alternative - NtQueryInformationProcess(ProcessBasicInformation)
+            // per PID - is one kernel round trip per process per refresh to
+            // learn the same number.
+            se.ppid = pe.th32ParentProcessID;
+            snapshot_.emplace(pe.th32ProcessID, std::move(se));
         } while (::Process32NextW(snap, &pe));
     }
     ::CloseHandle(snap);
@@ -98,13 +269,44 @@ void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
             e.create = cr;
             e.createKnown = true;
         }
+        // F5.2. Read while the handle is open rather than reopening it: this
+        // is the only handle the function has, and OpenProcessToken needs one.
+        // A failure is silent by construction - ReadIntegrity answers
+        // kIntegrityUnknown and the column shows the em-dash that every other
+        // unreadable reading uses.
+        const IntegrityReading ir = ReadIntegrity(h);
+        e.integrity = ir.level;
+        e.appContainer = ir.appContainer;
         ::CloseHandle(h);
     }
 
-    if (e.name.empty()) {
-        BuildSnapshotIfNeeded();
+    // F5.1. The snapshot is taken at most once per batch, and is now wanted for
+    // EVERY pid rather than only for a name that fell through - because the
+    // parent is part of what a row shows. It is still one CreateToolhelp32Snapshot
+    // per refresh, which is the cost this design already budgets for; the
+    // previous "only on a name miss" rule could not supply a parent for a
+    // process whose image path DID resolve.
+    BuildSnapshotIfNeeded();
+    {
         const auto it = snapshot_.find(pid);
-        if (it != snapshot_.end() && !it->second.empty()) e.name = it->second;
+        if (it != snapshot_.end()) {
+            if (e.name.empty() && !it->second.name.empty())
+                e.name = it->second.name;
+            // ppidKnown is set even when ppid is 0: PID 0 is a real parent
+            // answer (a process created by the kernel itself), and calling it
+            // "unknown" would make those rows indistinguishable from the ones
+            // the snapshot did not cover.
+            e.ppid = it->second.ppid;
+            e.ppidKnown = true;
+            // A parent id equal to its own child is the classic Toolhelp race
+            // (the parent exited and its id was recycled between the walking of
+            // the two entries), and printing the child as its own parent would
+            // be nonsense in a tree view.
+            if (e.ppid != 0 && e.ppid != pid) {
+                const auto pit = snapshot_.find(e.ppid);
+                if (pit != snapshot_.end()) e.parentName = pit->second.name;
+            }
+        }
     }
 
     if (e.name.empty()) {
@@ -118,6 +320,62 @@ void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
             e.name = (err == ERROR_INVALID_PARAMETER) ? L"<exited>" : L"<access denied>";
         }
     }
+
+    // F5.3. LAST, because it needs the resolved image path, and only when the
+    // caller opted in. A row whose path never resolved stays kSigUnchecked,
+    // which renders as the em-dash - not as "unsigned", because an image
+    // WinTCP could not find is not an image it has cleared.
+    if (verifySignatures_ && !e.path.empty()) {
+        e.signature = SignatureForPath(e.path);
+    }
+}
+
+SignatureState ProcessResolver::SignatureForPath(const std::wstring& path) {
+    // The pseudo-images for pid 0 / 4 have a "path" that is a label, not a
+    // file. Asking the trust provider about them would only produce a
+    // confusing NOSIGNATURE for a string.
+    if (path.empty() || path == L"System" || path.find(L':') == std::wstring::npos)
+        return kSigUnchecked;
+
+    const ImageStamp stamp = StampOf(path);
+    const auto it = signatureCache_.find(path);
+    if (it != signatureCache_.end() && SameStamp(stamp, it->second.second))
+        return it->second.first;
+
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_FILE_INFO fi = {};
+    fi.cbStruct = sizeof(fi);
+    fi.pcwszFilePath = path.c_str();
+
+    WINTRUST_DATA wd = {};
+    wd.cbStruct = sizeof(wd);
+    wd.dwUIChoice = WTD_UI_NONE;          // never pop the trust dialog
+    // Revocation is OFF deliberately. WTD_REVOKE_WHOLECHAIN would let the
+    // provider reach a CRL/OCSP endpoint, turning a background verification
+    // into a network wait that can outlive the refresh that asked for it. A
+    // revoked-but-not-yet-expired certificate still reports as Signed here;
+    // that is a documented limit of an offline check, not a silent one.
+    wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+    wd.dwUnionChoice = WTD_CHOICE_FILE;
+    wd.pFile = &fi;
+    wd.dwStateAction = WTD_STATEACTION_VERIFY;
+    // nullptr, not INVALID_HANDLE_VALUE: the first parameter is an HWND (the
+    // window a trust UI would parent to, and WTD_UI_NONE means there is none).
+    // Passing a non-null HWND would tie a background verification to a window.
+    const LONG rc = ::WinVerifyTrust(nullptr, &action, &wd);
+
+    // The close leg is mandatory: WinVerifyTrust keeps state in the WINTRUST_DATA
+    // between the VERIFY and CLOSE calls, and skipping it leaks per verification.
+    wd.dwStateAction = WTD_STATEACTION_CLOSE;
+    ::WinVerifyTrust(nullptr, &action, &wd);
+
+    const SignatureState state = StateFromTrustLONG(rc);
+    // A path whose stamp could not be read is still cached: an unreadable file
+    // will not become readable on the next refresh, and re-running the trust
+    // provider every refresh to reach the same answer is pure cost. The entry
+    // is invalidated only if a LATER stamp is readable and different.
+    signatureCache_[path] = std::make_pair(state, stamp);
+    return state;
 }
 
 const ProcessResolver::Entry* ProcessResolver::ResolvePid(DWORD pid) {
@@ -158,8 +416,10 @@ const ProcessResolver::Entry* ProcessResolver::ResolvePid(DWORD pid) {
 }
 
 void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
-    // The snapshot is built at most once per refresh, and only if some PID
-    // actually falls through to it.
+    // The snapshot is rebuilt at most once per batch. Since F5.1 every pid
+    // wants it, not only a name lookup that missed - the cost is still one
+    // CreateToolhelp32Snapshot per refresh, and BuildSnapshotIfNeeded is what
+    // keeps it to exactly one even though ResolveOne asks for every pid.
     snapshotBuilt_ = false;
     snapshot_.clear();
 
@@ -175,6 +435,10 @@ void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
     // per-row form scaled its kernel traffic with ROWS, this scales it with
     // DISTINCT PIDS. Bench stage [E] measures that difference directly
     // (before: 142.9 ms/op over 50000 rows; after: see todo.md).
+    //
+    // F5.3 leans on this harder than anything else here: without it every ROW
+    // of a process would call WinVerifyTrust for the same image, which is the
+    // difference between one chain build per process and one per connection.
     //
     // 'done' holds pointers, not copies: entries are stable in cache_ across
     // later insertions, and an entry is only ever erased while its own pid is
@@ -192,6 +456,15 @@ void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
         c.processPath = e.path;
         c.processCreate = e.create;
         c.processCreateKnown = e.createKnown;
+        // F5.1 / F5.2 / F5.3. Copied rather than pointed at, exactly like every
+        // other piece of resolved metadata: the row outlives the entry whenever
+        // the process dies and its cache slot is erased.
+        c.ppid = e.ppid;
+        c.ppidKnown = e.ppidKnown;
+        c.parentName = e.parentName;
+        c.integrity = static_cast<unsigned>(e.integrity);
+        c.appContainer = e.appContainer;
+        c.signature = static_cast<unsigned>(e.signature);
     }
 }
 

@@ -68,10 +68,17 @@ Open **View → Columns** to show or hide columns. A check mark appears on every
 | Received, Sent, Net total | The split of the Traffic column. |
 | Memory | Working set. |
 | Disk I/O | Bytes read plus written. |
+| Parent process | The owning process's parent, as `<pid> <name>` (header *Parent*). `—` when the Toolhelp snapshot did not cover it — which is not the same as "no parent". |
+| Integrity | The process's mandatory integrity level as a word: `Medium`, `High`, `System`, `Protected`, `Low`, `Untrusted`, with `+AC` appended for an AppContainer process. |
+| Signature | The Authenticode verdict: `Signed`, `unsigned`, or `BAD SIG`. In the GUI this reads `—` unless verification has been asked for, because the trust provider is far too slow to run on every refresh. |
 
 **Default layout** leads with identity: Process, CPU %, Traffic, Proto, Local, LPort, Remote, RPort, State, PID, Service, Host, Path. Memory, Disk I/O and the split Received / Sent / Net total columns are opt-in.
 
 Five further diagnostic columns are available from **View → Columns** and hidden by default because they are valuable while chasing one slow connection and noise otherwise: `RTT`, `Min RTT`, `Cwnd`, `Retrans` and `Proc Speed`. Their meaning is explained in [Traffic counters](traffic.md#what-the-per-socket-scan-provides).
+
+**Parent process** and **Integrity** are hidden by default for a different reason than those five: they are *trust* columns, and a question about who launched a process or how much Windows trusts it is asked about a handful of rows, not about the three hundred on screen. They need no switch — both are read on the handle and the snapshot the resolver already has. `Signature` needs `--signatures` on the command line, because `WinVerifyTrust` builds a certificate chain per image; see the `list` verb in [cli.md](cli.md).
+
+`unsigned` is **not** a warning. Most of what runs is unsigned and that is normal; `BAD SIG` is the state that means something. `—` means WinTCP did not look, which is a third answer again and is never rendered as `unsigned`.
 
 Readings that cannot be taken (for example a protected process without elevation) show `—` and sort to the end in **both** directions, rather than sorting to the top as a zero would.
 

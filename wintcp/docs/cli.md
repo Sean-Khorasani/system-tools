@@ -116,6 +116,11 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
 --traffic     per-PID byte totals via one bounded socket scan.
 --dns         reverse-DNS the printed rows only (slow; bound with --limit).
 --db FILE     load this .mmdb and join country codes for printed rows.
+--signatures  verify each distinct process image with WinVerifyTrust so the
+              signature column and signed: filter have an answer. SLOW: a
+              certificate chain per image, cached per image path for the run.
+              Revocation is NOT checked, so a revoked certificate can still
+              read Signed.
 --changes     with --watch/--count: print only APPEAR / DISAPPEAR / STATE
               deltas between polls. The first snapshot is the baseline.
 --event LIST  with --changes: appear,disappear,state (comma separated, any
@@ -144,6 +149,9 @@ Some columns and filters need the switch that supplies their data. When it is mi
 | `bandwidth` (per-socket rate) | `--traffic` and `--watch N` | A rate is the difference between two samples. The first tick shows `—` by design. |
 | `procspeed` (per-process rate) | `--traffic` and `--watch N` | Sum of that process's per-socket rates. |
 | `rtt`, `minrtt`, `cwnd`, `retrans` | `--traffic` | Same `SIO_TCP_INFO` call as the byte counters. |
+| `signature` column, `signed:` / `signature:` filters | `--signatures` | A certificate chain per **distinct binary**, not per row — the resolver caches by image path, so twenty processes off one DLL pay for it once. Revocation is not checked. |
+| `ppid` column, `ppid:` / `parent:` filters | *(nothing)* | `CreateToolhelp32Snapshot`, already taken once per refresh for process names. |
+| `integrity` column, `integrity:` filter | *(nothing)* | `OpenProcessToken` with `TOKEN_QUERY`, read on the handle the resolver already opens. Reads `—` for a process this shell cannot open. |
 
 ## Column reference
 
@@ -152,7 +160,8 @@ Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separate
 | Group | Names |
 |---|---|
 | Connection | `proto`, `local`, `lport`, `remote`, `rport`, `state`, `pid` |
-| Process | `process`, `service`, `path` |
+| Process | `process`, `service`, `path`, `ppid` (parent, as *`<pid> <name>`*) |
+| Process trust | `integrity` (mandatory level, *`+AC`* for AppContainer), `signature` (Authenticode verdict; needs `--signatures`) |
 | Live, per process | `traffic`, `rx`, `tx`, `nettotal`, `cpu`, `mem`, `disk`, `procspeed` |
 | Live, per connection | `duration`, `bandwidth` (header *Speed*), `rtt`, `minrtt`, `cwnd`, `retrans`, `tls` |
 | Enrichment | `host` (needs `--dns`), `country` (needs `--db`), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
@@ -162,6 +171,9 @@ Value conventions:
 - **Unknown is `—`, never `0`.** "We could not measure this" and "this is zero" are different answers, and unknown values always sort last, in both directions.
 - `rtt` and `minrtt` are in **milliseconds**. The kernel reports microseconds; the conversion happens once, at the read boundary. A sub-millisecond RTT prints `<1`, never `0`.
 - `retrans` prints `0 B` for a connection that has genuinely never retransmitted. That is a real answer, not a missing one.
+- `ppid` prints `<pid> <parent name>`, or just the number when the parent was not in the snapshot. An **unknown** parent prints `—`: the snapshot not covering a parent is not the same as a process having no parent, and the two are not collapsed.
+- `signature` distinguishes four answers, not one. `Signed` (chains to a trusted root), `unsigned` (no embedded signature — normal, and **not** a finding), `BAD SIG` (signed, but the chain does not verify), and `—` (never verified, which is what every row shows without `--signatures`).
+- `integrity` prints the mandatory level as a word, never the RID: `12288` answers no question a reader has, `High` answers "could this have written to HKLM".
 - `cwnd` is the kernel's congestion window in bytes. Each `rtt`/`minrtt`/`cwnd`/`retrans` field is gated on its own known flag, so a socket with TCP timestamps off still shows its real congestion window.
 - UDP rows print `*:*` for the remote and `—` for the state, as `netstat` does. `proto` prints `UDPv4` / `UDPv6` rather than a generic `UDP`.
 - Link-local IPv6 addresses carry their scope ID (`fe80::1%12`); IPv4-mapped IPv6 (`::ffff:1.2.3.4`) is normalised to `1.2.3.4`.

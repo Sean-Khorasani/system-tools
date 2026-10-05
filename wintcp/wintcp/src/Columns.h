@@ -70,6 +70,19 @@ enum ColumnId {
     COL_CWND,       // congestion window, bytes
     COL_RETRANS,    // cumulative bytes retransmitted
     COL_GROUPRATE,  // G5: per-PROCESS bytes/second (a group answer only)
+    // F5.1 / F5.2 / F5.3. Appended for the same reason as every column above: a
+    // new id cannot renumber an existing one, so a persisted column mask keeps
+    // its meaning and the ColVersion migration in Settings.cpp grants them.
+    //
+    // HIDDEN BY DEFAULT, all three. They answer "should I trust this process",
+    // which is a question asked about a handful of rows, not about the three
+    // hundred on screen - and two of the three (Integrity, Signature) read as
+    // em-dashes until the caller asks for the underlying work. A column that is
+    // empty on first launch looks broken, which is the same reasoning the ss -i
+    // columns use.
+    COL_PPID,       // F5.1: "<ppid> <parent image name>", e.g. "1234 explorer.exe"
+    COL_INTEGRITY,  // F5.2: mandatory integrity level, "+AC" for AppContainer
+    COL_SIGNATURE,  // F5.3: Authenticode verdict
     COL_COUNT
 };
 
@@ -160,6 +173,19 @@ constexpr ColumnStyle GetColumnStyle(int col) {
             // "64.0 MB"; beyond that the cell truncates rather than moving the
             // column, which is what a rate column must never do.
             return {true, 12};
+        case COL_INTEGRITY:
+            // Left, because these are words. 12 is exactly the longest cell the
+            // column can produce - "Protected+AC" - so the budget can never
+            // disagree with the content, which is the property the Country
+            // column's zero budget relies on.
+            return {false, 12};
+        case COL_PPID:
+        case COL_SIGNATURE:
+            // Both are filled by the per-PID resolver during the refresh, i.e.
+            // BEFORE the header is printed, so both measure snug like Process
+            // and Path do. A cap here would only make the column wider than its
+            // content on a machine whose process names are short.
+            return {false, 0};
         default:
             return {false, 0};
     }

@@ -60,7 +60,7 @@ constexpr int kMaxColWidth = 4000;          // wider than any monitor: corrupt d
 constexpr UINT kDefaultRefreshSec = 2;       // the product's cadence, in seconds
 constexpr UINT kDefaultIntervalMs =
     kDefaultRefreshSec * 1000;              // ...and in ms (B2 unifies all three)
-constexpr UINT kCurrentColVersion = 4;       // schema Save() writes; see Load
+constexpr UINT kCurrentColVersion = 5;       // schema Save() writes; see Load
 constexpr size_t kMaxFilterChars = 512;     // filter box + persisted Filter
 
 struct Settings {

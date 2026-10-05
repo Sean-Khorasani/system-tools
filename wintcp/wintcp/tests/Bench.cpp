@@ -899,10 +899,15 @@ TestResult RunSelfTest() {
             //    the other way corruption debris shows up here: `FilterField::Dis.`
             //    was the exact artefact, and a valid-looking row pointing at a
             //    field nothing renders would silently never match.
+            //    The bound is the LAST enumerator, which is why it is named
+            //    rather than spelled as a literal count: a new field added to
+            //    FilterField must also move this line, and forgetting is
+            //    caught here rather than by a keyword that silently matches
+            //    nothing forever.
             bool everyFieldIsAKnownEnumerator = true;
             for (size_t i = 0; i < kwCount; ++i) {
                 const int f = static_cast<int>(kw[i].field);
-                if (f < 0 || f > static_cast<int>(FilterField::Retrans)) {
+                if (f < 0 || f > static_cast<int>(FilterField::Signature)) {
                     everyFieldIsAKnownEnumerator = false;
                     break;
                 }
@@ -2220,6 +2225,239 @@ TestResult RunSelfTest() {
                   GetColumnStyle(COL_RETRANS).right &&
                   GetColumnStyle(COL_RTT).cap > 0 &&
                   GetColumnStyle(COL_MINRTT).cap > 0);
+    }
+
+    // 3d. F5.1 / F5.2 / F5.3: the parent, integrity and signature columns.
+    //
+    // What is testable here is exactly the part that went wrong three times
+    // while this was being built: the RID -> level mapping, the label wording
+    // the filter and the column share, and the filter's refusal to answer for
+    // a row it never measured. What is NOT testable without a live token is
+    // whether OpenProcessToken succeeds - that was measured on the machine
+    // (122 Medium / 115 System / 11 High / 1 Low / 2 Untrusted over 328 rows,
+    // 77 unreadable because the process could not be opened at all) and is
+    // recorded in todo.md rather than pinned here.
+    {
+        // (a) THE RID MAPPING, exhaustively over the documented values. Exact
+        //     equality, not >= : an unfamiliar future RID must read as unknown
+        //     rather than silently claiming the nearest known level.
+        Check(r, "f5.2.rid-maps-to-named-level",
+              IntegrityFromRid(0)     == kIntegrityUntrusted &&
+              IntegrityFromRid(4096)  == kIntegrityLow &&
+              IntegrityFromRid(8192)  == kIntegrityMedium &&
+              IntegrityFromRid(12288) == kIntegrityHigh &&
+              IntegrityFromRid(16384) == kIntegritySystem &&
+              IntegrityFromRid(28672) == kIntegrityProtected);
+
+        Check(r, "f5.2.unknown-rid-is-not-the-nearest-level",
+              IntegrityFromRid(1) == kIntegrityUnknown &&
+              IntegrityFromRid(6144) == kIntegrityUnknown &&
+              IntegrityFromRid(12287) == kIntegrityUnknown &&
+              IntegrityFromRid(20480) == kIntegrityUnknown &&
+              IntegrityFromRid(0xFFFFFFFFu) == kIntegrityUnknown);
+
+        // (b) The enum ORDER is trust order, because CompareRows sorts by the
+        //     enum value: ascending has to mean least-trusted first for the
+        //     sort to be the useful direction, and this pins that decision so
+        //     reordering the enum cannot silently reverse it.
+        Check(r, "f5.2.enum-is-in-increasing-trust-order",
+              kIntegrityUntrusted < kIntegrityLow && kIntegrityLow < kIntegrityMedium &&
+              kIntegrityMedium < kIntegrityHigh && kIntegrityHigh < kIntegritySystem &&
+              kIntegritySystem < kIntegrityProtected);
+
+        // (c) LABELS. "unsigned" must stay lowercase because the filter matches
+        //     a lower-case needle against it, and "BAD SIG" must stay shouty
+        //     because it is the one state a reader must not miss. Both were
+        //     asserted rather than assumed: the first version matched the RAW
+        //     label, so `integrity:high` found nothing among eleven High rows.
+        Check(r, "f5.2.labels-are-distinct-per-level",
+              std::wcscmp(IntegrityLabel(kIntegrityLow), L"Low") == 0 &&
+              std::wcscmp(IntegrityLabel(kIntegrityMedium), L"Medium") == 0 &&
+              std::wcscmp(IntegrityLabel(kIntegrityHigh), L"High") == 0 &&
+              std::wcscmp(IntegrityLabel(kIntegritySystem), L"System") == 0 &&
+              std::wcscmp(IntegrityLabel(kIntegrityProtected), L"Protected") == 0 &&
+              std::wcscmp(IntegrityLabel(kIntegrityUntrusted), L"Untrusted") == 0);
+
+        Check(r, "f5.3.labels-separate-unsigned-from-invalid",
+              std::wcscmp(SignatureLabel(kSigUnsigned), L"unsigned") == 0 &&
+              std::wcscmp(SignatureLabel(kSigInvalid), L"BAD SIG") == 0 &&
+              // The pair that must never collapse: an unsigned binary is the
+              // normal case for most of what runs, and merging it into
+              // "invalid" would paint most of a machine red and train the
+              // reader to ignore the colour.
+              std::wcscmp(SignatureLabel(kSigUnsigned),
+                          SignatureLabel(kSigInvalid)) != 0);
+
+        Check(r, "f5.3.unchecked-label-is-the-dash",
+              std::wcscmp(SignatureLabel(kSigUnchecked), L"—") == 0);
+
+        // (d) THE COLUMN CELLS. GetColumnText is what both surfaces print.
+        {
+            Connection c = MakeReferenceTcpRow();
+
+            // F5.1. ppid unknown is NOT "no parent" - it is an unanswerable
+            // question, and it prints the dash. ppid known with no name (the
+            // parent was not in the snapshot) still prints the NUMBER, because
+            // collapsing that to a dash would claim the process has no parent,
+            // which is the one answer the snapshot cannot give.
+            wchar_t buf[64] = {0};
+            ConnectionStore::GetColumnText(c, COL_PPID, buf, 64);
+            Check(r, "f5.1.unknown-ppid-dashes",
+                  std::wcsstr(buf, L"—") != nullptr);
+
+            c.ppidKnown = true;
+            c.ppid = 4242;
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_PPID, buf, 64);
+            Check(r, "f5.1.known-ppid-without-name-prints-the-number",
+                  std::wcsstr(buf, L"4242") != nullptr);
+
+            c.parentName = L"services.exe";
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_PPID, buf, 64);
+            Check(r, "f5.1.known-ppid-prints-number-and-name",
+                  std::wcsstr(buf, L"4242") != nullptr &&
+                  std::wcsstr(buf, L"services.exe") != nullptr);
+
+            // F5.2. Unmeasured integrity dashes, and an AppContainer marker is
+            // ADDED to the level rather than replacing it.
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_INTEGRITY, buf, 64);
+            Check(r, "f5.2.unmeasured-integrity-dashes",
+                  std::wcsstr(buf, L"—") != nullptr);
+
+            c.integrity = static_cast<unsigned>(kIntegrityHigh);
+            c.appContainer = false;
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_INTEGRITY, buf, 64);
+            Check(r, "f5.2.cell-is-the-level-name",
+                  std::wcsstr(buf, L"High") != nullptr);
+
+            c.appContainer = true;
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_INTEGRITY, buf, 64);
+            Check(r, "f5.2.appcontainer-keeps-the-level-and-adds-a-marker",
+                  std::wcsstr(buf, L"High") != nullptr &&
+                  std::wcsstr(buf, L"+AC") != nullptr);
+
+            // F5.3. Unchecked is a dash, NOT "unsigned": WinTCP not looking is
+            // not the same as WinTCP looking and finding nothing.
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_SIGNATURE, buf, 64);
+            Check(r, "f5.3.unchecked-dashes-rather-than-claiming-unsigned",
+                  std::wcsstr(buf, L"—") != nullptr);
+
+            c.signature = static_cast<unsigned>(kSigUnsigned);
+            buf[0] = L'\0';
+            ConnectionStore::GetColumnText(c, COL_SIGNATURE, buf, 64);
+            Check(r, "f5.3.cell-is-the-verdict-label",
+                  std::wcsstr(buf, L"unsigned") != nullptr);
+        }
+
+        // (e) THE FILTERS. The rule being pinned is the one this codebase cares
+        //     most about: a row whose reading was never taken matches NOTHING,
+        //     so an unmeasurable row can never masquerade as a match. `signed:`
+        //     bare means "WinTCP verified this and it was good", which is NOT
+        //     "the verdict exists".
+        {
+            std::vector<FilterClause> prog;
+            auto matches = [&prog](const wchar_t* box, const Connection& row) {
+                prog.clear();
+                ParseFilter(box, prog);
+                return !prog.empty() && MatchFilter(row, prog);
+            };
+            // FinalizeRow after every mutation, always. It is what fills the
+            // lower* search keys, and the whole point of those fields is that a
+            // filter never pays ToLowerW per row per clause. A row edited without
+            // re-finalizing it is a row whose search keys describe a PREVIOUS
+            // version of it - which is exactly how `parent:services` matched
+            // nothing in the first draft of this block while looking correct.
+            Connection c = MakeReferenceTcpRow();
+            c.ppid = 4242;
+            c.ppidKnown = true;
+            c.parentName = L"services.exe";
+            c.integrity = static_cast<unsigned>(kIntegrityHigh);
+            ConnectionStore::FinalizeRow(c);
+
+            Check(r, "f5.1.filter-ppid-matches-exactly",
+                  matches(L"ppid:4242", c) && !matches(L"ppid:4243", c));
+            Check(r, "f5.1.filter-parent-searches-the-name",
+                  matches(L"parent:services", c) && !matches(L"parent:explorer", c));
+            // A row with NO ppid answer must not match any threshold, including
+            // the empty one that means "has a ppid".
+            Connection unknown = MakeReferenceTcpRow();
+            unknown.ppidKnown = false;
+            Check(r, "f5.1.unmeasured-ppid-matches-nothing",
+                  !matches(L"ppid:4242", unknown) && !matches(L"ppid:", unknown));
+
+            Check(r, "f5.2.filter-integrity-matches-the-level",
+                  matches(L"integrity:high", c) && matches(L"integrity:High", c) &&
+                  !matches(L"integrity:system", c));
+            // Unreadable integrity answers "no match", not "match everything".
+            unknown.integrity = 0;
+            Check(r, "f5.2.unmeasured-integrity-matches-nothing",
+                  !matches(L"integrity:high", unknown) &&
+                  !matches(L"integrity:", unknown));
+            // A value that is not a level is a value that matches nothing -
+            // never a degenerate substring test that selects the whole table.
+            Check(r, "f5.2.bogus-integrity-matches-nothing",
+                  !matches(L"integrity:bogus", c));
+            Check(r, "f5.2.appcontainer-finds-its-marker",
+                  !matches(L"integrity:ac", c));
+            c.appContainer = true;
+            ConnectionStore::FinalizeRow(c);
+            Check(r, "f5.2.appcontainer-marker-is-searchable",
+                  matches(L"integrity:ac", c));
+            c.appContainer = false;
+
+            // Signature is a raw enum, so it needs no re-finalize to be seen by
+            // the filter - which is the reason the two features are not
+            // symmetric, and worth stating rather than leaving to be discovered.
+            c.signature = static_cast<unsigned>(kSigValid);
+            Check(r, "f5.3.bare-signed-means-verified-and-good",
+                  matches(L"signed:", c));
+            c.signature = static_cast<unsigned>(kSigUnsigned);
+            Check(r, "f5.3.bare-signed-excludes-unsigned",
+                  !matches(L"signed:", c));
+            Check(r, "f5.3.bogus-signature-matches-nothing",
+                  !matches(L"signature:bogus", c));
+            c.signature = static_cast<unsigned>(kSigInvalid);
+            Check(r, "f5.3.bare-signed-excludes-a-bad-signature",
+                  !matches(L"signed:", c));
+            // Unchecked answers nothing at all, even to the bare form: reporting
+            // an unasked question as if it had been asked is the failure mode.
+            c.signature = 0;
+            Check(r, "f5.3.unchecked-row-matches-nothing",
+                  !matches(L"signed:", c) && !matches(L"signature:", c));
+        }
+
+        // (f) THE COLUMN MASKS. The bit for every ColumnId must exist and the
+        //     three new columns must be OFF by default - asserted here because
+        //     COL_COUNT reached exactly 32, where the naive
+        //     `(1u << COL_COUNT) - 1` is a shift by the width of the type.
+        Check(r, "f5.columns-exist-in-the-persisted-mask",
+              COL_PPID < COL_COUNT && COL_INTEGRITY < COL_COUNT &&
+              COL_SIGNATURE < COL_COUNT);
+        Check(r, "f5.columns-are-hidden-by-default",
+              (kDefaultVisibleCols & (1u << COL_PPID)) == 0 &&
+              (kDefaultVisibleCols & (1u << COL_INTEGRITY)) == 0 &&
+              (kDefaultVisibleCols & (1u << COL_SIGNATURE)) == 0);
+        // The mask must still cover every column AND a normal majority of them:
+        // a mask of 1 (the value `1u << 32` produces) is non-empty, so "not
+        // empty" alone would not have caught the shift.
+        Check(r, "f5.all-col-mask-covers-every-column",
+              (kAllColMask & (1u << (COL_COUNT - 1))) != 0 &&
+              (kAllColMask & (1u << COL_PPID)) != 0 &&
+              (kAllColMask & (1u << COL_SIGNATURE)) != 0);
+        {
+            // A hand-rolled popcount rather than __builtin_popcount (no MSVC
+            // equivalent without <intrin.h>) or _CountOneBits (an intrinsic for
+            // one compiler). Four lines beat either dependency.
+            UINT32 bits = kDefaultVisibleCols;
+            int pop = 0;
+            while (bits != 0) { bits &= bits - 1u; ++pop; }
+            Check(r, "f5.default-set-is-more-than-one-column", pop > 4);
+        }
     }
 
     // 4. Snapshot diff: appear / state-change / disappear + one-cycle ghosts.

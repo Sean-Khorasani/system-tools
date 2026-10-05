@@ -61,6 +61,10 @@ struct SnapshotOptions {
     // Attach GeoIP country codes. Requires 'geoIpPath' to name a database.
     bool geoIp = false;
     const wchar_t* geoIpPath = nullptr;
+
+    // NOTE: F5.3 (Authenticode verification) is deliberately NOT one of these
+    // options. It is configured by SetVerifySignatures below, and having both
+    // was a bug rather than a convenience - see the note in Snapshot.cpp.
 };
 
 // One complete pass. Mirrors RefreshResult minus the UI-only traffic hook, so
@@ -91,6 +95,14 @@ public:
     // when the user switches database or disables a source, so the next pass
     // reflects the change rather than a stale cached answer.
     void Clear();
+
+    // F5.3. Turn Authenticode verification on or off for subsequent passes.
+    //
+    // A setter rather than a BuildStoreSnapshot parameter because the resolver
+    // is what holds the flag, and threading a seventh positional bool through
+    // nine call sites is how one of them ends up forgotten - which here would
+    // mean a `--signatures` run that silently printed no verdicts.
+    void SetVerifySignatures(bool on) { resolver_.SetVerifySignatures(on); }
 
     // Ask GeoIP to attach codes on the next pass. Loading the database is
     // separated from building a pass so a load failure can be reported with its

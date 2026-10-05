@@ -227,7 +227,7 @@
   </ItemGroup>
   <ItemDefinitionGroup>
     <Link>
-      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;wintrust.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- Bare DLL names, NOT /DELAYLOAD: flags. MSBuild's DelayLoadDLLs
            property takes the names; the flag form is accepted and silently
            ignored, with no warning, so the path simply does not defer
