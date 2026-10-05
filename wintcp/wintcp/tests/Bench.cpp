@@ -5369,6 +5369,66 @@ std::string RunBench(unsigned rows, unsigned iters) {
         }
     }
 
+    // [G] The ETW event path itself: EtwTraffic::OnEvent() driven the way
+    // ProcessTrace drives it, over a synthetic classic-MOF stream (half send
+    // opcodes, half receive, 64 distinct PIDs). It times classify + payload
+    // parse + the totals lock + the per-PID std::map update - the whole
+    // per-event cost W3.5 proposes to optimise. The plan requires a number
+    // before that hot path is touched, so this is the number. Reported as
+    // ns/event rather than ms/op because it is the unit the claim is made in
+    // (100k events per second).
+    double nsG = 0;
+    double nsG2 = 0;
+    unsigned long long eventsG = 0;
+    {
+        struct Ev {
+            BYTE payload[8];
+            EVENT_RECORD rec;
+        };
+        std::vector<Ev> evs(64);
+        for (unsigned i = 0; i < 64; ++i) {
+            DWORD p = 1000 + i, sz = 1460;
+            std::memcpy(evs[i].payload, &p, 4);
+            std::memcpy(evs[i].payload + 4, &sz, 4);
+            evs[i].rec = EVENT_RECORD{};
+            evs[i].rec.EventHeader.ProviderId = kTcpIpProviderGuid;
+            // Classic MOF carries the event type in Opcode, Id stays 0 (the
+            // 40443-event probe established this; see the etw.classify block).
+            evs[i].rec.EventHeader.EventDescriptor.Opcode =
+                static_cast<UCHAR>((i & 1u) != 0 ? 11 : 10);
+            evs[i].rec.UserData = evs[i].payload;
+            evs[i].rec.UserDataLength = 8;
+        }
+
+        EtwTraffic etw;   // stack instance: no session, destructor is a no-op
+        const unsigned kEvents = 4000000;
+        const double t0 = NowMs();
+        for (unsigned i = 0; i < kEvents; ++i) etw.OnEvent(&evs[i & 63u].rec);
+        const double elapsed = NowMs() - t0;
+        eventsG = kEvents;
+        nsG = (elapsed * 1e6) / static_cast<double>(kEvents);
+
+        // The same stream with the status bar reading the totals underneath
+        // it - Snapshot() takes the same lock and copies the whole map. One
+        // Snapshot per 1000 events is 100x FASTER than reality: the GUI reads
+        // about once a second against a claimed 100000 events per second, i.e.
+        // one read per 100000 events. So this is the contention case at 100x
+        // its realistic rate, and any loss it produces would be worse than the
+        // worst real one.
+        const double t1 = NowMs();
+        size_t snapRows = 0;
+        for (unsigned i = 0; i < kEvents; ++i) {
+            etw.OnEvent(&evs[i & 63u].rec);
+            if ((i & 1023u) == 0) snapRows += etw.Snapshot().size();
+        }
+        nsG2 = ((NowMs() - t1) * 1e6) / static_cast<double>(kEvents);
+        // Sanity, not decoration: 64 distinct PIDs go in, so every Snapshot
+        // must report 64 rows and snapRows can never be 0. The branch is also
+        // what stops the copies from being optimised away, so if this ever
+        // trips the reported number is -1.000 rather than a quiet lie.
+        if (snapRows == 0) nsG2 = -1.0;
+    }
+
     const auto rowSpeed = [rows, iters](double totalMs) {
         if (totalMs <= 0.0) return 0.0;
         return (static_cast<double>(rows) * iters) / totalMs / 1000.0;
@@ -5393,12 +5453,18 @@ std::string RunBench(unsigned rows, unsigned iters) {
                     s.total / iters, rowSpeed(s.total));
         out += line;
     }
+    ::sprintf_s(line, "  [G] EtwTraffic::OnEvent (ETW event path)   %9.3f ns/event"
+                      "  over %llu events\r\n", nsG, eventsG);
+    out += line;
+    ::sprintf_s(line, "  [G]  same stream, Snapshot() every 1024     %9.3f ns/event"
+                      "  (contended)\r\n", nsG2);
+    out += line;
     ::sprintf_s(line, "  total timed: %.1f ms\r\n",
                 msA + msB + msC + msD + msE + msF);
     out += line;
     out += "  (QueryPerformanceCounter; [D] iterates the current view, "
-           "[E] resolves pid->name, [F] pairs duplicate keys, other stages "
-           "scale with 'rows')\r\n";
+           "[E] resolves pid->name, [F] pairs duplicate keys, [G] is per "
+           "event not per row, other stages scale with 'rows')\r\n";
     return out;
 }
 

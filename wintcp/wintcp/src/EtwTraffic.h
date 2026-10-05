@@ -83,10 +83,22 @@ public:
     // Cumulative per-PID totals since Start(), copied under the lock.
     std::map<DWORD, PidTraffic> Snapshot() const;
 
+    // Feed ONE event record through the production path - classify, parse,
+    // take the totals lock, update the per-PID map - exactly as the consumer
+    // does.
+    //
+    // Public for the same reason ClassifyNetworkEvent / ParseTrafficPayload
+    // are (see EtwTrafficTypes.h): the plan requires a measured before/after
+    // before this hot path may be changed, and the only way to time it is to
+    // drive it with synthetic records. In production the sole caller is
+    // EventThunk, on the ProcessTrace thread. Calling it when not running is
+    // harmless - `stopping_` is false and the totals are just a map - which is
+    // what lets a benchmark use a stack instance with no session behind it.
+    void OnEvent(const EVENT_RECORD* rec);
+
 private:
     static VOID WINAPI EventThunk(PEVENT_RECORD rec);
     static DWORD WINAPI ThreadProc(LPVOID param);
-    void OnEvent(const EVENT_RECORD* rec);
     void ProcessLoop();
     void StopSession();
     // Throwing half of OnEvent, above. Split out so the containment in
