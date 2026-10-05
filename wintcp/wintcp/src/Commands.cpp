@@ -571,9 +571,12 @@ std::string JsonList(const ConnectionStore& store, const ListOptions& opt) {
             const Connection* c = store.ViewRow(v);
             if (c != nullptr) rows.push_back(*c);
         }
-        return RenderJsonRows(rows, cols, /*extraHostname=*/false);
+        return RenderJsonRows(rows, cols, /*extraHostname=*/false,
+                              opt.jsonLines);
     }
-    std::string out = "[";
+    // Grouped: same two shapes, so the same three edits as above - no
+    // brackets, "\n" between records, one "\n" after the last.
+    std::string out = opt.jsonLines ? "" : "[";
     bool first = true;
     size_t shown = 0;
     for (size_t v = 0; v < store.View().size(); ++v) {
@@ -581,8 +584,8 @@ std::string JsonList(const ConnectionStore& store, const ListOptions& opt) {
         const ProcessGroup* g = store.ViewGroup(v);
         if (g == nullptr) continue;
         const Connection* rep = store.ViewRow(v);
-        if (!first) out += ",";
-        out += "\n  {";
+        if (!first) out += (opt.jsonLines ? "\n" : ",");
+        out += (opt.jsonLines ? "{" : "\n  {");
         bool needComma = false;
         for (size_t i = 0; i < cols.size(); ++i) {
             const char* key = JsonKeyFor(cols[i]);
@@ -608,7 +611,11 @@ std::string JsonList(const ConnectionStore& store, const ListOptions& opt) {
         first = false;
         ++shown;
     }
-    out += "\n]";
+    if (opt.jsonLines) {
+        if (!out.empty()) out += "\n";
+    } else {
+        out += "\n]";
+    }
     return out;
 }
 
@@ -692,14 +699,23 @@ const char* JsonKeyFor(int column) {
     }
 }
 
+// 'lines' selects NDJSON over the JSON array - see ListOptions::jsonLines.
+// One renderer for both, because everything else about the two shapes (the
+// keys, the escaping, the limit, the group fall-through) is identical, and
+// two renderers would drift on exactly the part nobody looks at. The only
+// differences are the brackets, the separator and the indent: in lines mode
+// a record is separated by "\n" and the last one is terminated by "\n", so
+// appending the next --watch tick's output CONTINUES the stream instead of
+// starting a second array inside the first.
 std::string RenderJsonRows(const std::vector<Connection>& rows,
-                           const std::vector<int>& cols, bool extraHostname) {
-    std::string out = "[";
+                           const std::vector<int>& cols, bool extraHostname,
+                           bool lines) {
+    std::string out = lines ? "" : "[";
     bool first = true;
     wchar_t buf[kMaxColumnText] = {0};
     for (const Connection& c : rows) {
-        if (!first) out += ",";
-        out += "\n  {";
+        if (!first) out += (lines ? "\n" : ",");
+        out += (lines ? "{" : "\n  {");
         bool needComma = false;
         for (size_t i = 0; i < cols.size(); ++i) {
             const char* key = JsonKeyFor(cols[i]);
@@ -720,7 +736,16 @@ std::string RenderJsonRows(const std::vector<Connection>& rows,
         out += "}";
         first = false;
     }
-    out += "\n]";
+    if (lines) {
+        // Terminate the last record - NDJSON defines each line as a complete
+        // value, and the trailing newline is what lets the next one follow.
+        // An EMPTY result stays empty: a run that matched no rows writes
+        // nothing at all rather than one blank line a reader would try to
+        // parse as an object.
+        if (!out.empty()) out += "\n";
+    } else {
+        out += "\n]";
+    }
     return out;
 }
 

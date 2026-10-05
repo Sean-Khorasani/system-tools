@@ -94,7 +94,18 @@ struct ListOptions {
     size_t limit = 0;             // 0 = no limit
     // Output shape: "table" (aligned columns for humans - D14), "csv",
     // "tsv" (raw tabs, the machine shape table used to be) or "json".
+    // There is deliberately no "jsonl" VALUE here: --format jsonl is this
+    // same "json" with jsonLines set, so every rule keyed on the format -
+    // "json prints no header line", the grouped-column refusal, the
+    // --changes shape check - already applies to it unchanged, and the two
+    // can only differ where they are meant to differ: the renderer.
     std::string format = "table";
+    // --format jsonl: emit NDJSON instead of a JSON array - one object per
+    // line, every line terminated, no enclosing brackets. An array has to be
+    // read to its closing bracket before any of it is usable; a line at a
+    // time is consumable the moment it lands, which is what a SIEM pipe or
+    // `jq -c` reading a --watch stream needs. Off by default.
+    bool jsonLines = false;
     // Column ids for delimited output; empty = frozen default set.
     std::vector<int> columns;
     // Quiet: print nothing; exit 0 when the view is non-empty, else 1.
@@ -265,8 +276,11 @@ std::string RenderDelimitedRows(const std::vector<Connection>& rows,
                                 bool rfcCsv, bool includeHeader = true);
 // 'extraHostname' appends the hostname field the GUI's export schema has
 // always carried; the CLI's frozen --json schema passes false.
+// 'lines' renders NDJSON rather than a JSON array (see ListOptions::
+// jsonLines); the default keeps the array every existing caller expects.
 std::string RenderJsonRows(const std::vector<Connection>& rows,
-                           const std::vector<int>& cols, bool extraHostname);
+                           const std::vector<int>& cols, bool extraHostname,
+                           bool lines = false);
 
 // The frozen ten-column default shared by every delimited/JSON export.
 std::vector<int> DefaultExportColumns();

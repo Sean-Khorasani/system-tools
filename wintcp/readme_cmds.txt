@@ -50,6 +50,8 @@ export --out %TEMP%\rmc_b.csv --group --traffic --sort nettotal --desc
 export --out %TEMP%\rmc_c.csv --quiet
 list --format json --columns proto,local,lport,remote,rport,state,pid,process --limit 2
 list --format json --columns full --limit 1
+list --format jsonl --columns proto,local,lport,remote,rport,state,pid,process --limit 2
+list --watch 1 --count 2 --limit 2 --format jsonl
 list --filter "state:listen exclude:127." --quiet
 list --group --traffic --filter "tx:1GB" --quiet
 ps --sort mem --limit 1 --quiet

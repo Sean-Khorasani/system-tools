@@ -310,7 +310,10 @@ Switch reference for `list` (the widest verb; the others are subsets):
   --group       one row per process instead of per connection.
   --format S    table (default) = aligned columns, header printed first,
                 rows as soon as they are ready; csv / tsv = raw
-                delimiters (tsv = tabs) for scripts; json = objects.
+                delimiters (tsv = tabs) for scripts; json = objects in
+                one array; jsonl = the same objects, one per line
+                (NDJSON), so a --watch stream can be consumed as it
+                runs instead of buffered to the closing bracket.
   --columns C   default | minimal | full (wide = full), or a list:
                 proto,local,lport,remote,rport,state,pid,process,
                 service,host,path,traffic,rx,tx,nettotal,cpu,mem,
@@ -1361,6 +1364,7 @@ consumer is written once.
 ```bat
 wintcp.exe list --format json --columns proto,local,lport,remote,rport,state,pid,process --limit 2
 wintcp.exe list --format json --columns full --limit 1 2>nul
+wintcp.exe list --format jsonl --columns proto,local,lport,remote,rport,state,pid,process --limit 2
 ```
 
 ```text
@@ -1375,12 +1379,24 @@ wintcp.exe list --format json --columns full --limit 1 2>nul
 ]
 ```
 
+```text
+{"proto":"TCPv4","local":"10.0.0.92","lport":"9337","remote":"64.59.150.137","rport":"53","state":"TIME_WAIT","pid":"0","process":"—"}
+{"proto":"TCPv4","local":"10.0.0.92","lport":"12924","remote":"104.18.24.129","rport":"443","state":"TIME_WAIT","pid":"0","process":"—"}
+```
+
 | Switch | What it does | Why it is in this command |
 |---|---|---|
 | `list --format json` | An array of objects, one per row, valid JSON with no trailing commas | A real array rather than NDJSON, so `jq` and a dashboard can both consume it. A parser that chokes on a trailing comma is the usual reason people fall back to scraping a table. |
+| `list --format jsonl` | The same objects, **one per line**, no wrapper | The streaming form of this schema, and the reason it exists: under `--watch`, `json` only becomes valid at the closing bracket, so a consumer buffers every tick before it can read the first; `jsonl` is readable as each row arrives. It is `json` with a different renderer, not a fourth format — same keys, same string ports, and the same refusal of a per-connection column under `--group`. |
 | `list --columns a,b,c` | Which keys appear, in which order | The frozen part. Asking for `pid,process` gives exactly those two keys, so the consumer's field list is under your control. |
 | `list --limit 2` | Two rows | Paging for a dashboard poll. |
 | `2>nul` | Drop stderr | The **advisory** messages (`column: "host" without --dns…`) go to stderr and never into the JSON. That separation is the study: stdout is data, stderr is advice, and a consumer can redirect one without losing the other. |
+
+**Array or lines, one schema.** The two shapes above are the same objects;
+only the framing differs. Pick `json` when you want a single document you can
+hand to a parser, and `jsonl` when the rows arrive over time — a `--watch`
+stream, or a pipe into something that acts per record. Nothing else about the
+output changes.
 
 Types are the schema, and they are chosen for the consumer, not for the
 table's convenience: `proto`/`state`/`process` are display strings, `lport`

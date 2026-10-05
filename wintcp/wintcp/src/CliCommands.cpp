@@ -120,7 +120,7 @@ const CommandHelp kCommandHelps[] = {
      "list | conn - live connection table (one snapshot, then exit)\r\n"
      "\r\n"
      "Usage: wintcp.exe list [--filter F] [--sort COL] [--asc|--desc]\r\n"
-     "                       [--group] [--format table|csv|tsv|json]\r\n"
+     "                       [--group] [--format table|csv|tsv|json|jsonl]\r\n"
      "                       [--columns SET|a,b,c] [--limit N]\r\n"
      "                       [--quiet] [--watch [sec]] [--count N]\r\n"
      "\r\n"
@@ -138,7 +138,10 @@ const CommandHelp kCommandHelps[] = {
      "  --group       one row per process instead of per connection.\r\n"
      "  --format S    table (default) = aligned columns, header printed first,\r\n"
      "                rows as soon as they are ready; csv / tsv = raw\r\n"
-     "                delimiters (tsv = tabs) for scripts; json = objects.\r\n"
+     "                delimiters (tsv = tabs) for scripts; json = objects in\r\n"
+     "                one array; jsonl = the same objects, one per line\r\n"
+     "                (NDJSON), so a --watch stream can be consumed as it\r\n"
+     "                runs instead of buffered to the closing bracket.\r\n"
      "  --columns C   default | minimal | full (wide = full), or a list:\r\n"
      "                proto,local,lport,remote,rport,state,pid,process,\r\n"
      "                service,host,path,traffic,rx,tx,nettotal,cpu,mem,\r\n"
@@ -792,9 +795,17 @@ ListOptions ToListOptions(const Args& a) {
     o.sortAsc = !a.desc;
     o.grouped = a.group;
     o.limit = a.limit;
-    o.format = (a.format == "csv" || a.format == "json" || a.format == "tsv")
-        ? a.format
-        : "table";
+    // --format jsonl is `json` with jsonLines set, not a fourth format: every
+    // format gate downstream (the header rule, the grouped-column refusal,
+    // the --changes shape check) is keyed on format == "json" and has to mean
+    // the same thing for both. Only the renderer differs, which is the whole
+    // of what jsonl adds.
+    const bool jsonLines = (a.format == "jsonl");
+    o.format = (a.format == "csv" || a.format == "json" || jsonLines ||
+                a.format == "tsv")
+                   ? (jsonLines ? std::string("json") : a.format)
+                   : "table";
+    o.jsonLines = jsonLines;
     if (!a.columns.empty()) o.columns = ParseColumns(a.columns);
     o.quiet = a.quiet;
     o.traffic = a.traffic;
@@ -1230,8 +1241,8 @@ int RunCliCommand(int argc, wchar_t** argv) {
     }
     if (cmd == L"list" || cmd == L"conn") {
         std::string verr;
-        if (!CheckFormat(a.format, {"table", "csv", "tsv", "json"}, "list",
-                         &verr)) {
+        if (!CheckFormat(a.format, {"table", "csv", "tsv", "json", "jsonl"},
+                         "list", &verr)) {
             WriteErr(verr + "\r\n");
             return 2;
         }
@@ -1261,8 +1272,14 @@ int RunCliCommand(int argc, wchar_t** argv) {
                          "it. Drop one.\r\n");
                 return 2;
             }
+            // --format jsonl arrives here already mapped to "json" (see
+            // ToListOptions), so it needs no second arm - and --changes
+            // already writes one object per line, which is exactly what
+            // jsonl asks for, so the two are the same output rather than two
+            // shapes to reconcile. The message names jsonl because that is
+            // the spelling a user who just typed it will recognise.
             if (opt.format != "table" && opt.format != "json") {
-                WriteErr("list: --changes supports table|json only.\r\n");
+                WriteErr("list: --changes supports table|json|jsonl only.\r\n");
                 return 2;
             }
             // Deltas need no enrichment: events carry endpoint identity.

@@ -4954,6 +4954,51 @@ static const unsigned char kClientHello[] = {
               lr3.exitCode == 0 &&
                   lr3.out.find("\"proto\"") != std::string::npos);
 
+        // F5.12: jsonl is this same serializer with `lines` set - the framing
+        // differs, the schema does not. Three properties the array form
+        // violates and this form must not, each one a line-at-a-time reader
+        // depends on: no wrapper at column 0, every line a complete object,
+        // and a terminating newline so the next --watch tick can follow.
+        ListOptions ljn = lj;
+        ljn.jsonLines = true;
+        const CommandResult lr4 = RenderList(st, ljn);
+        Check(r, "cmd.renderlist-jsonl-first-byte-is-brace",
+              lr4.exitCode == 0 && !lr4.out.empty() && lr4.out[0] == '{' &&
+                  lr4.out.back() == '\n');
+        Check(r, "cmd.renderlist-array-opens-with-bracket",
+              lr3.exitCode == 0 && lr3.out.size() >= 2 && lr3.out[0] == '[' &&
+                  lr3.out[1] == '\n');
+        bool jline = !lr4.out.empty();
+        size_t jscan = 0;
+        while (jline && jscan < lr4.out.size()) {
+            if (lr4.out[jscan] != '{') {
+                jline = false;
+                break;
+            }
+            const size_t nl = lr4.out.find('\n', jscan);
+            if (nl == std::string::npos) {
+                jline = false;
+                break;
+            }
+            jscan = nl + 1;
+        }
+        Check(r, "cmd.renderlist-jsonl-every-line-an-object", jline, lr4.out);
+
+        // Empty must stay empty in lines mode: a reader that tries to parse a
+        // blank line as an object is worse off than one that got nothing. The
+        // array form still has to be a valid document, so it keeps "[" + NL +
+        // "]" rather than collapsing to nothing too.
+        ListOptions lje = ljn;
+        lje.filter = L"process:definitely-not-a-process-xyz";
+        const CommandResult lr5 = RenderList(st, lje);
+        Check(r, "cmd.renderlist-jsonl-empty-writes-nothing", lr5.out.empty(),
+              lr5.out);
+        ListOptions ljea = lje;
+        ljea.jsonLines = false;
+        const CommandResult lr6 = RenderList(st, ljea);
+        Check(r, "cmd.renderlist-json-empty-still-an-array",
+              lr6.out == "[\n]", lr6.out);
+
         PsOptions po;
         po.quiet = true;
         const CommandResult pr = RenderPs(st, po);
@@ -5064,6 +5109,43 @@ static const unsigned char kClientHello[] = {
                 "grp.exe  10.1.2.3       2 connections\r\n";
             Check(r, "table.group-fallthrough-exact", gt.out == gwant,
                   gt.out);
+
+            // F5.12: the GROUPED shape carries the same two framings, and the
+            // D27 refusal has to reach jsonl. jsonl is `json` with a different
+            // renderer, so every rule written against `json` - group-safe
+            // columns included - applies to it unchanged. Proving it here
+            // rather than in the CLI is what makes the claim structural: the
+            // renderer, not the argument parser, is what jsonl adds.
+            ListOptions lgj;
+            lgj.format = "json";
+            lgj.jsonLines = true;
+            lgj.grouped = true;
+            lgj.columns = {COL_PID, COL_PROCESS, COL_STATE};
+            const CommandResult gtj = RenderList(gs, lgj);
+            bool gtline = gtj.exitCode == 0 && !gtj.out.empty();
+            size_t gtscan = 0;
+            while (gtline && gtscan < gtj.out.size()) {
+                if (gtj.out[gtscan] != '{') {
+                    gtline = false;
+                    break;
+                }
+                const size_t gnl = gtj.out.find('\n', gtscan);
+                if (gnl == std::string::npos) {
+                    gtline = false;
+                    break;
+                }
+                gtscan = gnl + 1;
+            }
+            Check(r, "cmd.renderlist-group-jsonl-frame", gtline, gtj.out);
+
+            ListOptions lgr = lgj;
+            lgr.columns = {COL_PROCESS, COL_LOCAL, COL_STATE};
+            const CommandResult gtr = RenderList(gs, lgr);
+            Check(r, "cmd.renderlist-group-jsonl-refuses-per-connection",
+                  gtr.exitCode == 2 &&
+                      gtr.err.find("JSON key would promise") !=
+                          std::string::npos,
+                  gtr.err);
 
             // Cap + truncation: with --dns on, Hostname takes its budget
             // width up front (the header can print before the join) and a

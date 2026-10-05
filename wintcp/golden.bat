@@ -53,6 +53,34 @@ call :t "list header" "list --limit 1" 0 "Proto"
 call :t "list json array" "list --format json --limit 1" 0 "["
 call :t "list json columns" "list --format json --columns proto,pid --limit 1" 0 "proto"
 call :t "list full columns json" "list --format json --columns full --limit 1" 0 "country"
+REM F5.12: --format jsonl is `json` with the array wrapper removed - identical
+REM objects, one per line. Three properties are asserted that the array form
+REM violates and this form must not: no line may be a lone opening bracket, no
+REM line may be a lone closing bracket, and some line must open with { . A
+REM --watch consumer reading line at a time would otherwise block until a
+REM closing bracket that only the array form ever emits.
+"%BIN%" list --format jsonl --limit 3 > "%OUT%" 2>&1
+set JLRC=%ERRORLEVEL%
+set JLRAW=0
+if not "%JLRC%"=="0" set JLRAW=1
+findstr /x /c:"[" "%OUT%" >nul 2>&1
+if not errorlevel 1 set JLRAW=1
+findstr /x /c:"]" "%OUT%" >nul 2>&1
+if not errorlevel 1 set JLRAW=1
+findstr /b /c:"{" "%OUT%" >nul 2>&1
+if errorlevel 1 set JLRAW=1
+set /a CHECKS+=1
+if "%JLRAW%"=="1" (
+    echo FAIL list jsonl one object per line [rc=%JLRC%, or a lone bracket line, or no opener]
+    set /a FAILS+=1
+) else (
+    echo ok - list jsonl one object per line
+)
+call :t "list jsonl columns" "list --format jsonl --columns proto,pid --limit 1" 0 "proto"
+call :t "help list documents jsonl" "help list" 0 "jsonl"
+call :t "list unknown format" "list --format ndjson --limit 1" 2 "unknown --format"
+call :t "group jsonl refuses per-connection column" "list --group --format jsonl --columns remote" 2 "JSON key would promise"
+call :t "changes accepts jsonl" "list --changes --format jsonl --count 1" 0 "baseline:"
 call :t "list filter" "list --filter port:443 --limit 2" 0 "Proto"
 call :t "list state hyphen" "list --filter state:time-wait --limit 1" 0 "Proto"
 REM README study shape: two clauses in one --filter (state + exclude) must list
