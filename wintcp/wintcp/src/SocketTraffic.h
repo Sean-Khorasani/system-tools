@@ -352,6 +352,17 @@ private:
         // every slot is 2, it did; otherwise the slots past the cursor are the
         // sockets whose call has not returned.
         std::atomic<size_t> finished{0};
+        // Workers spawned BY THIS PASS, counted separately from the sampler's
+        // liveThreads_, which is a process-wide total across every pass.
+        // Teardown of THIS scratch may only wait on THIS pass's workers: a
+        // pass whose own workers have all exited must not block on one an
+        // earlier pass left wedged inside SIO_TCP_INFO - those belong to a
+        // scratch that pass already abandoned and they can still run for
+        // minutes (D2 measured 28 s and >90 s). Counting the global total
+        // here is what made `list --traffic --watch ... --count N` hang for
+        // ever: pass 1 wedges its pool, pass 2 has nothing left to read, and
+        // pass 2 then waits on pass 1's stuck threads with no deadline.
+        std::atomic<int> liveInPass{0};
         // Workers publish here rather than into Sample()'s locals, and take
         // dataLock to do it: a worker that outlives the budget may still push
         // while the scan thread reads.

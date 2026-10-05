@@ -502,24 +502,52 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
     if (workersDone) {
         // finished == queue.size() proves the LAST target was processed. It
         // does NOT prove the worker that processed it has returned from its
-        // lambda and decremented liveThreads_. Freeing `scratch` here, before
-        // that happens, races the worker's next NextTarget() call (which does
-        // scratch.cursor.fetch_add on the allocation being freed) - a
-        // use-after-free. The previous comment asserted that every worker had
-        // returned, which is exactly the guarantee that was not yet true.
+        // lambda. Freeing `scratch` here, before that happens, races the
+        // worker's next NextTarget() call (which does scratch.cursor.fetch_add
+        // on the allocation being freed) - a use-after-free. The previous
+        // comment asserted that every worker had returned, which is exactly
+        // the guarantee that was not yet true.
         //
-        // The fix uses no new machinery: it waits on the same liveThreads_==0
-        // protocol ShutdownScanForExit already uses. The wait is bounded by
-        // construction - a worker wedged in the kernel would have prevented
-        // finished from reaching queue.size(), so reaching this line means every
-        // worker is a few instructions from the nullptr NextTarget returns and
-        // the lambda exits. An empty queue works too: finished is only
-        // meaningful when there is work, and every worker on an empty queue
-        // falls straight through to the decrement.
-        while (liveThreads_.load(std::memory_order_acquire) != 0)
+        // IT WAITED ON THE WRONG COUNTER. The wait used liveThreads_, a
+        // process-wide total across every pass, and it was UNBOUNDED: a pass
+        // whose own workers were all done could block for ever on a thread an
+        // EARLIER pass had left wedged inside SIO_TCP_INFO - a call D2
+        // measured at 28 s and still running after 90 s, and which cannot be
+        // cancelled. That is a real hang, not a theoretical one: it wedged
+        // `list --traffic --watch 2 --count 4` for over 8 minutes at 0 CPU
+        // with the main thread in Sleep. The construction argument beside the
+        // old loop ("every worker is a few instructions from exiting") was
+        // true only of the current pass's workers; it never held for the
+        // global counter.
+        //
+        // Two changes, both necessary:
+        //   1. Wait on THIS pass's workers (scratch.liveInPass). A pass with
+        //      an empty queue spawns none, so it now tears down immediately
+        //      instead of inheriting someone else's stuck threads.
+        //   2. Bound even that wait, so the invariant this code depends on
+        //      holds by construction rather than by argument. On expiry the
+        //      scratch is abandoned instead of freed - exactly what the
+        //      incomplete path below already does - because abandoning means
+        //      never freeing, which is what makes it safe.
+        const ULONGLONG joinDeadline =
+            ::GetTickCount64() + static_cast<ULONGLONG>(kNoProgressMs);
+        while (scratch->liveInPass.load(std::memory_order_acquire) != 0) {
+            if (::GetTickCount64() >= joinDeadline) break;
             ::Sleep(kScanPollMs);
-        CloseCachedSources(*scratch);
-        delete scratch;
+        }
+        if (scratch->liveInPass.load(std::memory_order_acquire) == 0) {
+            CloseCachedSources(*scratch);
+            delete scratch;
+        } else {
+            // Defensive: by the argument above this pass's workers are all
+            // within a few instructions of their decrement, so reaching here
+            // means something above changed. Give up the teardown - not the
+            // reading: every target was read and merged - and count it so it
+            // is visible rather than silent. No generation bump: a worker
+            // cannot still be publishing, because PublishOne runs before the
+            // Finish() that made the pass complete.
+            timeouts_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     // Otherwise it leaks, deliberately: a worker may still be writing to it.
     // One abandoned allocation per stalled pass, reclaimed at process exit -
@@ -930,6 +958,7 @@ void SocketTrafficSampler::ScanHandles(ScanScratch& scratch) {
     SocketTrafficSampler* self = this;
     for (int w = 0; w < kProbeWorkers; ++w) {
         liveThreads_.fetch_add(1, std::memory_order_acq_rel);
+        scratch.liveInPass.fetch_add(1, std::memory_order_acq_rel);
         std::thread([self, &scratch] {
             while (ProbeTarget* t = self->NextTarget(scratch)) {
                 // R2: a throwing probe is an unread socket, not a dead pool.
@@ -937,9 +966,16 @@ void SocketTrafficSampler::ScanHandles(ScanScratch& scratch) {
                 // publish leaves exactly the state an ioctl failure leaves.
                 (void)RunGuarded([&] { self->ProbeTargetOne(*t, scratch); });
             }
-            // One fewer worker still running. Released with no lock held so a
-            // finished worker is never counted as live at exit, which is what
-            // ShutdownScanForExit() reports on.
+            // Scratch-local counter FIRST, because Sample() frees `scratch`
+            // the moment it reaches zero and this is the last statement that
+            // touches the scratch. Everything after it (`self->liveThreads_`,
+            // then destruction of a lambda holding only a pointer and a
+            // reference) does not, so releasing scratch on liveInPass == 0 is
+            // safe for the same reason releasing it on liveThreads_ == 0 was.
+            scratch.liveInPass.fetch_sub(1, std::memory_order_acq_rel);
+            // The process-wide total. One fewer worker still running, released
+            // with no lock held so a finished worker is never counted as live
+            // at exit, which is what ShutdownScanForExit() reports on.
             self->liveThreads_.fetch_sub(1, std::memory_order_acq_rel);
         }).detach();
     }
