@@ -1050,9 +1050,23 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
     // row of that key. Rows of one key are interchangeable to the user (same
     // endpoint, same owner, same state - that is why they share a key), so
     // first-come pairing is a stable 1:1 and nothing is reported as churn.
+    // Built BACKWARDS - highest previous index first - so that a queue
+    // consumed with pop_back() hands out ascending indexes, which is exactly
+    // the first-come order front()/erase(begin()) used to produce.
+    //
+    // WHY THE DIRECTION MATTERS. Taking the front off a vector shifts every
+    // element behind it, so one key of N previous rows cost O(N^2) across the
+    // refresh while it should cost O(N); the mDNS case this queue exists for
+    // is 62 rows of one key. Reversing the build buys the O(1) pop with no
+    // second pass, no head index and no change to which row pairs with which -
+    // the pairing is still first-come, only the container's idea of "first"
+    // is now its back. Rows of a key are interchangeable to the pairing logic
+    // anyway (same endpoint, same owner, same state - that is why they share
+    // a key), but keeping the exact previous order means no change event,
+    // age or bookmark can move to a different row than it did before.
     PrevKeyIndex prevMap;
     prevMap.reserve(rows_.size() * 2 + 1);
-    for (size_t i = 0; i < rows_.size(); ++i) {
+    for (size_t i = rows_.size(); i-- > 0;) {
         if (rows_[i].flags & kRowRemoved) continue;
         prevMap[KeyOf(rows_[i])].push_back(i);
     }
@@ -1066,10 +1080,13 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
         const ConnectionKey key = KeyOf(f);
         const auto it = prevMap.find(key);
         if (it != prevMap.end() && !it->second.empty()) {
-            // Pop the front of this key's queue: the pairing is consumed, so a
-            // later fresh row with the same key gets the NEXT previous row.
-            const size_t pi = it->second.front();
-            it->second.erase(it->second.begin());
+            // Consume this key's queue: the queue was built backwards (see
+            // above), so back() is the LOWEST previous index still waiting -
+            // first-come order - and popping it means a later fresh row with
+            // the same key gets the NEXT previous row, exactly as before.
+            // pop_back() is O(1); erase(begin()) was O(N).
+            const size_t pi = it->second.back();
+            it->second.pop_back();
             const Connection& p = rows_[pi];
             matched[pi] = 1;
             f.id = p.id;

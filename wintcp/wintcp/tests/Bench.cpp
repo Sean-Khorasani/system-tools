@@ -5336,6 +5336,39 @@ std::string RunBench(unsigned rows, unsigned iters) {
         msE = NowMs() - t0;
     }
 
+    // [F] ReplaceSnapshot over rows with DUPLICATE identity keys - the mDNS
+    // shape, where a real table holds many rows that share one 4-tuple + pid
+    // (62 identical rows were measured on this host, and that is exactly the
+    // case the per-key pairing queue exists for). Previous rows are indexed as
+    // a queue per key, and taking the FRONT off a vector shifts everything
+    // behind it, so one key of N rows costs O(N^2) where it should cost O(N).
+    // Stage [A] never sees this: its rows all have distinct identity keys, so
+    // every queue there is length 1 and the shift is free.
+    double msF = 0;
+    {
+        constexpr size_t kDupGroup = 62;   // the measured real-world worst case
+        std::vector<Connection> dup = base;
+        for (size_t i = 0; i < dup.size(); ++i) {
+            const size_t g = i / kDupGroup;
+            const UINT port = static_cast<UINT>(10000 + g * 7);
+            dup[i].family = AF_INET;
+            dup[i].protocol = IPPROTO_UDP;      // one shared UDP endpoint
+            dup[i].state = 0;                   // UDP carries no TCP state
+            dup[i].localPort = port;
+            dup[i].remotePort = 5353;
+            dup[i].pid = static_cast<DWORD>(4000 + g);
+            ::InetPtonW(AF_INET, L"224.0.0.251", &dup[i].local4);
+            ::InetPtonW(AF_INET, L"224.0.0.251", &dup[i].remote4);
+        }
+        ConnectionStore dupStore;
+        for (unsigned it = 0; it < iters; ++it) {
+            std::vector<Connection> copy = dup;   // untimed: pure input setup
+            const double s0 = NowMs();
+            dupStore.ReplaceSnapshot(std::move(copy));
+            msF += NowMs() - s0;
+        }
+    }
+
     const auto rowSpeed = [rows, iters](double totalMs) {
         if (totalMs <= 0.0) return 0.0;
         return (static_cast<double>(rows) * iters) / totalMs / 1000.0;
@@ -5353,6 +5386,7 @@ std::string RunBench(unsigned rows, unsigned iters) {
         {"[C] SetSort + SetView (toggle direction)  ", msC},
         {"[D] GetColumnText (all columns x rows)    ", msD},
         {"[E] ResolveBatch (rows share pids)        ", msE},
+        {"[F] ReplaceSnapshot (62-way dup keys)     ", msF},
     };
     for (const Stage& s : stages) {
         ::sprintf_s(line, "  %s  %9.3f ms/op  %8.2f Mrow/s\r\n", s.name,
@@ -5360,10 +5394,11 @@ std::string RunBench(unsigned rows, unsigned iters) {
         out += line;
     }
     ::sprintf_s(line, "  total timed: %.1f ms\r\n",
-                msA + msB + msC + msD + msE);
+                msA + msB + msC + msD + msE + msF);
     out += line;
     out += "  (QueryPerformanceCounter; [D] iterates the current view, "
-           "[E] resolves pid->name, other stages scale with 'rows')\r\n";
+           "[E] resolves pid->name, [F] pairs duplicate keys, other stages "
+           "scale with 'rows')\r\n";
     return out;
 }
 
