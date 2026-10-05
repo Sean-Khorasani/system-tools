@@ -653,6 +653,11 @@ uint64_t GeoIpDatabase::RecordCount() const { return recordCount_; }
 uint64_t GeoIpDatabase::NodeCount() const { return nodeCount_; }
 
 bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
+    // Stays const wchar_t*: widening it to std::wstring would make all fifteen
+    // literal call sites below build a temporary string on an error path, for
+    // no benefit - the one message that needs a value in it builds its own
+    // string and hands over .c_str(), which is copied before it goes out of
+    // scope.
     const auto fail = [error, this](const wchar_t* what) {
         if (error != nullptr) *error = what;
         // Release any partial mapping on failure. On an early failure
@@ -763,15 +768,46 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
         !meta.ReadUint(pos, &recordBits)) {
         return fail(L"The GeoIP database metadata is missing node_count or record_size.");
     }
+    // Two DISTINCT faults, reported separately: a file with no tree at all and
+    // a file whose records this reader cannot address have different causes and
+    // different fixes, and collapsing them into one sentence is what made both
+    // reach the user as an unactionable "cannot load database" (F5.13).
+    if (nodeCount == 0) {
+        return fail(L"The GeoIP database declares node_count = 0, so it contains "
+                    L"no search tree.");
+    }
     // The spec allows exactly three record sizes: 24, 28 and 32 bits. 28 is not
     // a whole number of bytes - a node is 7 of them, with the two records'
     // overflow nibbles sharing the middle byte - so the old "whole bytes only"
     // check rejected it, and 28 is what essentially every real MaxMind database
     // uses. Rejecting it meant no real database could ever load.
-    if (nodeCount == 0 ||
-        (recordBits != kRecordBits24 && recordBits != kRecordBits28 &&
-         recordBits != kRecordBits32)) {
-        return fail(L"The GeoIP database describes an impossible search tree.");
+    //
+    // The message carries the value that was REFUSED. record_size = 4 is the
+    // case reported as a silent rejection: 4 is the size in bytes, and 4 bytes
+    // is the 32 bits already accepted - one unit away from loadable, which a
+    // bare "impossible search tree" does not hint at. Nothing here trusts the
+    // file, but neither does it hide what the file said.
+    if (recordBits != kRecordBits24 && recordBits != kRecordBits28 &&
+        recordBits != kRecordBits32) {
+        std::wstring msg =
+            L"The GeoIP database declares record_size = " +
+            std::to_wstring(recordBits) +
+            L", which is not one of the sizes this reader supports "
+            L"(24, 28 or 32 bits).";
+        // Exact comparisons against literals, deliberately: recordBits comes
+        // straight out of an untrusted file, so nothing is COMPUTED from it -
+        // a value that does not match either falls through with the plain
+        // message above rather than reaching a multiplication.
+        if (recordBits == 4) {
+            msg += L" 4 is a size in bytes; 4 bytes is 32 bits, so this file may "
+                   L"be stating the record size in bytes rather than bits.";
+        } else if (recordBits == 3) {
+            msg += L" 3 is a size in bytes; 3 bytes is 24 bits, so this file may "
+                   L"be stating the record size in bytes rather than bits.";
+        }
+        // 'msg' outlives this call: fail() copies what it is given, and it
+        // only ever runs on a path that is about to return false.
+        return fail(msg.c_str());
     }
     const bool record28 = (recordBits == kRecordBits28);
     const size_t recordBytes = static_cast<size_t>(

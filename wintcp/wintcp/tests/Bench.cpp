@@ -298,10 +298,16 @@ void MmAwkwardCountry(std::vector<unsigned char>* out, unsigned ptrSize,
 // front of its IPv4 half, and says ip_version 6 in the metadata. 'awkward'
 // writes each record as MmAwkwardCountry does and parks the shared key string
 // at the fixed offset its size code needs.
+// 'declaredRecordBits', when non-zero, overrides ONLY the record_size written
+// into metadata; the tree is still laid out for 'recordBits'. That produces a
+// file which is well formed apart from what it CLAIMS - the input F5.13's
+// diagnostic exists for, and one that cannot be reached by asking the builder
+// for a bogus layout, because a 4-bit record has no byte size to write.
 std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entries,
                                               int depth, unsigned recordBits,
                                               bool ipv6Tree = false,
-                                              bool awkward = false) {
+                                              bool awkward = false,
+                                              unsigned declaredRecordBits = 0) {
     // An ip_version 6 file holds the whole IPv4 space at ::/96, so the IPv4
     // half sits 96 zero-bit steps below the root and the tree needs those 96
     // nodes in front of it. Note that no shipped metadata says WHERE - the spec
@@ -398,6 +404,13 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     // Each entry claims the node its first (depth-1) bits lead to; both halves
     // carry the pointer, so the prefix's last bit does not matter.
     for (size_t k = 0; k < entries.size(); ++k) {
+        // depth 0 builds an EMPTY tree - node_count 0 - which is the malformed
+        // file the reader must refuse by name (F5.13). There is no node for an
+        // entry to claim and there cannot be: the file is rejected at its
+        // metadata, so the entries below travel only to give the data section
+        // something to hold. Indexing the empty 'vector' in setRec instead
+        // would write past it.
+        if (nodeCount == 0) break;
         int sub = 0;
         for (int d = 0; d < depth - 1; ++d) {
             const int bit = (int)((entries[k].prefix >> (31 - d)) & 1u);
@@ -451,7 +464,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     MmStr(&type_, "Country");
     MmUint(&ver, kMmUint16, ipv6Tree ? 6 : 4);  // ip_version, uint16
     MmUint(&count, kMmUint32, static_cast<uint64_t>(nodeCount));
-    MmUint(&size_, kMmUint16, recordBits);          // record_size, uint16
+    // record_size, uint16 - unless the caller wants metadata to claim
+    // something else (see the declaration of this function).
+    MmUint(&size_, kMmUint16, declaredRecordBits != 0
+                                  ? static_cast<uint64_t>(declaredRecordBits)
+                                  : static_cast<uint64_t>(recordBits));
     const std::vector<MmPair> meta = {
         {"binary_format_major_version", major},
         {"binary_format_minor_version", minor},
@@ -495,12 +512,10 @@ std::wstring SyntheticDbPath() {
     return path;
 }
 
-// Writes 'db' to that file and loads it into '*out'. The tag names both checks
-// this reports, so a case that failed to BUILD says which database it was
-// instead of leaving the checks inside it quietly absent - which reads as a
-// higher pass rate, not as a failure, and is the worst way for a suite to break.
-bool LoadSyntheticDb(TestResult& r, const std::vector<unsigned char>& db,
-                     const char* tag, GeoIpDatabase* out) {
+// Writes 'db' to that file. Split out of LoadSyntheticDb so the rejection
+// check below shares it: two copies of this write would drift, and the second
+// one failing is not a test failure, it is a test that quietly stops testing.
+bool WriteSyntheticDb(const std::vector<unsigned char>& db) {
     const std::wstring path = SyntheticDbPath();
     bool wrote = false;
     HANDLE h = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
@@ -511,16 +526,48 @@ bool LoadSyntheticDb(TestResult& r, const std::vector<unsigned char>& db,
                 put == db.size();
         ::CloseHandle(h);
     }
+    return wrote;
+}
+
+// Writes 'db' to that file and loads it into '*out'. The tag names both checks
+// this reports, so a case that failed to BUILD says which database it was
+// instead of leaving the checks inside it quietly absent - which reads as a
+// higher pass rate, not as a failure, and is the worst way for a suite to break.
+bool LoadSyntheticDb(TestResult& r, const std::vector<unsigned char>& db,
+                     const char* tag, GeoIpDatabase* out) {
     const std::string wroteTag = std::string(tag) + "-wrote";
-    if (!wrote) {
+    if (!WriteSyntheticDb(db)) {
         Check(r, wroteTag.c_str(), false, "temp file");
         return false;
     }
     std::wstring err;
-    const bool loaded = out->Load(path, &err);
+    const bool loaded = out->Load(SyntheticDbPath(), &err);
     const std::string loadTag = std::string(tag) + "-load";
     Check(r, loadTag.c_str(), loaded, WideToUtf8(err));
     return loaded;
+}
+
+// The rejection half of LoadSyntheticDb: the load must FAIL, and the message
+// must contain 'needle'. Asserting only "it did not load" is satisfied by any
+// of a dozen unrelated breaks, so it pins nothing - this requires the reader to
+// say WHICH fault it found, which is the whole of F5.13. The file is deleted
+// here rather than left to the caller, because on the failure path there is no
+// "if it loaded" branch to hang a cleanup on, and a leftover bad database would
+// be re-read by whatever ran next.
+void CheckSyntheticDbRejected(TestResult& r, const std::vector<unsigned char>& db,
+                              const char* name, const char* needle) {
+    if (!WriteSyntheticDb(db)) {
+        const std::string wroteTag = std::string(name) + "-wrote";
+        Check(r, wroteTag.c_str(), false, "temp file");
+        return;
+    }
+    GeoIpDatabase g;
+    std::wstring err;
+    const bool loaded = g.Load(SyntheticDbPath(), &err);
+    const std::string text = WideToUtf8(err);
+    const bool named = text.find(needle) != std::string::npos;
+    Check(r, name, !loaded && named, text);
+    ::DeleteFileW(SyntheticDbPath().c_str());
 }
 
 void CheckSyntheticGeoIp(TestResult& r) {
@@ -638,6 +685,18 @@ void CheckSyntheticGeoIp(TestResult& r) {
         }
         ::DeleteFileW(SyntheticDbPath().c_str());
     }
+
+    // F5.13. Both faults below used to be reported by ONE sentence
+    // ("describes an impossible search tree") which the CLI then surfaced as a
+    // bare "cannot load database" - a user with a bad file was told nothing
+    // they could act on. The first database is laid out for 24-bit records, so
+    // the ONLY thing wrong with it is the record_size metadata claims; the
+    // second has a valid record size and no tree at all. Each must be refused,
+    // and refused by name, with the offending value in the message.
+    CheckSyntheticDbRejected(r, BuildSyntheticMmdb(entries, 11, 24, false, false, 4),
+                             "geoip.reject-record-size-4", "record_size = 4");
+    CheckSyntheticDbRejected(r, BuildSyntheticMmdb(entries, 0, 24),
+                             "geoip.reject-node-count-0", "node_count = 0");
 }
 
 
