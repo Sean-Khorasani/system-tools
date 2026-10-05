@@ -70,7 +70,7 @@ Exit `2` and exit `3` differ on purpose. `2` means the command line was wrong; `
 
 ```bat
 > wintcp.exe kill --pid 999999
-kill PID 999999: refused: pass --yes to confirm (or --dry-run to preview).
+kill PID 999999: refused: pass --yes to proceed (or --dry-run to preview).
 :: exit code 3
 
 > wintcp.exe kill --pid 999999 --dry-run
@@ -78,7 +78,7 @@ kill PID 999999
 :: exit code 0
 
 > wintcp.exe kill --pid 4
-kill: refusing PID 4.
+kill: refusing PID 4: That row has no process that can be ended. PID 0 and the System pseudo-process do not own a real image.
 :: exit code 2 — a bad ARGUMENT, not a missing permission
 ```
 
@@ -155,7 +155,7 @@ Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separate
 | Process | `process`, `service`, `path` |
 | Live, per process | `traffic`, `rx`, `tx`, `nettotal`, `cpu`, `mem`, `disk`, `procspeed` |
 | Live, per connection | `duration`, `bandwidth` (header *Speed*), `rtt`, `minrtt`, `cwnd`, `retrans`, `tls` |
-| Enrichment | `host` (needs `--dns`), `country` (needs `--db`), `pinned` (bookmark color; header *Bookmarks*), `note` (the bookmark's text; header *Note*) |
+| Enrichment | `host` (needs `--dns`), `country` (needs `--db`), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
 
 Value conventions:
 
@@ -295,14 +295,16 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 | `save --name N [--filter F] [--sort COL]` | Stores a view. Overwriting an existing name exits `3` unless `--force` is given. |
 | `list` | All saved views (`table` or `json`). |
 | `show --name N` | The stored view as JSON. The state includes filter, sort column and direction, grouping, and the column mask (`colVisible`, a bitmask). |
-| `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing exits `1`, the same contract as `list`. |
+| `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing prints only its header and exits `0`, exactly as `list` does; `apply` takes no `--quiet` (that is `2`), so there is no match-or-not exit code to branch on. |
 | `delete --name N` | Removes a preset. |
 
 ### `geoip`
 
-`geoip info --db FILE` reports a database's version, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
+`geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
 
-Both 24-bit and 28-bit record layouts are supported (28-bit is what current MaxMind databases use).
+Both sub-commands want `--db FILE`: without it they exit `2`, and a file that will not load exits `1` carrying the parser's reason. Neither ever fetches anything — obtaining a database, and keeping it current, is covered in [GeoIP database](../README.md#geoip-database).
+
+Record layouts of 24, 28 and 32 bits are all supported (28 is what essentially every real MaxMind database uses). Any other declared size is refused by name, including `record_size = 4`, which is the 32-bit layout stated in bytes rather than bits.
 
 ## Migrating from earlier builds
 

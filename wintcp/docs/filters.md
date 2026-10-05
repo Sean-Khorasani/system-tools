@@ -46,7 +46,7 @@ A `--select` selector must resolve to **exactly one live row**; see [Selectors](
 | `path:` | Executable path | `path:c:\bin`, `path:"program files"`. |
 | `host:` | Reverse-DNS name | CLI: needs `--dns`. |
 | `proto:` | Protocol or family | `proto:udp`, `proto:tcp`, `proto:ipv6`. |
-| `country:` | GeoIP country code | `country:de`. CLI: needs `--db`. |
+| `country:` | GeoIP country code | `country:de`. CLI: needs `--db` — where to get a database and what `--db` does is in [GeoIP database](../README.md#geoip-database). |
 | `tls:` | TLS summary | `tls:1.3`. |
 | `note:` | A bookmark's note | `note:vendor`. A bare `note:` means "has a note". |
 
@@ -79,13 +79,15 @@ Live readings are compared as **numbers**, not as text. `cpu:12` means "12 % or 
 | `disk:` | MB (bytes read + written) | `disk:1.5` |
 | `rx:`, `tx:`, `net:` | MB (bytes received, sent, total) | `rx:2.0`, `tx:1KB`, `tx:1MB-1GB`, `net:2.5` |
 | `duration:` | seconds, with `s` `m` `h` `d` suffixes | `duration:1h`, `duration:3600` |
-| `speed:` | per-connection rate | `speed:1KB` |
-| `rtt:` | milliseconds | `rtt:100` ("100 ms or worse") |
-| `retrans:` | bytes | `retrans:1KB` |
+| `speed:` | bytes per second (two samples) | `speed:1KB` |
+| `rtt:`, `minrtt:` | milliseconds | `rtt:100` ("100 ms or worse") |
+| `cwnd:`, `retrans:` | bytes | `cwnd:65536`, `retrans:1KB` |
 
-On the byte-based stat fields (`mem`, `disk`, `rx`, `tx`, `net`) a **bare number means megabytes**, and the suffixes `K`, `M`, `G` (also written `KB`, `MB`, `GB`) multiply. To ask for 2 KB write `rx:2KB`; `rx:2` means 2 MB. `retrans:` is expressed in bytes and the cookbook always writes an explicit unit; do the same.
+On the byte-based stat fields (`mem`, `disk`, `rx`, `tx`, `net`, and `speed`, where everything is per second) a **bare number means megabytes**, and the suffixes `K`, `M`, `G` (also written `KB`, `MB`, `GB`) multiply. To ask for 2 KB write `rx:2KB`; `rx:2` means 2 MB.
 
-The units are not uniform across fields: a bare `duration:3600` is 3600 **seconds**, a bare `mem:100` is 100 **MB**, and a bare `rtt:100` is 100 **ms**.
+**`cwnd:` and `retrans:` are byte counts.** A plain **integer** is a byte count (`retrans:1024`, `cwnd:65536`) and a value carrying a unit is scaled to bytes (`retrans:1KB`). Write the unit: a bare *decimal* with no unit is read as megabytes, exactly as on the other byte fields, so `retrans:1.5` means 1.5 MB and not 1.5 bytes. The cookbook always writes an explicit unit here; do the same.
+
+The units are not uniform across fields: a bare `duration:3600` is 3600 **seconds**, a bare `mem:100` is 100 **MB**, a bare `rtt:100` is 100 **ms**, and a bare `retrans:100` is 100 **bytes**.
 
 ## Quoting and negation
 
@@ -114,9 +116,9 @@ Each of these exists because the opposite behavior returns a plausible but wrong
    |---|---|
    | `host:` | `--dns` |
    | `country:` | `--db FILE` |
-   | `rx:` `tx:` `net:` `duration:` `speed:` `rtt:` `retrans:` | `--traffic` |
+   | `rx:` `tx:` `net:` `duration:` `speed:` `rtt:` `minrtt:` `cwnd:` `retrans:` | `--traffic` |
 
-   Without the switch the column is empty and the filter can only answer "no match". A `note:` on stderr names the missing switch, except under `--quiet`, where silence is the contract. A `--quiet` gate on an enrichment field without its switch therefore answers the wrong question; add the switch.
+   Without the switch the column stays unmeasured and the filter can only answer "no match". Every filter in the table except `duration:` names the missing switch in a `note:` on stderr; `duration:` stays silent on purpose, because a one-shot already prints the `0s` the filter is failing on, so the column itself shows why nothing matched. Advice is advisory: never fatal, never on stdout, and never under `--quiet`, where silence is the contract. A `--quiet` gate on an enrichment field without its switch therefore answers the wrong question; add the switch.
 5. **Per-connection rates are never invented.** `speed:` only matches rows whose bytes came from that socket's own counters. A per-process total is never divided across a process's connections.
 
 ## Selectors

@@ -130,6 +130,13 @@ call :t "country filter advice" "list --filter country:us --limit 1" 0 "add --db
 call :tout "country advice off stdout" "list --filter country:us --limit 1" "add --db"
 call :t "traffic filter advice" "list --filter tx:1KB --limit 1" 0 "add --traffic"
 call :tout "traffic advice off stdout" "list --filter tx:1KB --limit 1" "add --traffic"
+call :t "cwnd filter advice" "list --filter cwnd:1 --limit 1" 0 "add --traffic"
+REM SPEED's advice names BOTH facts a reader needs: the switch, and that a rate
+REM cannot be computed from one snapshot. Gating only "add --traffic" would
+REM have passed while `--filter speed:1KB` still matched nothing after the
+REM switch was added, so the marker pins the --count requirement too.
+call :t "speed filter advice" "list --filter speed:1KB --limit 1" 0 "--count 2"
+call :tout "speed advice off stdout" "list --filter speed:1KB --limit 1" "--count 2"
 REM D13, columns half: the same silent-empty failure for COLUMNS - an
 REM enrichment column with its switch off must name the switch on stderr,
 REM never on the stdout table, never fatal.

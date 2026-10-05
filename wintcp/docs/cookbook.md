@@ -152,7 +152,7 @@ No Windows tool has one. This is the recipe that makes the other three safe to s
 
 ```bat
 > wintcp.exe kill --pid 999999
-kill PID 999999: refused: pass --yes to confirm (or --dry-run to preview).
+kill PID 999999: refused: pass --yes to proceed (or --dry-run to preview).
 :: exit code 3
 
 > wintcp.exe kill --pid 999999 --dry-run
@@ -170,7 +170,7 @@ A bad target is a *different* exit code from a refusal, because they mean differ
 
 ```bat
 > wintcp.exe kill --pid 4
-kill: refusing PID 4.
+kill: refusing PID 4: That row has no process that can be ended. PID 0 and the System pseudo-process do not own a real image.
 :: exit code 2 — a bad ARGUMENT, not a missing permission
 ```
 
@@ -390,8 +390,7 @@ wintcp.exe list --traffic --sort rtt --desc --limit 4 --columns process,remote,r
 Process                      Remote address   Remote port        RTT    Min RTT          Cwnd       Retrans
 chrome.exe                   74.6.160.107             443         30         20       21.2 KB           0 B
 brave.exe                    185.199.110.133          443         17         15       16.6 KB           0 B
-cline.exe                    127.0.0.1              19536         <1          —       63.8 KB           0 B
-opencode.exe                 127.0.0.1              49374         <1          —       18.2 KB           0 B
+cline.exe                    127.0.0.1              19536         <1          -       63.8 KB           0 B
 ```
 
 Most data lost to retransmission first:
@@ -400,8 +399,6 @@ Most data lost to retransmission first:
 wintcp.exe list --traffic --sort retrans --desc --limit 4 --columns process,remote,rport,rtt,minrtt,cwnd,retrans
 ```
 
-<!-- TODO(maintainer): the original README showed this table under the `rtt:100` and `retrans:1KB` commands, which contradicts their thresholds (it contains rows with 25 ms, 83 ms, 768 B and 232 B). It is consistent with this retrans-sorted command, so it is shown here; please re-capture. -->
-
 ```text
 Process                      Remote address   Remote port        RTT    Min RTT          Cwnd       Retrans
 chrome.exe                   157.90.91.72             443        219        165       21.3 KB        4.5 KB
@@ -409,6 +406,8 @@ Telegram.exe                 149.154.167.92           443        235        171 
 brave.exe                    140.248.153.91           443         25          6       23.8 KB         768 B
 chrome.exe                   100.26.11.145            443         83         63       33.3 KB         232 B
 ```
+
+Yours will usually be thinner than this. `--traffic` reports what the kernel hands back per socket, and most rows are listening, closing or not TCP at all, so they carry an em-dash rather than a number; only a handful of connections per run answer at all. That em-dash means *not measured*, never *zero*, which is why `cwnd:` and `rtt:` as bare selectors mean "has a reading" and deliberately select nothing else.
 
 Read it as the diagnostic it is: the two rows losing the most to retransmission (4.5 KB and 2.8 KB) also have the **highest** RTTs, 219 ms and 235 ms, while the two below them have retransmitted almost nothing and sit at 25 ms and 83 ms. Those first two are losing packets on the path, and no amount of bandwidth will fix it.
 
@@ -662,20 +661,31 @@ wintcp.exe list --watch 2 --changes --event appear,state --format json --count 5
 **Needs administrator rights.** The capture filter is derived from the row you can see, so the capture is provably the right conversation.
 
 ```bat
-wintcp.exe list --filter "process:cloudflared.exe" --columns pid,process,local,remote,rport,state --limit 2
-wintcp.exe capture --select "pid:22180 remote:127.0.0.1 remote:port:49374" --secs 8 --yes
+wintcp.exe list --filter "state:estab exclude:127." --columns pid,process,local,remote,rport,state --limit 3
+wintcp.exe capture --select "pid:5172 remote:20.47.110.73 remote:port:443" --secs 8 --dry-run
 ```
 
-The command prints the plan, then a summary once the window closes:
+`--dry-run` stops after printing the plan, so you can see which conversation the selector picked before spending the window on it. Run once by hand, and this is the line:
 
 ```text
-capture <local address>:<port> -> <remote address>:<port> for 8s
+capture 10.0.0.92:16921 -> 20.47.110.73:443 for 8s
+```
+
+The real run prints that same plan, then a summary once the window closes:
+
+```text
 packets=<n> toServer=<n> toClient=<n> blocks=<n>
 ```
 
-<!-- TODO(maintainer): the original README showed a sample whose endpoints (10.0.0.92:21266 -> 162.159.140.220:443) did not match the selector above (127.0.0.1:49374), and whose toClient value (33554432) is exactly 2^25, which looks like a cap or counter limit rather than a measurement. Please re-capture a real sample and verify that figure. -->
-
 `toServer` and `toClient` are the reassembly result in each direction; `blocks` is the number of TCP segments parsed.
+
+Two things stop it before any of that, and both exit 1 with the reason rather than an empty table. They are worth knowing because the selector in the first line is exactly how you meet them:
+
+- **Loopback.** `pktmon` does not capture `127.0.0.1` or `::1` at all, so a selector that resolves to a loopback connection reports *the capture produced no packets* and then names loopback as the cause. This is the trap recipe 20 warns about: `exclude:127.` drops `127.` but leaves `::1` rows in the list, and a `::1` row always fails here.
+
+- **Idle.** No packets inside the window exits 1 with *No packets for this connection were captured*, blaming either a quiet conversation or one established before the capture began. Pick a busier row or lengthen `--secs`.
+
+Reassembly stops at a per-direction byte cap. A stream that reaches it reports the cap, and the summary then carries a note naming the direction that stopped: *that byte count is truncated - a floor, not a total.* Read it as "at least this much", never as the size of the stream. Without the note, a count of exactly the cap looks like a measurement.
 
 | Switch | Why it is in this command |
 |---|---|
@@ -734,12 +744,10 @@ wintcp.exe list --filter "state:listen lport:445" --columns process,path,pid,loc
 ```
 
 ```text
-Process                      Path                                                                                                       PID  Local address                 State
-System                       System                                                                                                       4  0.0.0.0                       LISTENING
-System                       ::                                                                                                          4  ::                            LISTENING
+Process                      Path                                                                                                       PID  Local address                            State
+System                       System                                                                                                       4  0.0.0.0                                  LISTENING
+System                       System                                                                                                       4  ::                                       LISTENING
 ```
-
-<!-- TODO(maintainer): in the second row the Path column shows `::` (the bind address) instead of the executable path that the IPv4 row of the same PID shows. This looks like a column or value mix-up in the CLI output rather than a real path; please check and re-capture. -->
 
 | Switch | Why it is in this command |
 |---|---|
@@ -837,7 +845,6 @@ wintcp.exe ps --filter "proto:udp" --sort conns --limit 3
 
 ```text
   PID  Process                      Conns   CPU%   Memory      Disk
-26404  opencode.exe                     2   0.5  260.5 MB    6.6 MB
 5172  Avira.Spotlight.Service.exe      2   0.3   24.3 MB   30.6 MB
 22180  cloudflared.exe                 10   0.3   45.1 MB   52.8 MB
 1940  svchost.exe                      2   0.0   21.0 MB  168.0 KB
@@ -899,7 +906,7 @@ wintcp.exe list --filter "note:""corporate dns""" --columns remote,rport,pinned 
 ```
 
 ```text
-Remote address   Remote port  Bookmarks
+Remote address   Remote port  bookmarks
 64.59.150.137             53  blue
 ```
 
@@ -943,7 +950,7 @@ bookmark colour updated.
 [
   {"address":"64.59.150.137","port":53,"tag":"Red","note":"confirmed with netops"}
 ]
-Remote address   Remote port  Bookmarks
+Remote address   Remote port  bookmarks
 64.59.150.137             53  red
 bookmark removed.
 ```
@@ -979,7 +986,7 @@ web
     0  —                            172.253.117.19            443
  5168  AnyDesk.exe                  107.155.105.90            443
  5172  Avira.Spotlight.Service.exe  20.47.110.73               443
-preset 'web' exists: pass --force to overwrite.
+preset 'web' exists: refused: pass --force to proceed (or --dry-run to preview).
 ```
 
 | Command | Why it is in this recipe |
@@ -989,7 +996,7 @@ preset 'web' exists: pass --force to overwrite.
 | `preset show` | The stored view as JSON. The state also carries the column mask and sort direction, which is why `colVisible` prints as a number: it is a bitmask. |
 | `preset apply --limit --columns` | The payoff. Output switches are layered **over** the preset rather than ignored: `--limit 10 --columns pid,process,remote,rport` is the web view, ten rows, four columns. The same presets appear in the GUI **File** menu. |
 
-An applied view that matches nothing exits `1`, the same contract `list` has, so a script can branch on it.
+An applied view that matches nothing prints only its header and exits `0`, exactly as a non-quiet `list` does. `preset apply` does not accept `--quiet` - that is exit `2` - so unlike `list` it offers no match-or-not exit code to branch on; branch on whether a data row was printed.
 
 ### 28. Excel-ready export with column selection
 

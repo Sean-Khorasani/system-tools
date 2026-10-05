@@ -1,8 +1,8 @@
 // SocketTraffic.cpp
-// See SocketTraffic.h. Everything here was validated on this machine by
-// probe2.exe (Temp\opencode\probe_net): as a standard user,
-// OpenProcess(PROCESS_DUP_HANDLE) + DuplicateHandle + WSAIoctl(SIO_TCP_INFO)
-// returns the exact per-socket BytesIn/BytesOut of another process.
+// See SocketTraffic.h. The core mechanism was validated before it was wired
+// in: as a standard user, OpenProcess(PROCESS_DUP_HANDLE) + DuplicateHandle +
+// WSAIoctl(SIO_TCP_INFO) returns the exact per-socket BytesIn/BytesOut of
+// another process.
 
 // mstcpip.h gates SIO_TCP_INFO / TCP_INFO_v0 behind
 // NTDDI_VERSION >= NTDDI_WIN10_RS2, and sdkddkver.h derives NTDDI_VERSION
@@ -811,7 +811,24 @@ void SocketTrafficSampler::ProbeTargetOne(const ProbeTarget& t,
         // traffic would retire to zero.
         if (src != nullptr) scratch.opened.insert(t.pid);
     }
-    if (src == nullptr) return;   // protected or already gone
+    // A slot that leaves here must still count as FINISHED. This was the only
+    // exit from this function that did not call scratch.Finish(): every other
+    // path (below) does, so `finished` undercounted the queue by one for every
+    // target whose process was protected or had already gone away.
+    //
+    // That matters because Sample() waits for `finished` to reach
+    // queue.size() and treats anything less as a pass that never completed.
+    // One protected process anywhere in the queue therefore made EVERY pass
+    // finish on the 250 ms no-progress window instead of on completion - and
+    // the shortfall was then misattributed: `inFlight` is derived from
+    // `reached - doneCount`, so the slots that were never counted looked like
+    // workers still inside a call, the last slots handed out were named as
+    // stalled, and RememberStalled put sockets that had done nothing wrong
+    // into the skip set to be ignored on every later pass.
+    if (src == nullptr) {
+        scratch.Finish();
+        return;   // protected or already gone
+    }
 
     HANDLE dup = nullptr;
     if (!::DuplicateHandle(src, reinterpret_cast<HANDLE>(t.handle),

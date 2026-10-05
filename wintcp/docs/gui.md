@@ -16,6 +16,7 @@ This page covers the desktop application. For the command-line mode see the [CLI
 - [Change log](#change-log)
 - [Performance graphs](#performance-graphs)
 - [Traffic counters in the GUI](#traffic-counters-in-the-gui)
+- [GeoIP in the window](#geoip-in-the-window)
 - [Windows integration](#windows-integration)
 - [Settings and reset](#settings-and-reset)
 
@@ -151,6 +152,16 @@ The status bar's second pane reports which source is feeding the columns:
 | `Traffic off — needs admin` | No source can run on this system. |
 
 Full details, including limits, are in [Traffic counters](traffic.md).
+
+## GeoIP in the window
+
+**View → GeoIP database (.mmdb)...** opens a picker titled *Open a MaxMind .mmdb database*, filtered to `*.mmdb`. Pick a file and the `Country` column fills at once rather than at the next refresh: choosing a file is a request to see results, not to wait for a tick. Cancelling the picker is not an error and changes nothing.
+
+A file that will not load reports the parser's own reason under **GeoIP database not loaded**, because a missing file, a truncated one, a file that is not an MMDB, and a database declaring an unsupported record size are four different problems that need four different answers from you.
+
+Reloading works on a live session: picking another file replaces the previous one, and a peer that moves out of the new database's coverage has its country **cleared** rather than keeping a stale answer — the one way a swap could look like it worked while showing the wrong country. Nothing is downloaded either way. [GeoIP database](../README.md#geoip-database) explains why not, where a free `GeoLite2-Country.mmdb` comes from, and how `geoipupdate` keeps it current.
+
+**The choice does not survive a restart.** Window placement, columns, sort, filter, always-on-top and tray all persist in `HKCU\Software\WinTCP`; the database path is not among them, so a relaunched window opens with an empty `Country` column and the file has to be picked again. That is a gap in the settings schema rather than a statement that country data is optional. Until the path is stored, a workflow that needs it on every launch either re-picks the file or uses the command line, where `--db FILE` is explicit per run — and `list --watch --db FILE` re-reads the file on every tick, so a refreshed database shows up without restarting anything.
 
 ## Windows integration
 

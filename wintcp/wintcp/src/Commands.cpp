@@ -932,14 +932,26 @@ struct PrintSelection {
 // The pre-join pass filtered on the empty column, so `sel.pids` came out EMPTY,
 // so no PID was ever sampled, so the filter could only ever answer "no match" -
 // and the columns it was asking about were about to be filled on rows that had
-// already been discarded. `speed:` never showed this because it needs two
-// snapshots, so it is empty on the first one anyway.
+// already been discarded.
+//
+// SPEED was the last field added here, and it looked exempt for a reason that
+// turns out not to be one: it needs two snapshots, so it is empty on the first
+// and "would not have matched anyway". That only describes tick 1. The view is
+// filtered BEFORE the join, the filtered view is what yields sel.pids, and
+// JoinTrafficPids returns at once on an empty PID set - so the scan that would
+// have filled the column on tick 2 never runs, and every tick after it is
+// filtered against the same empty column. The column stays empty BECAUSE the
+// filter is present, which reads to the user as "no row matches".
+// Measured: `list --traffic --watch 1 --count 2 --filter "speed:0"` printed no
+// data rows on either tick, while the same command WITHOUT the filter printed
+// `idle` on the second tick.
 bool DependsOnEnrichment(FilterField f) {
     return f == FilterField::Rx || f == FilterField::Tx ||
            f == FilterField::Net || f == FilterField::Country ||
            f == FilterField::Host || f == FilterField::Duration ||
            f == FilterField::Rtt || f == FilterField::MinRtt ||
-           f == FilterField::Cwnd || f == FilterField::Retrans;
+           f == FilterField::Cwnd || f == FilterField::Retrans ||
+           f == FilterField::Speed;
 }
 
 // True when any clause of 'filter' needs an enrichment join first. Negated
@@ -1011,7 +1023,7 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
                 if (!named.empty()) named += ", ";
                 named += n;
             };
-            bool anyRtt = false, anyByte = false;
+            bool anyRtt = false, anyByte = false, anySpeed = false;
             for (const FilterClause& cl : all) {
                 if (!DependsOnEnrichment(cl.field)) continue;
                 switch (cl.field) {
@@ -1022,6 +1034,11 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
                     case FilterField::Rx:     addName("\"rx:\""); anyByte = true; break;
                     case FilterField::Tx:     addName("\"tx:\""); anyByte = true; break;
                     case FilterField::Net:    addName("\"net:\""); anyByte = true; break;
+                    // Speed is not a "traffic total" and must not be described
+                    // as one: it is a RATE, and a rate takes two samples, so
+                    // naming --traffic alone would send the reader into a
+                    // second silent-empty run. Both facts go in the note.
+                    case FilterField::Speed:  addName("\"speed:\""); anySpeed = true; break;
                     default: break;
                 }
             }
@@ -1029,6 +1046,10 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
                 out += "filter: " + named +
                        " match TCP congestion state read from the kernel's "
                        "SIO_TCP_INFO; add --traffic.\r\n";
+            } else if (anySpeed) {
+                out += "filter: " + named +
+                       " is a rate between two samples of the same socket; add "
+                       "--traffic and re-run with --watch 1 --count 2.\r\n";
             } else if (!named.empty()) {
                 out += "filter: " + named +
                        " match traffic totals; add --traffic.\r\n";
@@ -2715,6 +2736,27 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
                 static_cast<unsigned long long>(cr.toClient.bytes.size()),
                 static_cast<unsigned long long>(cr.blocksSeen));
     r.out = plan + buf;
+    // A direction that hit the in-memory reassembly cap reports the CAP, not a
+    // measurement, and that figure is indistinguishable from a real one on the
+    // line above. ReasmResult::truncated exists for exactly this and the hex
+    // view already honours it; printing the number without saying so would let
+    // a reader treat 33554432 as "this stream carried 32 MB" when the truth is
+    // "at least 32 MB, and we stopped looking". So name the direction that
+    // stopped, without the limit itself - the cap is an implementation detail
+    // that may move, and a stale number here would be a second thing to keep
+    // true.
+    if (cr.toServer.truncated || cr.toClient.truncated) {
+        std::string capped;
+        if (cr.toServer.truncated && cr.toClient.truncated)
+            capped = "toServer and toClient";
+        else if (cr.toServer.truncated)
+            capped = "toServer";
+        else
+            capped = "toClient";
+        r.out += "note: " + capped +
+                 " reached the reassembly cap, so that byte count is truncated "
+                 "- a floor, not a total.\r\n";
+    }
     return r;
 }
 

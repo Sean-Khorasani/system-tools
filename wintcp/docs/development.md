@@ -73,7 +73,7 @@ build\tests\wintcp-tests.exe bench 100000 10   :: time the view pipeline
 
 The checks are not padding. Each pins a decision that is easy to get wrong and impossible to eyeball in a list: that 12 identical mDNS sockets produce **zero** change events on a repeat snapshot; that a per-PID byte total is refused as a per-connection rate while a per-socket one is accepted; that a bookmark on port 9999 does not mark a live port 443; that `--event appear` prints no DISAPPEAR; that a count nobody measured is not printed. Those were all real defects.
 
-**A check count is not a coverage figure.** There is no coverage instrumentation in this project, so "512 checks" says how much was *written*, not how much of the code was *exercised*.
+**A check count is not a coverage figure.** There is no coverage instrumentation in this project, so a count like `PASS 514 / FAIL 0` says how much was *written*, not how much of the code was *exercised*. The number moves whenever a defect becomes a regression test; the gates report it, nothing quotes it.
 
 ### Gate scripts
 

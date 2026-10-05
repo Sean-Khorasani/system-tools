@@ -28,6 +28,7 @@ mdns.exe    0.1 %  0 B / 4.0 KB      UDPv4  0.0.0.0        5353  *:*            
 - [Highlights](#highlights)
 - [Quick start](#quick-start)
 - [Requirements and permissions](#requirements-and-permissions)
+- [GeoIP database](#geoip-database)
 - [Command-line overview](#command-line-overview)
 - [The filter language](#the-filter-language)
 - [Safety model](#safety-model)
@@ -100,9 +101,60 @@ Everything else runs as a standard user.
 
 Run unelevated, a privileged command prints a clear message and exits non-zero without partial effects. WinTCP never prompts for or attempts elevation on its own.
 
-### GeoIP database
+## GeoIP database
 
-MaxMind's license does not allow redistributing its databases, so `--db` takes the path to a `.mmdb` file you already have (for example `GeoLite2-Country.mmdb`). Without `--db` the Country column is empty and nothing else changes. Loopback, private (RFC 1918), CGNAT, link-local and multicast addresses are never assigned a country: "not a country" and "country unknown" are different answers.
+WinTCP ships no GeoIP database and never downloads one. That is deliberate twice over: MaxMind's licence does not permit redistributing its files, so there is nothing to bundle, and a network-inspection tool that quietly fetches several megabytes from a third party on every machine it runs on is a tool that phones home. You supply a `.mmdb` file you already have; every lookup runs against that local file, and nothing about your connections leaves the machine.
+
+Without one, the `Country` column is empty and nothing else changes: no command fails, no filter silently widens, and a `country:` clause simply finds nothing.
+
+### Getting a GeoLite2 database
+
+`GeoLite2-Country.mmdb` is free; obtaining one just requires an account, which is why this section is instructions rather than a download link.
+
+1. Create a free account at <https://www.maxmind.com/en/geolite2/signup>. The e-mail address you supply becomes the account's username.
+2. Sign in and open **Account → Download Databases** (<https://www.maxmind.com/en/accounts/current/geoip/downloads>). The **Download Links** column offers **Get Permalink(s)** per edition: take `GeoLite2-Country`, authenticate the link with your account ID and license key, and unzip the result.
+3. Keep the path — that is what `--db` takes.
+
+The file is refreshed on a schedule, so treat it as something you re-fetch rather than something you install once. MaxMind's own [`geoipupdate`](https://github.com/maxmind/geoipupdate/releases) does that for you and ships a Windows zip: it reads a `GeoIP.conf` holding your `AccountID`, your `LicenseKey` and the `EditionIDs` you asked for (here `GeoLite2-Country`) and writes the downloaded database files into `DatabaseDirectory`. A pre-filled config is available from <https://www.maxmind.com/en/accounts/current/license-key/GeoIP.conf>, and on Windows `geoipupdate` looks in `%ProgramData%\MaxMind\GeoIPUpdate\GeoIP.conf` by default. Point `--db` at whichever directory you configured. Downloads are rate-limited: over an account's limit answers HTTP `429`, never a partial file.
+
+### Attaching it
+
+| Entry point | What you do |
+|---|---|
+| CLI | Pass `--db FILE` to `list`, `geoip info` or `geoip lookup`. It covers that run's printed rows only, so the next run needs it again. |
+| GUI | **View → GeoIP database (.mmdb)...** opens a picker filtered to `*.mmdb`, and the column fills immediately rather than at the next refresh. The [GUI guide](docs/gui.md#geoip-in-the-window) covers what happens to that choice across a restart. |
+
+### What the commands report
+
+`geoip info --db FILE` prints one line:
+
+```text
+<database_type>, <records> records, <nodes> nodes, <bytes> bytes
+```
+
+The four fields are the file's own `database_type` metadata (for MaxMind's country file, `GeoLite2-Country`), its record count, its search-tree node count and its size on disk. It is the first thing to check when the column is empty, because an empty cell is otherwise ambiguous between "no database attached" and "attached, but no entry for this address".
+
+`geoip lookup --db FILE <ip>` answers a single address with its two-letter code, or `—` when it has none.
+
+Exit codes are `0` for an answer, `2` for the command being used wrongly (`--db` missing, no address, or an argument that is not an IP), and `1` for a file that was there but would not load — truncated, not an MMDB at all, or declaring a record size this reader refuses. The message says which.
+
+### Addresses that are never a country
+
+Loopback, the RFC 1918 private ranges, CGNAT (`100.64/10`), link-local, the benchmarking and documentation blocks, multicast and the reserved/broadcast range are all rejected **before** the database is consulted. For IPv6 the same applies to `::1`, unique-local `fc00::/7`, link-local `fe80::/10`, `2001:db8::/32`, multicast and the discard-only range. Such a row reads `—` even with a database loaded, and even where a registry happens to hold a row for the range.
+
+That is the difference worth keeping straight: **"not a country"** is a fact about the address, while **"country unknown"** means no database is attached.
+
+### What an `.mmdb` file is
+
+A MaxMind DB is one binary file laid out as `[search tree][16-byte separator][data section][marker][metadata]`, built to be memory-mapped rather than loaded into a database engine. The tree's branches spell out IP prefixes; the data section holds the records those branches point at; a marker then a metadata block close the file, describing what it is — node count, record size, `database_type`, build time. Looking an address up is a walk down the tree bit by bit followed by one offset read, which is why `--db` costs a memory map and a binary search per printed row and nothing else.
+
+The tree stores two pointers per node at one of three widths the format allows: **24, 28 or 32 bits**. 28 is not a whole number of bytes — a node is 7 of them — and it is what essentially every real MaxMind database uses. All three load. Anything else is refused with the value the file declared, including the common `record_size = 4`, which is 4 *bytes* (that is 32 bits) written in the wrong unit; the refusal says so instead of reporting an impossible search tree.
+
+### Also about GeoIP
+
+- [CLI reference → `geoip`](docs/cli.md#geoip) — the two sub-commands and when `info` is the right first question.
+- [Cookbook → recipe 9](docs/cookbook.md#9-country-watchdog-gated-on-the-answer) — a country filter gated as an automation predicate.
+- [Filter language → `country:`](docs/filters.md#field-matches) — which switches each enrichment clause needs.
 
 ## Command-line overview
 
@@ -125,7 +177,7 @@ Usage: wintcp.exe <command> [switches]
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | Failure or empty result: no row matched, target not found, or the operation failed. |
+| `1` | Failure or empty result: a `--select` matched nothing, `list --quiet` matched nothing, target not found, or the operation failed. |
 | `2` | Bad arguments, including a switch the command does not accept. |
 | `3` | Refused: a mutating command was run without `--yes`. |
 

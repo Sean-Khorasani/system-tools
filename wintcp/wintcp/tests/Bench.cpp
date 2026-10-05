@@ -1289,6 +1289,21 @@ TestResult RunSelfTest() {
                   !DependsOnEnrichment(FilterField::Pid) &&
                   !DependsOnEnrichment(FilterField::State));
 
+        // SPEED is joined by the same scan, so it must be held back too - and
+        // it is the one that hides the failure, because a rate is empty on tick
+        // 1 whatever we do. Left out, the pre-pass filtered the view on an
+        // empty Speed column, the empty view produced an empty PID set, and
+        // JoinTrafficPids bailed out before the scan that fills the column had
+        // run: `--watch 1 --count 2 --filter "speed:0"` then printed 0 rows on
+        // both ticks while the unfiltered run printed `idle` on tick 2. The
+        // column was empty BECAUSE of the filter, which reads as "no match".
+        Check(r, "prejoin.speed-is-a-joined-column",
+              DependsOnEnrichment(FilterField::Speed) &&
+                  HasEnrichmentClause(L"speed:1KB") &&
+                  PreJoinClauses(L"speed:1KB").empty() &&
+                  // Still only the joined clauses are held back.
+                  PreJoinClauses(L"proto:tcp speed:1KB").size() == 1);
+
         Check(r, "prejoin.which-filters-need-it",
               HasEnrichmentClause(L"tx:1GB") &&
                   HasEnrichmentClause(L"proto:tcp country:de") &&
@@ -2166,6 +2181,27 @@ TestResult RunSelfTest() {
                   !MatchFilter(un.Rows()[0], Prog(L"cwnd:0")) &&
                   !MatchFilter(un.Rows()[0], Prog(L"retrans:0")));
 
+        // A BYTE SUFFIX must be a threshold, not a hole. `retrans:1KB` used to
+        // match EVERY row carrying a reading - including rows below 1024 bytes
+        // - because the parse sat in an `if` inside the branch: ParseNumberRange
+        // rejects a non-digit, cl.text was left empty, and an empty needle is a
+        // match in HasLowerSubstring. So a threshold silently became "all of
+        // them", straight against `help list`'s "never matches all". The unit
+        // suffixes are now parsed, so this asserts both sides of the boundary.
+        Check(r, "g6.byte-suffix-is-a-threshold",
+              MatchFilter(fl.Rows()[0], Prog(L"retrans:1KB")) &&
+                  !MatchFilter(fl.Rows()[0], Prog(L"retrans:3KB")) &&
+                  MatchFilter(fl.Rows()[0], Prog(L"cwnd:1KB")) &&
+                  !MatchFilter(fl.Rows()[0], Prog(L"cwnd:20KB")));
+
+        // A value that is not a number at all falls through to the text clause
+        // and matches nothing here. It must never fall back to "everything":
+        // that is the same defect, reached by a different spelling.
+        Check(r, "g6.unparsable-value-matches-nothing",
+              !MatchFilter(fl.Rows()[0], Prog(L"rtt:100ms")) &&
+                  !MatchFilter(fl.Rows()[0], Prog(L"retrans:abc")) &&
+                  !MatchFilter(fl.Rows()[0], Prog(L"cwnd:zzz")));
+
         // (g) THE COLUMN NAMES round-trip, which is what stops `help list` and
         //     the README advertising a column that cannot be typed.
         Check(r, "g6.column-names-resolve",
@@ -2994,7 +3030,13 @@ TestResult RunSelfTest() {
                                             !matches(L"country:france", c));
         Check(r, "filter.match.tls", matches(L"tls:example", c) &&
                                           matches(L"tls:1.3", c));
-        Check(r, "filter.match.speed", matches(L"speed:4.0", c));
+        // `speed:` is a THRESHOLD, not a substring of the printed cell. It used
+        // to compare against FormatBytes(4096) == "4.0 KB", so `speed:4.0`
+        // passed as a substring and `speed:1KB` - the example filters.md gives -
+        // could never match anything, because FormatBytes never emits "1kb".
+        Check(r, "filter.match.speed",
+              matches(L"speed:4KB", c) && !matches(L"speed:8KB", c) &&
+                  matches(L"speed:", c));
         Check(r, "filter.match.duration", matches(L"duration:1h", c));
 
         // A row with no reading must not match a filter on that field.

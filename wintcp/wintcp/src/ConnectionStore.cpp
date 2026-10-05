@@ -175,11 +175,12 @@ bool ParseNumberRange(const std::wstring& v, long long& lo, long long& hi) {
     return true;
 }
 
-// The live-stat filter fields (cpu / mem / dis. / rx / tx / net).
+// The live-stat filter fields (cpu / mem / disk / rx / tx / net / speed).
 bool IsStatField(FilterField f) {
     return f == FilterField::Cpu || f == FilterField::Mem ||
            f == FilterField::Disk || f == FilterField::Rx ||
-           f == FilterField::Tx || f == FilterField::Net;
+           f == FilterField::Tx || f == FilterField::Net ||
+           f == FilterField::Speed;
 }
 
 // One threshold in a stat field's own unit, not a substring of the printed
@@ -736,29 +737,44 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
         } else if ((cl.field == FilterField::Rtt ||
                     cl.field == FilterField::MinRtt ||
                     cl.field == FilterField::Cwnd ||
-                    cl.field == FilterField::Retrans) && !value.empty()) {
-            // G6: a plain integer threshold in the units the column shows - ms
-            // for the RTTs, bytes for cwnd and retransmits. `rtt:100` is
-            // "100 ms or worse", which is the question someone as.ing for it
-            // has. Deliberately NOT routed through ParseStatRange: that would
-            // ma.e `rtt:1M` mean 1 megabyte of latency, which is a jo.e waiting
-            // to happen, and would require a byte suffix on a time value.
-            if (ParseNumberRange(value, lo, hi)) {
-                cl.numeric = true;
-                cl.lo = lo;
-                // A BARE value is "at least this much", with NO upper bound -
-                // the same rule `duration:1h` and `mem:100` follow. It is not
-                // ParseNumberRange's default, and that default is right for the
-                // fields that use it (a port or a PID is an exact value: `pid:42`
-                // must not match pid 4200). For a threshold, lo == hi would mean
-                // `rtt:20` matches only a connection whose RTT is exactly 20 ms,
-                // which is not a threshold at all and is the sort of thing that
-                // ships because "it parsed" was taken for "it wor.s". Measured:
-                // `rtt:20` returned 0 rows against a row reading 24.
-                cl.hi = (value.find(L'-') == std::wstring::npos)
-                            ? LLONG_MAX
-                            : hi;
-            }
+                    cl.field == FilterField::Retrans) && !value.empty() &&
+                   (ParseNumberRange(value, lo, hi) ||
+                    ((cl.field == FilterField::Cwnd ||
+                      cl.field == FilterField::Retrans) &&
+                     ParseStatRange(value, false, &lo, &hi)))) {
+            // G6: a threshold in the units the column shows - ms for the RTTs,
+            // bytes for cwnd and retransmits. `rtt:100` is "100 ms or worse".
+            // The two time fields are deliberately NOT routed through
+            // ParseStatRange: that would make `rtt:1M` mean 1 megabyte of
+            // latency, which is a joke waiting to happen.
+            //
+            // The parse is part of the branch CONDITION on purpose. It used to
+            // be an `if` inside the body, so a value the number parser rejected
+            // - `retrans:1KB`, whose suffix is not a digit - left BOTH
+            // cl.numeric false and cl.text unset. That empty text then reached
+            // HasLowerSubstring, which returns true for an empty needle, so a
+            // threshold silently degraded into "matches every row that has a
+            // reading" - exactly the outcome `help list` promises never
+            // happens. An unparsable value now falls through to the text clause
+            // at the end of this chain, the way the stat and duration branches
+            // already did.
+            //
+            // The two byte fields also accept the documented KB/MB/GB/B
+            // suffixes, via ParseStatRange. A plain integer still takes the
+            // first path, so `retrans:1024` and `cwnd:65536` keep the byte
+            // meaning `help list` gives them.
+            //
+            // A BARE value is "at least this much", with NO upper bound - the
+            // same rule `duration:1h` and `mem:100` follow. lo == hi would mean
+            // `rtt:20` matches only a connection whose RTT is exactly 20 ms,
+            // which is not a threshold at all and is the sort of thing that
+            // ships because "it parsed" was taken for "it works". Measured:
+            // `rtt:20` returned 0 rows against a row reading 24.
+            cl.numeric = true;
+            cl.lo = lo;
+            cl.hi = (value.find(L'-') == std::wstring::npos)
+                        ? LLONG_MAX
+                        : hi;
         } else if (cl.field == FilterField::Proto && !value.empty()) {
             const std::wstring v = ToLowerW(value);
             if      (v == L"tcp")  cl.proto = IPPROTO_TCP;
@@ -947,8 +963,11 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
         }
         case FilterField::Speed: {
             if (!c.bpsKnown) return false;
-            return HasLowerSubstring(FormatBytes(static_cast<ULONGLONG>(
-                          (c.rxBps + c.txBps) + 0.5)), cl.text);
+            const long long bps =
+                static_cast<long long>((c.rxBps + c.txBps) + 0.5);
+            if (cl.numeric) return bps >= cl.lo && bps <= cl.hi;
+            return HasLowerSubstring(FormatBytes(static_cast<ULONGLONG>(bps)),
+                                     cl.text);
         }
         case FilterField::Rtt:
         case FilterField::MinRtt:
