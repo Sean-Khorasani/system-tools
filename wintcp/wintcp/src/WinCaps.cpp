@@ -355,8 +355,9 @@ bool DllAvailable(const char* dllName) {
             // 0 = not yet probed, 1 = present, 2 = absent.
             //
             // This is written down because getting it backwards was a real
-            // bug, caught by golden.bat rather than by inspection: an earlier
-            // version used -1 for "unprobed" with an explicit initialiser, and
+            // bug, caught by wintcp\tests\cli.bat rather than by inspection:
+            // an earlier version used -1 for "unprobed" with an explicit
+            // initialiser, and
             // a later simplification to `= {}` made every slot zero - which
             // under the old encoding meant ABSENT. So every deferred library
             // reported itself missing, the crash handler could not resolve its

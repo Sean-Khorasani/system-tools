@@ -87,7 +87,7 @@ const char* kHelp =
     "  details       full detail report for exactly one connection\r\n"
     "\r\n"
     "Actions (need --yes, support --dry-run; exit 3 when refused):\r\n"
-    "  kill | close | block | unblock | blocks | capture\r\n"
+    "  kill | close | block | unblock | blocks | capture | follow\r\n"
     "\r\n"
     "Library (bookmarks, presets, export, GeoIP):\r\n"
     "  bookmark | preset | export | geoip\r\n"
@@ -242,7 +242,12 @@ const CommandHelp kCommandHelps[] = {
      "  wintcp.exe top --limit 5\r\n"
      "  wintcp.exe top --count 3 --watch 1\r\n"
      "  wintcp.exe top --filter \"chrome\"\r\n"},
-    {"details show",
+    // Only `details`, deliberately: an earlier key also listed `show`, so
+    // `help show` printed this page (exit 0) while `show` itself answered
+    // "unknown command" (exit 2) - help advertising a spelling the
+    // dispatcher does not have. A help key is a promise; keep it equal to
+    // the verbs CanonicalVerbFor() resolves.
+    {"details",
      "details - full report for exactly one connection\r\n"
      "\r\n"
      "Usage: wintcp.exe details --select <filter> [--traffic] [--dns]\r\n"
@@ -476,12 +481,20 @@ const CommandHelp kCommandHelps[] = {
 constexpr size_t kCommandHelpCount =
     sizeof(kCommandHelps) / sizeof(kCommandHelps[0]);
 
-// Canonicalise aliases: conn->list, show->details, follow->capture,
-// sys->stat. Returns "" when unknown.
+// Canonicalise aliases: conn->list, follow->capture, sys->stat.
+// Returns "" when unknown.
+//
+// This is the HELP-TOPIC resolver - PrintCommandHelp is its only caller - so
+// it must resolve exactly the same set CanonicalVerbFor() does. It used to
+// also map show->details while CanonicalVerbFor() had no `show`, which made
+// `help show` print the details page at exit 0 while `show` itself answered
+// "unknown command" at exit 2: help advertising a verb spelling that nothing
+// else would run. `show` is registered nowhere else - not in kVerbSwitches,
+// not in the help overview, not in any document, never exercised by any test -
+// so it was removed rather than quietly promoted to a real command.
 std::wstring CanonicalCommand(const std::wstring& cmd) {
     const std::wstring n = ToLowerW(cmd);
     if (n == L"conn") return L"list";
-    if (n == L"show") return L"details";
     if (n == L"follow") return L"capture";
     if (n == L"sys") return L"stat";
     return n;
@@ -903,7 +916,15 @@ const VerbSwitches kVerbSwitches[] = {
      L"--quiet --watch --count --traffic --dns --db --changes --event"},
     {L"conn", nullptr},   // alias: same as list
     {L"ps",
-     L"--filter --format --columns --limit --quiet --watch --count --sort "
+     // --columns is deliberately absent. ps renders one fixed set of six
+     // aggregate columns and PsOptions has nowhere to put a selection, so
+     // listing it here would accept the switch and drop it - exactly the
+     // silent swallow the table above exists to prevent, and what
+     // `ps --columns nosuchcolumn` used to do: exit 0, value unchecked,
+     // output unchanged, while `list --columns nosuchcolumn` exited 2.
+     // list, export and preset honour --columns; ps does not, so it
+     // refuses it like any other switch it does not act on.
+     L"--filter --format --limit --quiet --watch --count --sort "
      L"--asc --desc"},
     {L"top", nullptr},    // alias: same as ps
     {L"stat", L"--format --watch --count"},
@@ -932,10 +953,11 @@ const VerbSwitches kVerbSwitches[] = {
     {L"geoip", L"--db"},
     {L"version", L""},    // takes no switches
     {L"help", L""},       // takes no switches
-    // Hidden test verb for R1: raises a real access violation so golden can
-    // assert the crash filter writes a minidump. Deliberately absent from
-    // help, the README and readme_cmds.txt — it is a fuse box, not a feature,
-    // and advertising it would invite exactly the accidents it exists to
+    // Hidden test verb for R1: raises a real access violation so that
+    // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
+    // Deliberately absent from help, from the documentation and from
+    // wintcp\tests\examples.txt - it is a fuse box, not a feature, and
+    // advertising it would invite exactly the accidents it exists to
     // diagnose. Takes no switches; any switch is exit 2 like every verb.
     {L"crashtest", L""},
 };
@@ -1358,7 +1380,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         Emit(r);
         return r.exitCode;
     }
-    if (cmd == L"details" || cmd == L"show") {
+    if (cmd == L"details") {
         SnapshotSource src;
         EnrichOptions eo;
         eo.procStats = true;

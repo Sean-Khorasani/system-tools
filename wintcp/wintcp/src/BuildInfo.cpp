@@ -95,7 +95,17 @@ std::wstring AboutText(const BuildSummary& s) {
                             ? L"ETW kernel logger (full, including UDP)"
                             : (s.trafficFallback
                                    ? L"socket fallback (TCP only)"
-                                   : L"none (needs administrator)")) +
+                                   // Elevated with no collector running is
+                                   // its own state, and it is NOT "needs
+                                   // administrator": the CLI runs no session
+                                   // at all, and an elevated GUI with traffic
+                                   // off has rights to spare. Printing the
+                                   // unelevated reason here put
+                                   // "none (needs administrator)" two lines
+                                   // under "Administrator yes".
+                                   : (s.elevated
+                                          ? L"none (no collector is running)"
+                                          : L"none (needs administrator)"))) +
            L"\r\n";
     out += PadKeys(L"GeoIP database") +
            std::wstring(s.geoIpLoaded

@@ -3481,6 +3481,27 @@ TestResult RunSelfTest() {
         Check(r, "about.fallback-not-claimed-as-none",
               fbt.find(L"none (needs administrator)") == std::wstring::npos,
               WideToUtf8(fbt));
+
+        // The combination that shipped broken: ELEVATED with no collector
+        // running. The CLI never opens a session (correctly - it must not
+        // claim one it did not start) and it forces trafficFallback to false
+        // when elevated, so both traffic flags ended up false while
+        // elevated was true, and the final branch - written only for the
+        // unelevated case - answered "none (needs administrator)" to an
+        // administrator, two lines under "Administrator yes". Every other
+        // pairing of these flags is covered above; this one was not, which
+        // is how it reached a user.
+        BuildSummary ec = un;
+        ec.elevated = true;
+        ec.etwRunning = false;
+        ec.trafficFallback = false;
+        const std::wstring ect = AboutText(ec);
+        Check(r, "about.elevated-none-not-needs-admin",
+              ect.find(L"none (needs administrator)") == std::wstring::npos,
+              WideToUtf8(ect));
+        Check(r, "about.elevated-none-says-why",
+              ect.find(L"no collector is running") != std::wstring::npos,
+              WideToUtf8(ect));
     }
 
     // 28. SetCountry (4.3 join). The filter must be able to search a value the

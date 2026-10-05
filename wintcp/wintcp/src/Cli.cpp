@@ -10,8 +10,12 @@
 //   --format <set>           ->  --columns <set>  (applies to json too)
 //   --watch [sec]            ->  --watch [sec] on list/ps/top/stat
 //   -q / --quiet             ->  list|ps --quiet (rc answers, no output)
-//   --selftest / --bench     ->  selftest | bench
 //   --version / -h / --help  ->  version | help
+//   --selftest / --bench     ->  none: removed together with the harness,
+//                                which now lives in wintcp-tests.exe. Both
+//                                spellings exit 2 ("unknown command") and
+//                                wintcp\tests\cli.bat asserts that, so do
+//                                not re-add a verb spelling here.
 //   -a / -n / --once         ->  dropped (accepted-and-ignored parity flags;
 //                                the verbs always list all numeric endpoints
 //                                in one pass)
