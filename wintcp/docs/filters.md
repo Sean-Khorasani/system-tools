@@ -81,7 +81,7 @@ Three things about these two that are easy to get wrong:
   `bad sig` is the state that means something.
 - **The CLI needs `--signatures`.** Signature verification is opt-in because
   `WinVerifyTrust` builds a certificate chain; see the `list` verb in
-  [cli.md](cli.md). Integrity and parent are read on every pass and need no
+  the [CLI reference](cli.md). Integrity and parent are read on every pass and need no
   switch.
 
 A row whose process could not be opened at all — a protected or elevated service
@@ -203,4 +203,4 @@ wintcp.exe kill --select "ipv4: local:port:49665" --dry-run
 | `duration:1h` | Connections at least an hour old (CLI: add `--traffic`). |
 | `rtt:100` | Connections with an RTT of at least 100 ms (CLI: add `--traffic`). |
 
-Worked, real-output examples of each form are in the [cookbook](cookbook.md#25-the-filter-grammar-ranges-excludes-prefixes-quoting).
+Worked, real-output examples of each form are in the [cookbook](cookbook.md#29-the-filter-grammar-ranges-excludes-prefixes-quoting).

@@ -2,7 +2,16 @@
 
 WinTCP is one native Win32 process with no third-party dependencies. This document is how it is put together: the principles the code enforces, the threads it runs on, what makes a connection row *the same row* from one refresh to the next, and where each file lives.
 
-User-facing behaviour is in the [GUI guide](gui.md) and the [CLI reference](cli.md). Building, testing and benchmarking are in [development.md](development.md).
+User-facing behaviour is in the [GUI guide](gui.md) and the [CLI reference](cli.md). Building, testing and benchmarking are in [Development](development.md).
+
+## Contents
+
+- [Design principles](#design-principles)
+- [Concurrency model](#concurrency-model)
+- [Row identity and diffing](#row-identity-and-diffing)
+- [Model and view are separate](#model-and-view-are-separate)
+- [Data flow](#data-flow)
+- [Source layout](#source-layout)
 
 ## Design principles
 
@@ -22,7 +31,7 @@ Three rules, each enforced in code and pinned by `wintcp-tests.exe unit`, becaus
 - a byte total that cannot be attributed to one socket is **never** split across a process's connections to fabricate a rate;
 - a count nobody measured (`Columns shown`, `Connections` in `version`) is **omitted** rather than printed as a confident `0`.
 
-The em-dash is the same rule at cell level: `-` means *unknown* and is never a hidden zero. What the traffic counters can and cannot honestly answer is in [traffic.md](traffic.md).
+The em-dash is the same rule at cell level: `-` means *unknown* and is never a hidden zero. What the traffic counters can and cannot honestly answer is in [Traffic counters](traffic.md).
 
 ### A swallowed switch is worse than a wrong one
 
@@ -47,6 +56,7 @@ Every helper - RAII handles, UTF-8/UTF-16 conversion, `FormatSystemError`, DPI a
 | DNS worker | `DnsResolver.cpp` | Pops one remote address at a time, `getnameinfo(NI_NAMEREQD)`, caches, delivers. Reverse DNS is slow and blocking, so it never runs on the UI thread. |
 | ETW session | `EtwTraffic.cpp` | The kernel-logger session's event callback. Elevated only; when it cannot start the UI arms the non-admin fallback instead. |
 | Probe workers (x16) | `SocketTraffic.cpp` | The non-admin fallback: one `SIO_TCP_INFO` ioctl per socket, farmed out across `kProbeWorkers` threads. |
+| Thread sampler | `ProcessInfo.cpp` | Enumerates one process's threads for the Details window. `CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)` walks every thread on the machine and costs ~48 ms, so it runs here rather than on the UI thread, which rebuilds the Details model on every refresh tick. `ProcessThreads` never blocks: it publishes the last sample and asks for a refresh. |
 
 Process resolution, per-PID stat sampling and GeoIP lookup all happen *inside* a refresh pass on the refresh worker. They are work, not threads.
 
@@ -195,7 +205,9 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
 
 **Blocking** - `BlockConn.*` (firewall rules and their ledger), `Elevate.*`.
 
-**Windows** - `MainWindow.*` (window, controls, menus, list, tray, theming), `DetailsDialog.*` with `DetailModel.*`, `ChartsWindow.*` with `ChartExport.*`, `ChangeLogWindow.*`, `HexTextWindow.*`, `PromptDialog.*`, `Alerts.*`, `TypeToJump.*`, `Freeze.*`.
+**Windows** - `MainWindow.*` (window, controls, menus, list, tray, theming), `DetailsDialog.*` with `DetailModel.*`, `ChartsWindow.*` with `ChartExport.*`, `ChangeLogWindow.*`, `PromptDialog.*`, `Alerts.*`, `TypeToJump.*`, `Freeze.*`.
+
+`HexTextWindow.*` is built and linked but **unreachable**: it was the window behind the GUI's *Follow TCP stream* action, which was removed on 2026-10-05 because it re-elevated the whole application and then blocked modally on a capture that can legitimately return nothing. The capability now lives in the CLI (`capture --text`, `capture --out`), so the class is kept only until a decision is made to delete it - see the source layout note in the commit that removed the menu entry.
 
 **Infrastructure** - `Utils.*` (UTF-8, formatting, DPI, error text), `CrashDump.*`, `Version.h` (the single source of truth for the version), `resource.h` and `wintcp.rc` (menu, accelerator, manifest, icon, version).
 
@@ -210,4 +222,4 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
 | `cli.bat`, `gui.bat`, `examples.bat` (+ `.ps1`, `.txt`) | the three gate scripts |
 | `d2probe.bat`, `d2probe.cpp` | the measurement probe behind `kProbeWorkers` - **not a gate** |
 
-`wintcp-tests.exe` links the *same* product sources as `wintcp.exe`, minus `main.cpp`. That is the point: a test that exercised a copy of the logic would prove nothing. See [development.md](development.md#testing).
+`wintcp-tests.exe` links the *same* product sources as `wintcp.exe`, minus `main.cpp`. That is the point: a test that exercised a copy of the logic would prove nothing. See [Development](development.md#testing).

@@ -89,3 +89,8 @@ list --signatures --filter "signed:" --columns process,signature --limit 5
 list --filter "parent:services" --columns process,ppid --limit 5
 list --signatures --sort signature --desc --columns process,signature --limit 5
 version
+# The `help` verb is read-only and is what both the README and the CLI
+# reference open with, so it belongs in the documented set.
+help
+help list
+help details

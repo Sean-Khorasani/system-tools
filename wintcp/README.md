@@ -6,13 +6,12 @@
 ![Language: C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)
 ![API: Win32](https://img.shields.io/badge/API-Win32-informational)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen)
-<!-- TODO: add a license badge once a LICENSE file exists. -->
+![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)
 
 WinTCP lists every TCP and UDP endpoint (IPv4 and IPv6) on a Windows machine together with the process that owns it, in the tradition of Sysinternals TCPView and NirSoft CurrPorts. On top of that it adds a command-line mode with strict exit codes, per-process traffic counters that work **without administrator rights**, kernel TCP health metrics (RTT, congestion window, retransmits), and process-aware actions (close one socket, kill the owner of a port, block a peer) that refuse to run without explicit confirmation.
 
 It is written against the plain Win32 API: no MFC, ATL, Qt or other third-party library. The C runtime is linked statically, so the program is a single file you can copy to a machine and run.
 
-<!-- TODO: add a screenshot of the main window here (e.g. docs/img/main-window.png). -->
 
 ```text
 Process     CPU %  Traffic (rx/tx)   Proto  Local         LPort  Remote       RPort  State         PID
@@ -154,7 +153,7 @@ The tree stores two pointers per node at one of three widths the format allows: 
 ### Also about GeoIP
 
 - [CLI reference → `geoip`](docs/cli.md#geoip) — the two sub-commands and when `info` is the right first question.
-- [Cookbook → recipe 9](docs/cookbook.md#9-country-watchdog-gated-on-the-answer) — a country filter gated as an automation predicate.
+- [Cookbook . recipe 12](docs/cookbook.md#12-country-watchdog-gated-on-the-answer) — a country filter gated as an automation predicate.
 - [Filter language → `country:`](docs/filters.md#field-matches) — which switches each enrichment clause needs.
 
 ## Command-line overview
@@ -182,7 +181,7 @@ Usage: wintcp.exe <command> [switches]
 | `2` | Bad arguments, including a switch the command does not accept. |
 | `3` | Refused: a mutating command was run without `--yes`. |
 
-Full switch reference, output formats and the JSON conventions: [docs/cli.md](docs/cli.md).
+Full switch reference, output formats and the JSON conventions: the [CLI reference](docs/cli.md).
 
 ## The filter language
 
@@ -198,7 +197,7 @@ The GUI filter box, `list --filter`, `export --filter`, and the `--select` selec
 | `note:"vendor api"` | Quoted value keeps its space and stays one term. |
 | `cpu:12`, `mem:100-500`, `tx:1KB`, `rtt:100`, `duration:1h` | **Numeric thresholds** on live readings, not text matches. |
 
-Thresholds have two properties worth knowing up front: a bare value on the byte-based fields (`mem`, `disk`, `rx`, `tx`, `net`) means **megabytes** (write `tx:1KB` for kilobytes), and a row whose reading could not be measured matches no threshold at all, so `mem:0` never selects a process that simply could not be read. The complete grammar is in [docs/filters.md](docs/filters.md).
+Thresholds have two properties worth knowing up front: a bare value on the byte-based fields (`mem`, `disk`, `rx`, `tx`, `net`) means **megabytes** (write `tx:1KB` for kilobytes), and a row whose reading could not be measured matches no threshold at all, so `mem:0` never selects a process that simply could not be read. The complete grammar is in the [filter language](docs/filters.md).
 
 ## Safety model
 
@@ -247,7 +246,7 @@ build.bat            :: produces build\wintcp.exe
 build.bat clean      :: remove build\ first
 ```
 
-CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. All build paths compile with warnings as errors. Details, flags and the test binary are in [docs/development.md](docs/development.md).
+CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. All build paths compile with warnings as errors. Details, flags and the test binary are in [Development](docs/development.md).
 
 ## Troubleshooting
 
@@ -264,7 +263,7 @@ CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. A
 | `kill --select … matches 2 rows` | A dual-stack listener is one socket reported once per address family. Add `ipv4:` or `ipv6:` to the selector. |
 | `close` refuses a row | The Windows API behind it has no IPv6 form, and it needs admin. |
 | Exit code 2 and "not a switch of this command" | Intentional. Run `wintcp.exe help <command>` for the switches that command honours. |
-| `export` refuses `--limit`, or refuses a column with `--group` | A file must not silently hold a partial view or a header that promises values the rows do not carry. See [docs/cli.md](docs/cli.md#export). |
+| `export` refuses `--limit`, or refuses a column with `--group` | A file must not silently hold a partial view or a header that promises values the rows do not carry. See the [CLI reference](docs/cli.md#export). |
 | A feature seems missing on an unusual Windows install | Run `wintcp.exe version`; it lists any delay-loaded library that was unavailable and what that disables. |
 
 ## Known limitations
@@ -272,19 +271,20 @@ CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. A
 - The unprivileged fallback reads **TCP only**. UDP sockets expose no byte counters without ETW.
 - The fallback misses sockets that open and close entirely between two refreshes. Long-lived connections carry their full history, including time before WinTCP started.
 - ETW totals begin when the session starts; fallback totals are lifetime-of-socket. ETW totals are best-effort under extreme load.
-- A socket that does not answer `SIO_TCP_INFO` is skipped for the pass and not retried. Its columns stay `—`, and the GUI reports how many sockets were affected. See [docs/traffic.md](docs/traffic.md#stalled-sockets).
+- A socket that does not answer `SIO_TCP_INFO` is skipped for the pass and not retried. Its columns stay `—`, and the GUI reports how many sockets were affected. See [Traffic counters](docs/traffic.md#stalled-sockets).
 - Change feeds are polling-based: the `--watch` interval is the sensitivity, and a socket that opens and closes inside one interval is never seen.
 - `close` supports IPv4 only.
 - Per-connection rates exist only where a single socket's own counters are available. A per-process total is never divided across its connections to fake one.
 
 ## Contributing
 
-Bug reports and pull requests are welcome. Before submitting a change, build with `build.bat` (warnings are errors) and run the gates described in [development.md](docs/development.md#testing): `wintcp-tests.exe unit`, `wintcp\tests\cli.bat` and `wintcp\tests\examples.bat`. If you add or change a documented command, update `wintcp\tests\examples.txt` as well.
+Bug reports and pull requests are welcome. Before submitting a change, build with `build.bat` (warnings are errors) and run the gates described in [Development](docs/development.md#testing): `wintcp-tests.exe unit`, `wintcp\tests\cli.bat` and `wintcp\tests\examples.bat`. If you add or change a documented command, update `wintcp\tests\examples.txt` as well.
 
 ## License
 
 Original sources: a from-scratch native Win32 application with no third-party dependencies.
-<!-- TODO: add a LICENSE file and name the license here. -->
+
+Released under the **Apache License, Version 2.0**. The full text is in [LICENSE](LICENSE); it permits use, modification and redistribution, and includes an explicit patent grant.
 
 ## Acknowledgements
 

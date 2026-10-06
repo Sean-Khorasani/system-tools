@@ -1,6 +1,13 @@
 # Development
 
-How to build, test, benchmark and document WinTCP. User-facing behaviour is in the [GUI guide](gui.md) and the [CLI reference](cli.md); how the code fits together is in [architecture.md](architecture.md).
+How to build, test, benchmark and document WinTCP. User-facing behaviour is in the [GUI guide](gui.md) and the [CLI reference](cli.md); how the code fits together is in [Architecture](architecture.md).
+
+## Contents
+
+- [Building](#building)
+- [Testing](#testing)
+- [Benchmarks](#benchmarks)
+- [Documentation conventions](#documentation-conventions)
 
 ## Building
 
@@ -113,7 +120,7 @@ A nested double quote is why it runs through PowerShell rather than a batch `for
 
 #### `wintcp\tests\d2probe.bat`
 
-Not a gate. It builds `d2probe.cpp` and walks the system handle table, issuing one `SIO_TCP_INFO` per socket to measure how a machine behaves. Its numbers are what set `kProbeWorkers` (16) and `kNoProgressMs` (250) in `SocketTraffic.h` - see [architecture.md](architecture.md#the-probe-pool). It is slow, machine-dependent and deliberately outside CI.
+Not a gate. It builds `d2probe.cpp` and walks the system handle table, issuing one `SIO_TCP_INFO` per socket to measure how a machine behaves. Its numbers are what set `kProbeWorkers` (16) and `kNoProgressMs` (250) in `SocketTraffic.h` - see [Architecture](architecture.md#the-probe-pool). It is slow, machine-dependent and deliberately outside CI.
 
 ### Running the gates
 

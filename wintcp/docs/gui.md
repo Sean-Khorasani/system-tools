@@ -12,6 +12,9 @@ This page covers the desktop application. For the command-line mode see the [CLI
 - [Filtering and sorting](#filtering-and-sorting)
 - [Actions](#actions)
 - [Details window](#details-window)
+- [Bookmarks](#bookmarks)
+- [Grouping and freezing](#grouping-and-freezing)
+- [Keyboard shortcuts](#keyboard-shortcuts)
 - [Export](#export)
 - [Change log](#change-log)
 - [Performance graphs](#performance-graphs)
@@ -76,7 +79,7 @@ Open **View → Columns** to show or hide columns. A check mark appears on every
 
 Five further diagnostic columns are available from **View → Columns** and hidden by default because they are valuable while chasing one slow connection and noise otherwise: `RTT`, `Min RTT`, `Cwnd`, `Retrans` and `Proc Speed`. Their meaning is explained in [Traffic counters](traffic.md#what-the-per-socket-scan-provides).
 
-**Parent process** and **Integrity** are hidden by default for a different reason than those five: they are *trust* columns, and a question about who launched a process or how much Windows trusts it is asked about a handful of rows, not about the three hundred on screen. They need no switch — both are read on the handle and the snapshot the resolver already has. `Signature` needs `--signatures` on the command line, because `WinVerifyTrust` builds a certificate chain per image; see the `list` verb in [cli.md](cli.md).
+**Parent process** and **Integrity** are hidden by default for a different reason than those five: they are *trust* columns, and a question about who launched a process or how much Windows trusts it is asked about a handful of rows, not about the three hundred on screen. They need no switch — both are read on the handle and the snapshot the resolver already has. `Signature` needs `--signatures` on the command line, because `WinVerifyTrust` builds a certificate chain per image; see the `list` verb in the [CLI reference](cli.md).
 
 `unsigned` is **not** a warning. Most of what runs is unsigned and that is normal; `BAD SIG` is the state that means something. `—` means WinTCP did not look, which is a third answer again and is never rendered as `unsigned`.
 
@@ -157,7 +160,67 @@ Two layout faults were fixed on 2026-10-05, both of which had been reported as "
 - Each field used to be **two** stacked rows - the label, then the value indented beneath it - so a section cost 34 px of captions and read as text rather than as a table. It is now one row per field.
 - The body painted down to the **full client height** rather than to the bottom of the content region, so the last visible fields were drawn behind *Copy* / *Open file location* / *Close*. The click and hover handlers had the same missing bound, so a click in the button row could toggle a section hidden behind it.
 
-The same report is available from the command line with `wintcp.exe details`; see the [cookbook](cookbook.md#11-full-dossier-for-one-connection).
+The same report is available from the command line with `wintcp.exe details`; see the [cookbook](cookbook.md#14-full-dossier-for-one-connection).
+
+## Bookmarks
+
+A **bookmark** is a note and a colour attached to one remote address and port, so a peer you have decided something about can be found again later. Bookmarks live under `HKCU\Software\WinTCP\Bookmarks`, one subkey per endpoint - per user, never machine-wide.
+
+| Where | What |
+|---|---|
+| **File -> Bookmarks...** | Opens the manager: every bookmark, editable, with its tag and note. |
+| Select a row, then **Process -> Bookmark this connection** | Adds a bookmark for the selected row's remote address and port. |
+| Select a row, then **Process -> Edit bookmark note...** | Attaches or changes that row's note. |
+| **View -> Columns -> Bookmarks** | Adds the *Bookmarks* column: the tag, colour-coded. Hidden by default. |
+| **View -> Columns -> Note** | Adds the *Note* column carrying the text. Hidden by default. |
+
+Both **Process** entries act on the current selection rather than on the row under the cursor, so a bookmark is placed where you last clicked.
+
+Five tags: **Red**, **Amber**, **Blue**, **Green**, and **None** for a bookmark that is deliberately unremarkable. The tag is the first thing the column shows, and the note is the second, so a glance answers "do I already know about this peer?" before you read anything.
+
+This is the feature the `pinned` and `note` columns belong to, and it has a command-line face as well - see [`bookmark`](cli.md#bookmark). The notes are also searchable: `note:` is a filter field, so `--filter "note:corporate dns"` selects every bookmarked peer whose note mentions it.
+
+## Grouping and freezing
+
+Two **View** switches change what a row *means* rather than what it shows:
+
+| Switch | Shortcut | Effect |
+|---|---|---|
+| **Group rows by process** | `F7` | Collapses the table to one row per **process** instead of one per socket. A browser with 70 sockets becomes one row. |
+| **Freeze view** | `F6` | Stops the row list being repainted, so a selection and a scroll position stay put while the refresh continues behind it. Use it when reading a column and the list would otherwise move under the cursor. |
+
+Grouping answers "who", not "which socket" - the difference between recipe 5 in the [cookbook](cookbook.md) (one row per process) and recipe 14 (everything known about one connection). Nine columns cannot survive that change honestly: **Local address**, **Local port**, **Remote address**, **Remote port**, **Duration**, **Hostname**, **TLS**, **Country** and **Note** each describe one connection, or in the case of a note one remote endpoint. The CLI refuses to print those under `--group` rather than quietly showing one member's value for the whole group. The window has no such refusal to make, because a grouped row says what it is: its **State** cell reads `4 connections`, its **Proto** cell reads `TCP+UDP`, and its **Process** cell becomes the PID when the name is unknown.
+
+## Keyboard shortcuts
+
+**Help -> Keyboard shortcuts** (`F1`) opens the in-app sheet. The same set, in the order the sheet groups it - by what the keys do, not alphabetically:
+
+| Keys | Action |
+|---|---|
+| `F1` | Keyboard shortcuts (this sheet) |
+| `F5` | Refresh now |
+| `F6` | Freeze / unfreeze the view |
+| `F7` | Group rows by process on / off |
+| `Ctrl+C` | Copy selected connections |
+| `Ctrl+A` | Select all rows |
+| `Ctrl+F` | Focus the filter box |
+| `Ctrl+E` | Export to CSV |
+| `Ctrl+S` | Save the current view as a preset |
+| `Esc` | Clear the filter |
+| `Del` | Graceful close: `WM_CLOSE`, then terminate |
+| `A`-`Z` | Type to jump to a row by process name |
+| `Backspace` | Back out of a type-to-jump prefix |
+| `Alt` | Underline a letter to walk the menus (hold `Ctrl` as well) |
+| `Ctrl`+click | Extend the selection |
+| `Shift`+click | Select a range |
+| Double-click | Open the details window for the row |
+| `Shift`+`F10` | Open the context menu for the selected row |
+| Drag a header | Reorder a column; the order is remembered |
+| `Tab` | Move between the filter controls and the list |
+
+Type-to-jump matches a prefix of the process name and moves the selection with each keystroke, so a stray letter typed over the list is harmless rather than destructive. Two details make it usable: pressing the **same character again cycles** to the next match, so a prefix shared by a dozen rows (`svchost.exe`) still moves; and a repeated character is never appended, so pressing `s` twice means "the next row starting with s" rather than a prefix of `ss` that matches nothing. A pause of about a second (the Explorer's interval) breaks the sequence, so the first keystroke after thinking always starts a fresh search. Matching is prefix-only by design: typing `svch` lands on rows *beginning* `svch`, never on the first row that merely contains it somewhere.
+
+`Ctrl+S` is the one entry the in-app sheet does not list, though the menu labels it; it saves the current filter, sort and column selection as a preset that **File -> Load preset...** restores.
 
 ## Export
 

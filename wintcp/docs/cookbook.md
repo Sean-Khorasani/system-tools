@@ -24,40 +24,40 @@ Background pages: [filter language](filters.md), [CLI reference](cli.md), [traff
 | [6](#6-upload-versus-download) | Who is *sending* the most? | no |
 | [7](#7-threshold-hunts-on-live-bytes) | Which processes have sent more than N bytes? | no |
 | [8](#8-one-apps-total-and-the-per-socket-speed-column) | One app's total across ticks, and per-socket speed | no |
-| [36](#36-per-process-rate-what-is-eating-the-link) | What is eating the link right now? | no |
+| [9](#9-per-process-rate-what-is-eating-the-link) | What is eating the link right now? | no |
 | **Connection health** | | |
-| [34](#34-oldest-connections-by-kernel-age) | Which connections are the oldest? | no |
-| [35](#35-rtt-congestion-window-and-retransmits-ss--i-for-windows) | Which connections are slow or lossy? | no |
+| [10](#10-oldest-connections-by-kernel-age) | Which connections are the oldest? | no |
+| [11](#11-rtt-congestion-window-and-retransmits-ss--i-for-windows) | Which connections are slow or lossy? | no |
 | **Enrichment** | | |
-| [9](#9-country-watchdog-gated-on-the-answer) | Is anything talking to country X? | no |
-| [10](#10-the-enriched-triage-row) | Host, country, process and bytes in one row | no |
-| [11](#11-full-dossier-for-one-connection) | Everything about one connection | no |
+| [12](#12-country-watchdog-gated-on-the-answer) | Is anything talking to country X? | no |
+| [13](#13-the-enriched-triage-row) | Host, country, process and bytes in one row | no |
+| [14](#14-full-dossier-for-one-connection) | Everything about one connection | no |
 | **Watching for change** | | |
-| [12](#12-churn-journal-and-the---event-filter) | A readable feed of connection changes | no |
-| [13](#13-tcp-only-churn) | The same, without UDP noise | no |
-| [14](#14-silent-watchdog-gates-for-task-scheduler) | Exit-code-only checks for schedulers | no |
-| [15](#15-what-opened-while-i-was-away) | What opened while I was away? | no |
-| [33](#33-a-machine-readable-change-feed) | The change feed as JSON | no |
+| [15](#15-churn-journal-and-the---event-filter) | A readable feed of connection changes | no |
+| [16](#16-tcp-only-churn) | The same, without UDP noise | no |
+| [17](#17-silent-watchdog-gates-for-task-scheduler) | Exit-code-only checks for schedulers | no |
+| [18](#18-what-opened-while-i-was-away) | What opened while I was away? | no |
+| [19](#19-a-machine-readable-change-feed) | The change feed as JSON | no |
 | **Capture** | | |
-| [16](#16-follow-one-stream-selected-from-the-live-row) | Capture exactly the conversation I can see | yes |
-| [17](#17-bounded-scripted-capture) | A capture that starts, waits and exits on its own | yes |
-| [18](#18-dry-run-the-capture-plan) | What would this capture catch? | no |
+| [20](#20-follow-one-stream-selected-from-the-live-row) | Capture exactly the conversation I can see | yes |
+| [21](#21-bounded-scripted-capture) | A capture that starts, waits and exits on its own | yes |
+| [22](#22-dry-run-the-capture-plan) | What would this capture catch? | no |
 | **Inventory and audit** | | |
-| [19](#19-port-owner-including-the-executable-path) | Port owner, with executable path | no |
-| [20](#20-exposed-listeners-beyond-loopback) | What can the network reach on this box? | no |
-| [21](#21-udp-owner-inventory) | UDP sockets and their owners | no |
-| [22](#22-ipv6-udp-and-tcp-in-one-table) | IPv6, UDP and TCP in one table | no |
-| [23](#23-process-table-with-cpu--and-connection-counts) | Processes with CPU % and connection counts | no |
-| [24](#24-one-shot-system-health-as-json) | System health as JSON | no |
-| [25](#25-the-filter-grammar-ranges-excludes-prefixes-quoting) | The filter grammar in action | no |
-| [37](#37-what-can-this-build-do-on-this-machine-and-what-is-missing) | What can this build do on this machine, and what is missing? | no |
+| [23](#23-port-owner-including-the-executable-path) | Port owner, with executable path | no |
+| [24](#24-exposed-listeners-beyond-loopback) | What can the network reach on this box? | no |
+| [25](#25-udp-owner-inventory) | UDP sockets and their owners | no |
+| [26](#26-ipv6-udp-and-tcp-in-one-table) | IPv6, UDP and TCP in one table | no |
+| [27](#27-process-table-with-cpu--and-connection-counts) | Processes with CPU % and connection counts | no |
+| [28](#28-one-shot-system-health-as-json) | System health as JSON | no |
+| [29](#29-the-filter-grammar-ranges-excludes-prefixes-quoting) | The filter grammar in action | no |
 | **Library and automation** | | |
-| [26](#26-pin-a-peer-with-a-tag-and-a-note-and-find-it-again) | Annotate a peer and find it again | no |
-| [27](#27-save-and-reuse-a-triage-view) | Save and reuse a triage view | no |
-| [28](#28-excel-ready-export-with-column-selection) | Excel-ready export | no |
-| [29](#29-a-stable-json-schema-for-dashboards) | JSON for dashboards | no |
-| [38](#38-why-does-my-json-parser-wait-for-the-array-to-close) | Why does my JSON parser wait for the array to close? | no |
-| [30](#30-quiet-exit-code-automation) | Exit-code automation | no |
+| [30](#30-pin-a-peer-with-a-tag-and-a-note-and-find-it-again) | Annotate a peer and find it again | no |
+| [31](#31-save-and-reuse-a-triage-view) | Save and reuse a triage view | no |
+| [32](#32-excel-ready-export-with-column-selection) | Excel-ready export | no |
+| [33](#33-a-stable-json-schema-for-dashboards) | JSON for dashboards | no |
+| [34](#34-quiet-exit-code-automation) | Exit-code automation | no |
+| [35](#35-what-can-this-build-do-on-this-machine-and-what-is-missing) | What can this build do on this machine, and what is missing? | no |
+| [36](#36-why-does-my-json-parser-wait-for-the-array-to-close) | Why does my JSON parser wait for the array to close? | no |
 
 The benchmark and self-test (formerly recipes 31 and 32) are developer tools, not user features; they are documented in [Development](development.md#test-and-benchmark-binary).
 
@@ -299,7 +299,7 @@ wintcp.exe list --traffic --watch 2 --count 4 --sort bandwidth --desc --limit 3 
 
 The `—` rows in the first table are not broken. Those PIDs' sockets did not answer `SIO_TCP_INFO` during the scan, so their counters keep their last known values. The usual reason is not a stall at all: most sockets on a busy machine are UDP, to which `SIO_TCP_INFO` does not apply, so they answer instantly with `WSAENOTSOCK`. A genuine stall costs only its own reading; see [Stalled sockets](traffic.md#stalled-sockets).
 
-### 36. Per-process rate: what is eating the link?
+### 9. Per-process rate: what is eating the link?
 
 `bandwidth` is one socket's rate. A browser with 40 tabs has 40 rows, each small; the useful answer is the sum, which is `procspeed`.
 
@@ -351,7 +351,7 @@ Why `procspeed` is a sum, and why ETW-sourced processes show `—`, is explained
 
 > Windows has no built-in view of what the TCP stack concluded about a connection. `netstat` has no notion of latency or age, `Get-NetTCPConnection` has neither, and `pktmon` gives you packets without summarising anything. Linux: `ss -i`.
 
-### 34. Oldest connections by kernel age
+### 10. Oldest connections by kernel age
 
 `netstat` shows no age at all, and PowerShell still cannot range-filter a `CreationTime` pipeline.
 
@@ -376,7 +376,7 @@ Both commands print the same single row on this machine. The reason is explained
 
 **A current limitation.** Ages come from the same scan as the traffic columns, and a socket whose `SIO_TCP_INFO` does not return cannot be measured at all. That is why the table above has one row and not four. Such a socket now costs only its own reading, not every socket behind it (see [Stalled sockets](traffic.md#stalled-sockets)), so the ranking is real but may not be complete. The GUI reports the count. Rows with no age never match `duration:`, so the filter returns fewer rows than the table shows rather than pretending the unmeasured ones are new.
 
-### 35. RTT, congestion window and retransmits: `ss -i` for Windows
+### 11. RTT, congestion window and retransmits: `ss -i` for Windows
 
 These four numbers are the kernel's own verdict on each connection, and they are what you want when a link feels slow: a high RTT with a small congestion window is a *path* problem, while a small RTT with a large one is a *bandwidth* problem. The values come out of the same `SIO_TCP_INFO` call as the byte counters, so there is no extra scan and no extra cost.
 
@@ -437,7 +437,7 @@ Three value rules matter more than they look (details in [Traffic counters](traf
 
 > Linux: `lsof` links socket to process only. Nothing on either platform joins DNS, country, process, bytes and a bookmark into one row.
 
-### 9. Country watchdog, gated on the answer
+### 12. Country watchdog, gated on the answer
 
 Requires a `.mmdb` database you supply (see [GeoIP database](../README.md#geoip-database)). This recipe is the shape; the `geoip` sub-commands check the database first.
 
@@ -457,7 +457,7 @@ wintcp.exe list --db GeoLite2-Country.mmdb --filter "country:US" --quiet && echo
 
 Two deliberate limits: addresses that are not globally routable (loopback, RFC 1918, CGNAT, link-local, multicast) never get a country, and a country nothing is connected to returns an empty table, not an error.
 
-### 10. The enriched triage row
+### 13. The enriched triage row
 
 `netstat` for the socket, `nslookup -x` for the name, a GeoIP database for the country, Task Manager for the process: four tools, four hand-made joins, and the joins are where hand-rolled pipelines go wrong.
 
@@ -481,7 +481,7 @@ Remote address    Hostname                                                   Cou
 | `--limit 4` | The cost control for `--dns`. A `note:` on stderr appears when a printed enrichment column cannot be filled, naming the missing switch. |
 | `--columns remote,host,country,process,nettotal` | The five columns the four tools would each give you. `host` and `country` can be empty *honestly*: an address in no database, or a peer whose PTR record does not resolve, is a real answer. |
 
-### 11. Full dossier for one connection
+### 14. Full dossier for one connection
 
 `details` refuses anything that is not exactly one live row. It will not guess which of 60 connections you meant.
 
@@ -563,7 +563,7 @@ The `Connections (1)` block is the part no other tool gives you: the other endpo
 
 > Linux: `conntrack -E`. Windows: nothing built in streams events; you poll and diff by hand, and the diff is where it goes wrong.
 
-### 12. Churn journal, and the `--event` filter
+### 15. Churn journal, and the `--event` filter
 
 An unfiltered event feed on a normal desktop is dominated by socket closes, so the switch that selects *kinds* is the difference between a usable feed and noise.
 
@@ -584,11 +584,11 @@ baseline: 286 rows (further changes below)
 | `list --watch 1` | The delta is computed between two snapshots, so the interval **is** the sensitivity: at 1 s you catch short-lived sockets, at 10 s you miss them entirely. |
 | `list --event appear,state` | Which kinds to print, from `appear,disappear,state`. `--event appear` alone answers "what opened while I was away" and drops the close stream that would otherwise bury it. Comma-separated, any order, case-insensitive; an unrecognised name exits `2`. |
 | `list --count 4` | Bounds the loop. It counts **snapshots, not events**: on a busy machine four snapshots can emit hundreds of lines, so pipe through `head` if you need exactly N. |
-| `list --filter` | Applied to the event's row, not the table, so every clause works (recipe 13 uses it to remove UDP). |
+| `list --filter` | Applied to the event's row, not the table, so every clause works (recipe 16 uses it to remove UDP). |
 
 The `baseline:` line goes to **stderr**, so `> file` captures only events. That is a contract, not a detail: an event pipe with a human sentence in it is not a pipe.
 
-### 13. TCP-only churn
+### 16. TCP-only churn
 
 Skip the UDP socket noise that otherwise dominates.
 
@@ -605,11 +605,11 @@ baseline: 286 rows (further changes below)
 | Switch | Why it is in this command |
 |---|---|
 | `list --filter "proto:tcp"` | The filter runs against each event's row, so it removes whole events rather than hiding lines after the fact. On the capture machine mDNS alone is about 86 rows that change constantly. |
-| `list --watch 2` | A slower interval than recipe 12 on purpose: fewer events, and a different view of what "churn" means at 2 s granularity. |
+| `list --watch 2` | A slower interval than recipe 15 on purpose: fewer events, and a different view of what "churn" means at 2 s granularity. |
 
 `--event` is available but not needed here: the filter already does the narrowing, and adding `--event` would be a second tool for one job.
 
-### 14. Silent watchdog gates for Task Scheduler
+### 17. Silent watchdog gates for Task Scheduler
 
 No output at all. The exit code is the answer, and it is the *only* answer.
 
@@ -631,7 +631,7 @@ someone-is-on-https
 
 **The trap.** A predicate nothing can answer looks identical to one that matched nothing. `list --filter "host:cdn"` returns *no rows*, not because nothing matched but because reverse DNS never ran, and in `--quiet` mode the hint that would say so is suppressed along with everything else. For a filter on an enrichment column, add the switch it depends on (`--dns`, `--db`, `--traffic`) or the gate silently answers the wrong question.
 
-### 15. What opened while I was away
+### 18. What opened while I was away
 
 The longest-running form, and the one that answers "did that installer just start something".
 
@@ -648,7 +648,7 @@ wintcp.exe list --watch 1 --changes --event appear --count 30 --filter "proto:tc
 
 The output is a log of what the machine *did*, with a process name and a PID on every line, which polling `Get-NetTCPConnection` in a loop cannot give you without writing a diff engine.
 
-### 33. A machine-readable change feed
+### 19. A machine-readable change feed
 
 ```bat
 wintcp.exe list --watch 2 --changes --event appear,state --format json --count 5 2>nul
@@ -662,12 +662,12 @@ wintcp.exe list --watch 2 --changes --event appear,state --format json --count 5
 
 | Switch | Why it is in this command |
 |---|---|
-| `list --format json` | One JSON object **per line** (NDJSON), not the array of recipe 29. Deliberately: an event stream is consumed incrementally, so a line-at-a-time format can be piped into a reader that never buffers the whole thing. |
-| `list --event appear,state` | The switch that makes the feed usable at scale, as in recipe 12. |
+| `list --format json` | One JSON object **per line** (NDJSON), not the array of recipe 33. Deliberately: an event stream is consumed incrementally, so a line-at-a-time format can be piped into a reader that never buffers the whole thing. |
+| `list --event appear,state` | The switch that makes the feed usable at scale, as in recipe 15. |
 | `list --watch 2` | Also the **sensitivity**: a socket that opens and closes inside the interval is never seen. Choose it against the shortest event you care about. |
 | `2>nul` | Drops the human-readable stderr baseline line so the data stream stays pure. |
 
-`--count` bounds watch *ticks*, not emitted events, so a busy machine produces far more lines than 5. Types follow recipe 29 with one deliberate difference: `lport`, `rport` and `pid` are JSON **numbers** here (an event is a machine record and a consumer will compare them), and a `state` event adds `old_state` so the transition is visible rather than inferred from two records.
+`--count` bounds watch *ticks*, not emitted events, so a busy machine produces far more lines than 5. Types follow recipe 33 with one deliberate difference: `lport`, `rport` and `pid` are JSON **numbers** here (an event is a machine record and a consumer will compare them), and a `state` event adds `old_state` so the transition is visible rather than inferred from two records.
 
 ---
 
@@ -675,7 +675,7 @@ wintcp.exe list --watch 2 --changes --event appear,state --format json --count 5
 
 > Linux: `tcpdump` plus `tshark -z follow`. Windows: `pktmon` cannot filter by process and has no reassembly or follow view at all.
 
-### 16. Follow one stream, selected from the live row
+### 20. Follow one stream, selected from the live row
 
 **Needs administrator rights.** The capture filter is derived from the row you can see, so the capture is provably the right conversation.
 
@@ -701,7 +701,7 @@ packets=<n> toServer=<n> toClient=<n> blocks=<n>
 
 Two things stop it before any of that, and both exit 1 with the reason rather than an empty table. They are worth knowing because the selector in the first line is exactly how you meet them:
 
-- **Loopback.** `pktmon` does not capture `127.0.0.1` or `::1` at all, so a selector that resolves to a loopback connection reports *the capture produced no packets* and then names loopback as the cause. This is the trap recipe 20 warns about: `exclude:127.` drops `127.` but leaves `::1` rows in the list, and a `::1` row always fails here.
+- **Loopback.** `pktmon` does not capture `127.0.0.1` or `::1` at all, so a selector that resolves to a loopback connection reports *the capture produced no packets* and then names loopback as the cause. This is the trap recipe 24 warns about: `exclude:127.` drops `127.` but leaves `::1` rows in the list, and a `::1` row always fails here.
 
 - **Idle.** No packets inside the window exits 1 with *No packets for this connection were captured*, blaming either a quiet conversation or one established before the capture began. Pick a busier row or lengthen `--secs`.
 
@@ -741,7 +741,7 @@ The ASCII gutter uses `.` for every non-printable byte, the `hexdump(1)` convent
 
 `--out` writes the capture **byte-for-byte** as pcapng while it is still on disk, so the file you get is the file that was parsed - not a re-serialisation that could differ. It opens in Wireshark or `tshark` with no conversion step.
 
-### 17. Bounded scripted capture
+### 21. Bounded scripted capture
 
 One atomic run, where `pktmon` needs a manual start, a stop and an `etl2pcap`.
 
@@ -755,7 +755,7 @@ wintcp.exe capture --select "pid:22180" --secs 5 --yes
 | `capture --secs 5` | The window. Fixed, so the whole run is `5 s + convert + parse` with no interaction: the difference between a job that finishes and a job that waits forever. |
 | `capture --yes` | Required; without it, exit `3`. |
 
-### 18. Dry-run the capture plan
+### 22. Dry-run the capture plan
 
 No tool shows its plan. This one prints it, changes nothing, and refuses a plan that would catch more than one stream.
 
@@ -780,7 +780,7 @@ The plan and the `--yes` gate come **before** the elevation check, so a dry run 
 
 > One table where Windows needs two to four tools.
 
-### 19. Port owner, including the executable path
+### 23. Port owner, including the executable path
 
 `netstat` gives a PID only, and `tasklist` has no port link at all.
 
@@ -801,7 +801,7 @@ System                       System                                             
 
 Two rows, not one: a dual-stack listener is **one socket reported once per family**, exactly as `netstat` does. That is also why a bare port selector is ambiguous for a listener (recipe 2).
 
-### 20. Exposed listeners beyond loopback
+### 24. Exposed listeners beyond loopback
 
 Neither `netstat` nor `tasklist` can filter at all, and this is the security question people actually have: *what is this box listening on that the network can reach?*
 
@@ -830,7 +830,7 @@ wintcp.exe list --filter "state:listen exclude:127." --sort lport --columns pid,
 
 The dual-stack duplication shows again: `135` on `0.0.0.0` and `::` is one socket in two families, so a port count from this table is not a count of sockets. `Get-NetTCPConnection` has the same duplication and no filter to remove it.
 
-### 21. UDP owner inventory
+### 25. UDP owner inventory
 
 `netstat -b` is slow, needs admin, and gives service names without PIDs for half the rows.
 
@@ -855,7 +855,7 @@ System                           4  169.254.123.251                       137  U
 
 `netstat -ab` is the built-in that comes closest, and it is the reason this recipe exists: it is too slow to use in a loop, it needs elevation for the `-b` part, and it prints the service name rather than the owning process and PID, which is what you need to act.
 
-### 22. IPv6, UDP and TCP in one table
+### 26. IPv6, UDP and TCP in one table
 
 `Get-NetTCPConnection` is TCP-only, and `netstat` splits its output by family and protocol into sections you read separately.
 
@@ -879,7 +879,7 @@ TCPv6  lsass.exe   ::               49664        LISTENING
 
 Link-local IPv6 addresses print with their **scope ID** (`fe80::1%12`), because the scope is part of the address for routing purposes and dropping it makes the row unroutable on paper. IPv4-mapped IPv6 (`::ffff:1.2.3.4`) is normalised to `1.2.3.4` so the same host does not appear twice.
 
-### 23. Process table with CPU % and connection counts
+### 27. Process table with CPU % and connection counts
 
 `tasklist` has neither, and Task Manager is GUI-only.
 
@@ -903,7 +903,7 @@ wintcp.exe ps --filter "proto:udp" --sort conns --limit 3
 
 CPU % is meaningful from the very first refresh because the sampler primes its baseline with a short double sample. A reading that cannot be taken (a protected process without elevation) shows `—` and sorts last in **both** directions, rather than first as a zero would.
 
-### 24. One-shot system health as JSON
+### 28. One-shot system health as JSON
 
 No built-in emits JSON, and `Get-Counter` needs a multi-counter script plus its own formatting.
 
@@ -925,7 +925,7 @@ CPU 7.6%  MEM 26.38 GB/63.72 GB (41.4%)  DISK 0 B/s+356.7 KB/s  NET 17.6 KB/s+9.
 
 Every reading carries a `*Known` flag, so a value that could not be taken is distinguishable from a real zero: `"diskKnown":false` with `diskReadBps:0` is a different statement from a disk that genuinely read nothing. That is the difference between a health check you can alert on and one that pages you at 3 a.m. for a disabled counter.
 
-### 25. The filter grammar: ranges, excludes, prefixes, quoting
+### 29. The filter grammar: ranges, excludes, prefixes, quoting
 
 ```bat
 wintcp.exe list --filter "lport:49600-49700 exclude:127." --sort lport --columns pid,process,lport,local --limit 8
@@ -960,7 +960,7 @@ The complete grammar is in the [filter language reference](filters.md). The comm
 | Form | Why it is in these commands |
 |---|---|
 | `lport:49600-49700` | A numeric **range** on the local port only, combined with a numeric `--sort lport` on the same column: the "find the gaps" pattern. |
-| `exclude:127.` | Negation, as in recipe 20. |
+| `exclude:127.` | Negation, as in recipe 24. |
 | `local:port:49665` | The port, restricted to the **local** side, so it cannot match a connection *to* a remote 49665. |
 | `note:"corporate dns"` | A quoted value: one term, not two AND-ed ones. On the command line the embedded quotes are doubled (`"note:""corporate dns"""`). |
 
@@ -975,7 +975,7 @@ Two details are worth internalising, because both are places a filter silently r
 
 > No built-in analog: nothing on Windows stores a filter you reuse, or pins a peer with a note and then lets you *find* it again.
 
-### 26. Pin a peer with a tag and a note, and find it again
+### 30. Pin a peer with a tag and a note, and find it again
 
 A bookmark's identity is **remote address + remote port**, because that pair survives a reconnect. The port is part of the match, not decoration: a mark on `1.2.3.4:9999` does not light up a live `1.2.3.4:443` row.
 
@@ -1010,7 +1010,7 @@ bookmark removed.
 | `list --filter "note:…"` | The step that makes a note worth writing. The note is joined onto the row, so `note:` is a real filter field. **Quote a multi-word note** (`note:"vendor api"`) or the space is read as AND. |
 | `bookmark remove` | Deletes the bookmark; the color and note go with it, because the join clears both on every refresh. |
 
-### 27. Save and reuse a triage view
+### 31. Save and reuse a triage view
 
 ```bat
 wintcp.exe preset save  --name web --filter "port:443" --sort pid
@@ -1043,7 +1043,7 @@ preset 'web' exists: refused: pass --force to proceed (or --dry-run to preview).
 
 An applied view that matches nothing prints only its header and exits `0`, exactly as a non-quiet `list` does. `preset apply` does not accept `--quiet` - that is exit `2` - so unlike `list` it offers no match-or-not exit code to branch on; branch on whether a data row was printed.
 
-### 28. Excel-ready export with column selection
+### 32. Excel-ready export with column selection
 
 `netstat` output cannot be columned at all, and `ConvertTo-Csv` gives you neither a BOM nor column control.
 
@@ -1083,7 +1083,7 @@ Compare the flat `conns.csv` header (`Proto,Local address,Local port,Remote addr
 
 Two further details: **CSV and TSV carry a UTF-8 BOM and JSON never does** (verified byte-wise by `tests\cli.bat`), and **`--limit` is refused, not ignored**, because a file that quietly holds 5 of 300 rows while the tool reports success is a lie about the machine. Narrow with `--filter`, or pipe `list --limit` output instead.
 
-### 29. A stable JSON schema for dashboards
+### 33. A stable JSON schema for dashboards
 
 Stable lowercase keys, so a consumer is written once.
 
@@ -1110,11 +1110,11 @@ wintcp.exe list --format json --columns full --limit 1 2>nul
 | `list --columns a,b,c` | Decides which keys appear and in which order. Asking for `pid,process` gives exactly those two keys, so the consumer's field list is under your control. |
 | `2>nul` | Drops stderr. **Advisory** messages (`column: "host" without --dns…`) go to stderr and never into the JSON: stdout is data, stderr is advice. |
 
-Types are chosen for the consumer, not for the table's convenience. `proto`, `state` and `process` are display strings; `lport` and `rport` are **strings**, so a consumer never has to care that port 0 means "no port" for UDP; and an unreadable stat is the em dash `—` rather than `0` or `null`, because "we could not measure this" and "this is zero" are different answers. The change feed in recipe 33 uses numeric `lport`/`rport`/`pid`, so a consumer of both knows the difference is deliberate.
+Types are chosen for the consumer, not for the table's convenience. `proto`, `state` and `process` are display strings; `lport` and `rport` are **strings**, so a consumer never has to care that port 0 means "no port" for UDP; and an unreadable stat is the em dash `—` rather than `0` or `null`, because "we could not measure this" and "this is zero" are different answers. The change feed in recipe 19 uses numeric `lport`/`rport`/`pid`, so a consumer of both knows the difference is deliberate.
 
-### 30. Quiet exit-code automation
+### 34. Quiet exit-code automation
 
-Zero output, and the exit code is the answer. This is recipe 14 seen as a composition: the same contract wired into a scheduler or a CI step.
+Zero output, and the exit code is the answer. This is recipe 17 seen as a composition: the same contract wired into a scheduler or a CI step.
 
 ```bat
 wintcp.exe list --filter "state:listen exclude:127." --quiet || echo no-exposed-listeners
@@ -1130,7 +1130,7 @@ wintcp.exe ps --sort mem --limit 1 --quiet || echo no-processes
 | `ps --quiet` | The same contract on the process table. `ps --quiet` alone is an "is the process table readable" gate. |
 | `\|\|` / `&&` | The branch. The shell is the control flow. |
 
-### 37. What can this build do on this machine, and what is missing?
+### 35. What can this build do on this machine, and what is missing?
 
 A feature that is missing and a feature that is broken look identical from the outside: the column is empty either way. `version` reports the state of **this run** instead of a feature list, so the reason is read rather than guessed at, and it is the first thing to run on an unfamiliar Windows install.
 
@@ -1166,7 +1166,7 @@ Connections       304
 
 `version` always exits `0` - it is a report, not a test, so a wrapper can call it before deciding whether anything is wrong. The `Optional features` line is the one that separates *the binary cannot do this* from *this machine cannot*, which is the distinction a blank column never makes on its own.
 
-### 38. Why does my JSON parser wait for the array to close?
+### 36. Why does my JSON parser wait for the array to close?
 
 `--format json` emits a single array, so nothing can be read until the closing `]` - and on a `--watch` run that closing bracket does not arrive until the process exits. `jsonl` is NDJSON: one complete object per line, no wrapper, so a line-oriented consumer gets whole records as they are produced.
 
@@ -1194,4 +1194,4 @@ wintcp.exe list --format jsonl --columns proto,local,lport,remote,rport,state,pi
 | `--columns a,b,c` | Fixes which keys appear and in which order. Because both formats render the same column set, switching `json` to `jsonl` does not move the consumer's field list. |
 | `--limit 2` | Bounds the sample. In a real script `--watch` supplies the stream instead and `--limit` stays off. |
 
-`jsonl` is `json` with a different renderer, not a fourth format: same keys, same types, and the same em dash `—` for a stat nobody could measure rather than `0` or `null`. One consequence is worth knowing - **with `--changes` both formats are already NDJSON**, because a change feed is a stream by nature and there is no array to close; the difference only shows up on the snapshot forms above. See [the change feed as JSON](#33-a-machine-readable-change-feed) for that feed in either format.
+`jsonl` is `json` with a different renderer, not a fourth format: same keys, same types, and the same em dash `—` for a stat nobody could measure rather than `0` or `null`. One consequence is worth knowing - **with `--changes` both formats are already NDJSON**, because a change feed is a stream by nature and there is no array to close; the difference only shows up on the snapshot forms above. See [the change feed as JSON]#19-a-machine-readable-change-feed) for that feed in either format.
