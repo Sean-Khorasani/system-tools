@@ -470,10 +470,8 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
                    static_cast<unsigned long>(changeLog_.LastChildError()))
             .c_str();
     }
-    if (::wcscmp(op, L"streamVisible") == 0) {
-        return stream_.Handle() != nullptr && ::IsWindow(stream_.Handle())
-                   ? L"1" : L"0";
-    }
+    // "streamVisible" was removed with the hex window. Nothing queried it, and
+    // a property that always answers "0" would be a lie waiting for a caller.
     if (::wcscmp(op, L"geoLoaded") == 0) {
         return geo_.Loaded() ? L"1" : L"0";
     }

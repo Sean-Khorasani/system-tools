@@ -221,7 +221,6 @@
     <ClCompile Include="src\BlockConn.cpp" />
     <ClCompile Include="src\GeoIp.cpp" />
     <ClCompile Include="src\Elevate.cpp" />
-    <ClCompile Include="src\HexTextWindow.cpp" />
     <ClCompile Include="src\Pcapng.cpp" />
     
     
@@ -242,9 +241,9 @@
     <ClCompile Include="src\DetailModel.cpp" />
     <ClCompile Include="src\TypeToJump.cpp" />
     <ClCompile Include="src\StreamCapture.cpp" />
+    <ClCompile Include="src\TlsDecode.cpp" />
     <ClCompile Include="src\Alerts.cpp" />
     <ClCompile Include="src\TcpReasm.cpp" />
-    <ClCompile Include="src\TlsDecode.cpp" />
     <ClCompile Include="src\Cli.cpp" />
     <ClCompile Include="src\EtwTraffic.cpp" />
     <ClCompile Include="src\ProcStats.cpp" />
@@ -275,7 +274,6 @@
     <ClInclude Include="src\BlockConn.h" />
     <ClInclude Include="src\GeoIp.h" />
     <ClInclude Include="src\Elevate.h" />
-    <ClInclude Include="src\HexTextWindow.h" />
     <ClInclude Include="src\Pcapng.h" />
     
     

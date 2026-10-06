@@ -112,7 +112,9 @@ Supporting rules:
 
 On a machine with such a socket the traffic, age and rate columns are **partial**: `—` for sockets that could not be read. The GUI reports the count so it is visible rather than silent. A row with no age never matches `duration:`, so the filter can return fewer rows than the table shows instead of pretending the unmeasured ones are new.
 
-Most `—` cells are not stalls at all. The majority of sockets on a busy machine are UDP, to which `SIO_TCP_INFO` does not apply, and they answer instantly with `WSAENOTSOCK`.
+Most `-` cells are not stalls at all. The majority of sockets on a busy machine are UDP, to which `SIO_TCP_INFO` does not apply, and they answer instantly with `WSAENOTSOCK`. Measured on one Windows 11 host by walking every socket-shaped handle the system reported: of **199,464** handles total, **13,955** belonged to sockets, and of those **12,235** failed the ioctl instantly and **1,720** belonged to a process that could not be opened at all. **None** of them answered with a byte count. A scan that appears to be failing is usually a scan that is correctly finding that most of the machine is not TCP.
+
+Because the scan is only as complete as the pool allows, a one-shot `list --traffic` can differ between two runs on the same machine: when every worker is consumed by a socket that never answers, the pass stops on its no-progress budget and merges only what it read, so fewer rows carry a figure. `--watch` is steadier because the remembered-stalled set means the second tick does not pay for the same sockets again.
 
 ## Limits
 

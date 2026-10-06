@@ -191,7 +191,6 @@
     <ClCompile Include="..\src\TcpReasm.cpp" />
     <ClCompile Include="..\src\StreamCapture.cpp" />
     <ClCompile Include="..\src\TlsDecode.cpp" />
-    <ClCompile Include="..\src\HexTextWindow.cpp" />
     <ClCompile Include="..\src\Elevate.cpp" />
     <ClCompile Include="..\src\Alerts.cpp" />
     <ClCompile Include="..\src\TypeToJump.cpp" />

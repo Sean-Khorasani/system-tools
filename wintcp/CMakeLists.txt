@@ -68,8 +68,6 @@ add_executable(wintcp
     wintcp/src/Elevate.h
     wintcp/src/GeoIp.cpp
     wintcp/src/GeoIp.h
-    wintcp/src/HexTextWindow.cpp
-    wintcp/src/HexTextWindow.h
     wintcp/src/Pcapng.cpp
     wintcp/src/Pcapng.h
     wintcp/src/TypeToJump.cpp

@@ -37,14 +37,12 @@
 #include "Elevate.h"
 #include "EtwTraffic.h"
 #include "GeoIp.h"
-#include "HexTextWindow.h"
 #include "RefreshEngine.h"
 #include "Settings.h"
 #include "Presets.h"
 #include "Bookmarks.h"
 #include "ChangeLogWindow.h"
 #include "TypeToJump.h"
-#include "StreamCapture.h"
 #include "SocketTraffic.h"
 
 namespace wintcp {
@@ -286,7 +284,6 @@ private:
     std::shared_ptr<std::atomic<bool>> fallbackFlag_ =
         std::make_shared<std::atomic<bool>>(false);
     DetailsDialog details_;
-    HexTextWindow stream_;                   // follow TCP stream
     ChartsWindow charts_;                    // performance graphs
     DWORD detailsPid_ = 0;                   // PID the details window shows
     DetailModel detailsModel_;               // last content shown (7.18)

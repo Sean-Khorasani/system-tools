@@ -195,7 +195,9 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
 
 **The shared pipeline** - `Snapshot.*` (the only snapshot producer), `RefreshEngine.*` (background worker and watchdog), `DnsResolver.*` (reverse DNS), `Commands.*` (the abstract command layer both front ends call).
 
-**Enumeration and enrichment** - `TcpTable.*` (IP Helper table, including scope IDs), `ProcessInfo.*` (Toolhelp / OpenProcess / SCM cache), `ProcStats.*` (per-PID CPU, memory and IO), `SysStats.*` (system CPU, memory, disk, net), `GeoIp.*` (MaxMind DB reader), `TlsDecode.*`, `WinCaps.*` (Windows capability report).
+**Enumeration and enrichment** - `TcpTable.*` (IP Helper table, including scope IDs), `ProcessInfo.*` (Toolhelp / OpenProcess / SCM cache), `ProcStats.*` (per-PID CPU, memory and IO), `SysStats.*` (system CPU, memory, disk, net), `GeoIp.*` (MaxMind DB reader), `WinCaps.*` (Windows capability report).
+
+**Handshake parsing** - `TlsDecode.*` (TLS record framing, ClientHello/ServerHello parsing, cipher-suite names). Complete and tested, but it currently has **no production caller**: it used to be read by the deleted hex window, and nothing in the snapshot or enrichment path calls it. It is kept because the parser is the tested specification of what a handshake contains, and because `capture --text` is the obvious place to use it.
 
 **Traffic** - `EtwTraffic.*` and `EtwTrafficTypes.h` (kernel-logger counters, elevated), `SocketTraffic.*` (non-admin `SIO_TCP_INFO` fallback).
 
@@ -207,7 +209,7 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
 
 **Windows** - `MainWindow.*` (window, controls, menus, list, tray, theming), `DetailsDialog.*` with `DetailModel.*`, `ChartsWindow.*` with `ChartExport.*`, `ChangeLogWindow.*`, `PromptDialog.*`, `Alerts.*`, `TypeToJump.*`, `Freeze.*`.
 
-`HexTextWindow.*` is built and linked but **unreachable**: it was the window behind the GUI's *Follow TCP stream* action, which was removed on 2026-10-05 because it re-elevated the whole application and then blocked modally on a capture that can legitimately return nothing. The capability now lives in the CLI (`capture --text`, `capture --out`), so the class is kept only until a decision is made to delete it - see the source layout note in the commit that removed the menu entry.
+There is deliberately no hex window. `HexTextWindow.*` was the view behind the GUI's *Follow TCP stream* action, and it was deleted on 2026-10-05: the action was removed first (it re-elevated the whole application, then blocked modally on a capture that can legitimately return nothing), which left the class unreachable, and an unreachable window is worse than no window - it still compiles, still appears in the project file, and reads as a feature that works. The capability lives in the CLI instead (`capture --text` prints the reassembled stream, `capture --out FILE` keeps the pcapng), and `MainWindow.cpp` keeps the removal note that explains why, because the chain of reasons is the argument for the CLI having the feature at all.
 
 **Infrastructure** - `Utils.*` (UTF-8, formatting, DPI, error text), `CrashDump.*`, `Version.h` (the single source of truth for the version), `resource.h` and `wintcp.rc` (menu, accelerator, manifest, icon, version).
 
