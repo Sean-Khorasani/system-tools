@@ -178,6 +178,67 @@ private:
 // column is optional decoration). Needs advapi32.
 void QueryServiceNames(std::map<DWORD, std::wstring>& out);
 
+// ---- per-thread facts (todo.md 8.8 G5) ------------------------------------
+//
+// Why this exists at all, since the request that led here was for a "Thread
+// COLUMN": a per-connection thread cannot be had. MIB_TCPROW_OWNER_PID - the row
+// behind GetExtendedTcpTable(TCP_TABLE_OWNER_PID_ALL), which is this app's
+// whole basis - has no thread id, and an AFD endpoint is owned by the PROCESS,
+// not by a thread. There is nothing to put in such a column. What a process does
+// have is a list of threads, and that is the thing worth showing.
+//
+// Every field below comes from a DOCUMENTED user-mode API. Notably absent is the
+// thread's current state: GetThreadInfo/THREADINFO is a legacy kernel32 export
+// that the Windows SDK no longer declares for user mode, and its state and
+// wait-reason enumerators are not published - so a "Waiting/Running" column would
+// mean inventing a mapping. Better absent than wrong. The facts below answer
+// "what is this process doing" without it: which threads exist, which have
+// burned CPU, and since when.
+//
+// cpu100ns and create100ns are raw 100ns counts since 1601 (CPU is kernel+user
+// since thread start), left unformatted so this header holds no display policy.
+// timesKnown false means OpenThread or GetThreadTimes was refused - a real
+// condition for protected processes, which must render as unknown, never as zero.
+struct ThreadInfo {
+    DWORD tid = 0;
+    DWORD basePriority = 0;      // tpBasePri from THREADENTRY32
+    ULONGLONG cpu100ns = 0;
+    ULONGLONG create100ns = 0;
+    bool timesKnown = false;
+};
+
+// The threads of 'pid', as last sampled.
+//
+// WHY IT IS CACHED AND WHY IT IS ASYNCHRONOUS. Measured on this machine rather
+// than estimated: CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) costs ~48 ms, and
+// the per-thread work on top is negligible by comparison (39 threads 49 ms, 456
+// threads 54 ms - the cost is the kernel-wide walk, not the threads). Details
+// rebuilds its model on every refresh tick, on the UI thread, so calling this
+// inline would freeze the window for 48 ms every two seconds for as long as
+// Details is open.
+//
+// So the snapshot is taken on a private worker and published under a lock, and
+// this function returns the last published value immediately: it NEVER blocks on
+// the snapshot. A caller arriving before the first result gets an empty list and
+// known=false, which must be rendered as "not read yet" - a process always has at
+// least one thread, so the empty reading is a falsehood.
+//
+// 'ageMs' receives how long ago the returned sample was taken, so a caller can
+// say so instead of implying the numbers are current. UINT_MAX when unknown.
+//
+// 'allowBlocking' exists for the ONE-SHOT caller. A GUI that polls this
+// every couple of seconds is always served from the last published snapshot
+// and never waits - but a command such as `wintcp.exe details` runs once and
+// exits, so "nothing published yet" would mean it NEVER prints the section.
+// Measured, that bug looked exactly like "the feature does not work": the
+// first and only call returned an empty list and the process ended. So a
+// one-shot caller opts in to paying the ~48 ms inline, which for a command
+// that is about to exit anyway is the better trade by three orders of
+// magnitude.
+std::vector<ThreadInfo> ProcessThreads(DWORD pid, bool allowBlocking,
+                                       bool* known = nullptr,
+                                       unsigned* ageMs = nullptr);
+
 // Full command line of a process (best effort via NtQueryInformationProcess
 // ProcessCommandLineInformation; empty when unavailable).
 std::wstring QueryProcessCommandLine(DWORD pid);

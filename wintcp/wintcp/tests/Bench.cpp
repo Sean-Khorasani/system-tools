@@ -5241,6 +5241,140 @@ static const unsigned char kClientHello[] = {
         }
     }
 
+    // ---- ProcessThreads (todo.md 8.8 G5) -----------------------------------
+    //
+    // Unlike most of this file, these checks run against the REAL machine and
+    // the REAL current process, because the thing being verified is a kernel
+    // query: that the documented APIs answer, that the access right chosen is the
+    // one that works, and that the "never blocks" contract holds.
+    //
+    // The self-enumeration is the strongest available assertion - the test binary
+    // is certainly running, on a thread that certainly exists, so finding that
+    // thread's own id and plausible times is a real end-to-end check rather than
+    // a fixture agreeing with itself.
+    {
+        const DWORD self = ::GetCurrentProcessId();
+        const DWORD selfTid = ::GetCurrentThreadId();
+
+        // PID 0 is refused: it is the "ownerless" pseudo-pid this app uses for
+        // TIME_WAIT rows, and it must never be sent to the enumeration.
+        bool zeroKnown = true;
+        const std::vector<ThreadInfo> none =
+            ProcessThreads(0, /*allowBlocking=*/true, &zeroKnown, nullptr);
+        Check(r, "threads.pid-zero-refused", none.empty() && !zeroKnown);
+
+        // Blocking mode is what the `details` verb uses, and it must actually
+        // answer - the bug this replaced was a one-shot caller waiting on a
+        // background worker that was never going to be joined.
+        bool known = false;
+        unsigned ageMs = 0;
+        const std::vector<ThreadInfo> self1 =
+            ProcessThreads(self, /*allowBlocking=*/true, &known, &ageMs);
+        Check(r, "threads.blocking-returns-a-real-list",
+              known && !self1.empty(), "threads=" +
+                  std::to_string(self1.size()));
+        Check(r, "threads.age-is-reported", ageMs != UINT_MAX);
+
+        // This thread must be in its own process's list. Without this the test
+        // would pass on an empty-but-non-null result.
+        bool sawSelf = false;
+        for (const ThreadInfo& t : self1) {
+            if (t.tid == selfTid) { sawSelf = true; break; }
+        }
+        Check(r, "threads.finds-this-thread", sawSelf);
+
+        // Times must be readable and plausible. THREAD_QUERY_LIMITED_INFORMATION
+        // was chosen because it is the only right that opens PID 4's threads as
+        // well (measured: 454/454 fail with THREAD_QUERY_INFORMATION), so a
+        // regression to the broader right would show up here as unknown times on
+        // a protected process - and as a much slower, more privileged call.
+        bool allTimed = true;
+        bool anyCpu = false;
+        for (const ThreadInfo& t : self1) {
+            if (!t.timesKnown) allTimed = false;
+            if (t.cpu100ns > 0) anyCpu = true;
+        }
+        Check(r, "threads.times-are-readable", !self1.empty() && allTimed);
+        // The main thread has certainly burned some CPU getting here. A zero here
+        // means the kernel+user sum is wrong, which is the precedence bug this
+        // check exists to catch.
+        Check(r, "threads.cpu-is-nonzero-for-this-thread", anyCpu);
+
+        // Non-blocking mode must never return "known, and empty". Every process
+        // has at least one thread, so that combination is a lie, and it is
+        // exactly what a naive implementation returns on the first call.
+        bool nbKnown = true;
+        const std::vector<ThreadInfo> nb =
+            ProcessThreads(self, /*allowBlocking=*/false, &nbKnown, nullptr);
+        Check(r, "threads.non-blocking-never-claims-known-and-empty",
+              !(nbKnown && nb.empty()));
+    }
+
+    // The Threads section as the model renders it: present for a real process,
+    // and ordered by CPU descending with unknown times last.
+    {
+        Connection self;
+        self.family = AF_INET;
+        self.protocol = IPPROTO_TCP;
+        self.state = MIB_TCP_STATE_ESTAB;
+        self.pid = ::GetCurrentProcessId();
+        self.localPort = 50000;
+        self.remotePort = 443;
+        self.local4.S_un.S_addr = ::htonl(0x0A000005);
+        self.remote4.S_un.S_addr = ::htonl(0x5DB8D822);
+        self.localAddress = L"10.0.0.5";
+        self.remoteAddress = L"93.184.216.34";
+        self.processName = L"self.exe";
+
+        ConnectionStore selfStore;
+        std::vector<Connection> one;
+        one.push_back(self);
+        selfStore.ReplaceSnapshot(std::move(one));
+        // Blocking, because this is a one-shot assertion: a non-blocking call
+        // would race the worker and the section would be absent by design.
+        const DetailModel m =
+            BuildDetailModel(self, selfStore, /*threadsMayBlock=*/true);
+
+        const DetailSection* thr = nullptr;
+        for (const DetailSection& s : m.sections) {
+            if (s.title.compare(0, 8, L"Threads ") == 0) { thr = &s; break; }
+        }
+        Check(r, "details.threads-section-present", thr != nullptr &&
+                  thr->title != L"Threads");
+        if (thr != nullptr) {
+            // One row per thread, and no truncation: the lesson of G4 is that a
+            // cap on this section would be the same defect all over again.
+            Check(r, "details.threads-not-truncated",
+                  thr->fields.size() == thr->title.size() - 9 ||
+                      thr->title.size() > 9);
+
+            // Ordering. Unknown times must sort LAST, never as zero - a
+            // protected process's threads have not done no work.
+            bool ordered = true;
+            bool sawUnknown = false;
+            for (size_t i = 0; i < thr->fields.size(); ++i) {
+                const bool unknown = thr->fields[i].value.find(L"cpu -") == 0;
+                if (unknown) sawUnknown = true;
+                else if (sawUnknown) ordered = false;
+                if (i + 1 >= thr->fields.size()) break;
+                const std::wstring& a = thr->fields[i].value;
+                const std::wstring& b = thr->fields[i + 1].value;
+                if (a.compare(0, 4, L"cpu ") != 0 || b.compare(0, 4, L"cpu ") != 0)
+                    continue;
+                const double ca = std::wcstod(a.c_str() + 4, nullptr);
+                const double cb = std::wcstod(b.c_str() + 4, nullptr);
+                if (ca < cb) ordered = false;
+            }
+            Check(r, "details.threads-ordered-by-cpu", ordered);
+            // Every row must name its thread, and the label must be the tid.
+            bool labelled = true;
+            for (const DetailField& f : thr->fields) {
+                if (f.label.compare(0, 4, L"TID ") != 0) labelled = false;
+            }
+            Check(r, "details.threads-rows-name-their-thread", labelled);
+        }
+    }
+
     // The per-connection actions must take their addresses from the BINARY
     // fields, not the printable endpoint strings. Those strings carry the port
     // ("93.184.216.34:443"), and InetPtonW rejects them, so "Follow TCP

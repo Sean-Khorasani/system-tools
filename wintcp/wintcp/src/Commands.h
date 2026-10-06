@@ -221,7 +221,15 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
 // Pure builder lifted out of MainWindow::BuildDetails: the GUI calls this
 // with its live store, the CLI with a one-shot store. Needs the store for
 // the per-PID connection list.
-DetailModel BuildDetailModel(const Connection& c, const ConnectionStore& store);
+//
+// 'threadsMayBlock' is the one behavioural difference between the two callers,
+// and it is forced by the measurement in ProcessInfo.h. Enumerating a
+// process's threads costs ~48 ms, which the GUI must never pay inline (it
+// rebuilds this model on every refresh tick) and a one-shot command must pay
+// or it never sees the result at all. Default false, so the safe case is the
+// default and the caller that knows better has to say so.
+DetailModel BuildDetailModel(const Connection& c, const ConnectionStore& store,
+                            bool threadsMayBlock = false);
 
 // ---- view / preset helpers -------------------------------------------------
 // Non-widget core of MainWindow::CurrentPresetView / ApplyPresetView.

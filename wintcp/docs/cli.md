@@ -229,7 +229,20 @@ Samples system CPU, memory, disk and network rates once and exits. Rates need tw
 
 ### `details`
 
-A sectioned dossier for **exactly one** connection: process identity, command line, start time, service, live CPU/memory/disk/network statistics, the selected connection, and every other endpoint owned by the same PID. `--traffic` fills the network lines and rate, `--dns` fills the hostname, `--db` fills the country. Ambiguity and no-match are both exit `1`.
+A sectioned dossier for **exactly one** connection: process identity, command line, start
+time, service, the process's threads, live CPU/memory/disk/network statistics, the selected
+connection, and every other endpoint owned by the same PID. `--traffic` fills the network
+lines and rate, `--dns` fills the hostname, `--db` fills the country. Ambiguity and
+no-match are both exit `1`.
+
+The **Threads** section lists every thread the process owns, ranked by CPU time, with
+each thread's lifetime CPU, age and base priority. Threads whose times cannot be read
+show `-` and sort last rather than showing `0`; and the note under the list states that
+the CPU figure is total since each thread started, not since the command ran.
+
+There is **no per-connection thread** to report, because Windows has no such thing: a
+socket is owned by the process, not a thread, and `MIB_TCPROW_OWNER_PID` carries no
+thread id. See [the GUI guide](gui.md#threads) for the full reasoning.
 
 ### `kill`
 

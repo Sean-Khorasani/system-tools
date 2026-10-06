@@ -486,57 +486,76 @@ Remote address    Hostname                                                   Cou
 `details` refuses anything that is not exactly one live row. It will not guess which of 60 connections you meant.
 
 ```bat
-wintcp.exe details --select "process:AnyDesk.exe state:estab" --traffic --dns
+wintcp.exe details --select "pid:19080 lport:52425 proto:tcpv4" --traffic
 ```
 
 ```text
-AnyDesk.exe
-PID 5168   ·   10.0.0.92:48433  →  107.155.105.90:443
+putty.exe
+PID 19080   ·   127.0.0.1:52425  →  127.0.0.1:22
 
 Process
-Name                    AnyDesk.exe
-PID                     5168
-Path                    C:\Program Files (x86)\AnyDesk\AnyDesk.exe
-Command line            "C:\Program Files (x86)\AnyDesk\AnyDesk.exe" --service
-Started                 2026-09-30 10:16:48
-Service                 AnyDesk
-First seen              0s
+Name                    putty.exe
+PID                     19080
+Path                    C:\Program Files\PuTTY\putty.exe
+Command line            putty &000000000000061C:6214
+Started                 2026-10-03 15:49:02
+Service                 —
+First seen              2d 3h
+
+Threads (5)
+TID 30668               cpu 18.95 s   started 2d 3h ago   pri 8
+TID 35204               cpu 0.50 s   started 2d 3h ago   pri 9
+TID 49116               cpu 0.02 s   started 1d 1h ago   pri 8
+TID 27124               cpu 0.00 s   started 1d 1h ago   pri 8
+TID 37412               cpu 0.00 s   started 1d 1h ago   pri 8
+  sampled 0s ago; CPU time is total since each thread started, not since this window opened.
 
 Live stats (this refresh)
-CPU                     0.5 %
-Memory (working set)    67.4 MB
-Memory (private)        43.4 MB
-Disk read               1.7 MB
-Disk written            1007.7 KB
-Disk total              2.6 MB
-Network received        1.8 KB
-Network sent            2.3 KB
-Network total           4.1 KB
-Network rate            ↓ 1.8 KB/s   ↑ 2.3 KB/s
+CPU                     0.0 %
+Memory (working set)    27.3 MB
+Memory (private)        7.9 MB
+Disk read               236.6 KB
+Disk written            343 B
+Disk total              237.0 KB
+Network received        3.9 MB
+Network sent            208.9 KB
+Network total           4.1 MB
 
 Selected connection
 Protocol                TCPv4
-Local                   10.0.0.92:48433
-Remote                  107.155.105.90:443
+Local                   127.0.0.1:52425
+Remote                  127.0.0.1:22
 State                   ESTABLISHED
-Hostname                relay-5d111ddb.net.anydesk.com
-Duration                0s
+Hostname                —
+Duration                2d 3h
 
-Connections (4)
-  TCPv4  0.0.0.0:7070  →  0.0.0.0:0  (LISTENING)
-  TCPv4  10.0.0.92:48433  →  107.155.105.90:443  (ESTABLISHED)
-  TCPv6  [::]:7070  →  [::]:0  (LISTENING)
-  UDPv4  0.0.0.0:50001  →  *:*  (—)
+Connections (1)
+  TCPv4  127.0.0.1:52425   127.0.0.1:22  (ESTABLISHED)
 ```
+
+The **Threads** section is the one worth stopping at. It lists every thread the process
+owns, **ranked by CPU time**, because that ordering is the answer to "what is this
+process doing" - `TID 30668` has burned 19 s and the other four have barely started.
+Three things in that section are deliberate and each prevents a misreading:
+
+- **`cpu` is total since that thread started**, not since this window opened. The
+  note under the list says so, because "18.95 s" beside a window you opened ten
+  seconds ago otherwise reads as a rate, and would be a startling one.
+- **Threads with unreadable times show `-`, not `0`, and sort last.** That is a
+  real condition for protected processes; printing `0.00 s` would be a fabricated
+  measurement rather than an admission of ignorance.
+- **There is no per-connection thread, because Windows has none.** A socket is
+  owned by the process, not a thread, which is why the section is attached to the
+  process rather than to a row. See [the GUI guide](gui.md#threads) for why no
+  Thread column is possible at all.
 
 | Switch | Why it is in this command |
 |---|---|
 | `details --select` | Exactly one connection, or exit `1`. A dossier for "the connection you probably meant" out of 60 is worse than none, because it is confidently wrong. Ambiguity and no-match both exit `1` with the count or the reason. |
 | `details --traffic` | Fills the network received/sent/total lines and the rate. The live-stat block is per process, so without it you get CPU and memory but an empty network section. |
-| `details --dns` | Fills the `Hostname` line. One lookup for one address, so the cost is trivial here, unlike `list --dns`. |
 | `details --db FILE` | Fills the country. The report already names the endpoint; `geoip lookup` is the right tool for a one-off address question. |
 
-The `Connections (4)` block is the part no other tool gives you: the other endpoints owned by the same PID. It is how you notice that an "AnyDesk connection" is one of four, or that a process you did not recognise holds a listener.
+The `Connections (1)` block is the part no other tool gives you: the other endpoints owned by the same PID. It is how you notice that an "AnyDesk connection" is one of four, or that a process you did not recognise holds a listener.
 
 ---
 

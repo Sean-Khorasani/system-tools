@@ -1611,7 +1611,8 @@ CommandResult CmdPs(SnapshotSource& source, const PsOptions& opt) {
 }
 
 DetailModel BuildDetailModel(const Connection& c,
-                             const ConnectionStore& store) {
+                             const ConnectionStore& store,
+                             bool threadsMayBlock) {
     DetailModel m;
     m.title = c.processName.empty() ? c.protoLabel : c.processName;
     m.subtitle = L"PID " + std::to_wstring(c.pid) + L"   ·   " +
@@ -1640,6 +1641,116 @@ DetailModel BuildDetailModel(const Connection& c,
         add(proc, L"First seen", FormatDuration(DurationSeconds(c)));
     }
     m.sections.push_back(std::move(proc));
+
+    // ---- Threads (todo.md 8.8 G5) ------------------------------------------
+    //
+    // What a process is doing, thread by thread. This is NOT a per-connection
+    // thread, because no such thing is obtainable: MIB_TCPROW_OWNER_PID carries
+    // no thread id and an AFD endpoint is owned by the process. See ProcessInfo.h.
+    //
+    // Rendered as ordinary fields rather than a special list: the label column
+    // is 172 px, which suits "TID 8124", and reusing the two-column table means
+    // the section scrolls, elides and copies for free.
+    //
+    // Ranked by CPU time, busiest first, because that ordering is the whole
+    // answer to "what is this process doing" - a ranked list says which thread is
+    // working, an unordered one says only how many there are. Ties break on
+    // thread id so the list does not jitter between refreshes, and threads whose
+    // times could not be read sort LAST rather than being treated as zero: a
+    // protected process's threads have not done no work, they are unknown.
+    {
+        bool threadsKnown = false;
+        unsigned threadsAgeMs = 0;
+        std::vector<ThreadInfo> threads =
+            ProcessThreads(c.pid, threadsMayBlock, &threadsKnown,
+                            &threadsAgeMs);
+        if (c.pid != 0 && (threadsKnown || !threads.empty())) {
+            std::stable_sort(threads.begin(), threads.end(),
+                             [](const ThreadInfo& a, const ThreadInfo& b) {
+                                 if (a.timesKnown != b.timesKnown)
+                                     return a.timesKnown;   // known before unknown
+                                 if (a.cpu100ns != b.cpu100ns)
+                                     return a.cpu100ns > b.cpu100ns;
+                                 return a.tid < b.tid;
+                             });
+
+            DetailSection thr;
+            thr.title = L"Threads (" + std::to_wstring(threads.size()) + L")";
+
+            // "Now" in the same epoch as create100ns, for the age arithmetic.
+            FILETIME nowFt = {};
+            ::GetSystemTimeAsFileTime(&nowFt);
+            const ULONGLONG now100ns =
+                (static_cast<ULONGLONG>(nowFt.dwHighDateTime) << 32) |
+                nowFt.dwLowDateTime;
+
+            wchar_t label[32] = {0};
+            for (const ThreadInfo& t : threads) {
+                ::swprintf_s(label, L"TID %u", t.tid);
+                std::wstring value;
+                if (t.timesKnown) {
+                    wchar_t buf[96] = {0};
+                    // CPU as a duration, not bytes: this is the number a reader
+                    // compares against the others, and "1.2 s" says that where
+                    // "12000000" would only say that we counted.
+                    const double cpuSec = static_cast<double>(t.cpu100ns) / 1e7;
+                    ::swprintf_s(buf, L"cpu %.2f s", cpuSec);
+                    value = buf;
+                    if (t.create100ns != 0 && now100ns > t.create100ns) {
+                        const double ageSec =
+                            static_cast<double>(now100ns - t.create100ns) / 1e7;
+                        value += L"   started " + FormatDuration(
+                                                       static_cast<unsigned>(
+                                                           ageSec));
+                        value += L" ago";
+                    }
+                } else {
+                    // Not zero. A protected process's threads have no readable
+                    // times, and printing 0.00 s would be a fabricated
+                    // measurement rather than an admission of ignorance.
+                    value = L"cpu -   started -";
+                }
+                value += L"   pri " + std::to_wstring(t.basePriority);
+                add(thr, label, value, /*mono=*/false);
+            }
+
+            // The note carries the two things the numbers cannot: how fresh they
+            // are, and that the CPU figure is lifetime-since-thread-start rather
+            // than since this window opened - which is otherwise a very easy
+            // misreading.
+            std::wstring note;
+            if (threadsAgeMs != UINT_MAX) {
+                note = L"sampled " + FormatDuration(threadsAgeMs / 1000) +
+                       L" ago; CPU time is total since each thread started, "
+                       L"not since this window opened.";
+            } else {
+                note = L"reading threads...";
+            }
+            if (!threads.empty()) {
+                bool anyUnknown = false;
+                for (const ThreadInfo& t : threads) {
+                    if (!t.timesKnown) { anyUnknown = true; break; }
+                }
+                if (anyUnknown) {
+                    note += L"  Some threads belong to a process whose times "
+                            L"cannot be read; those show - rather than 0.";
+                }
+            }
+            thr.note = note;
+            m.sections.push_back(std::move(thr));
+        } else if (c.pid == 0) {
+            // An ownerless row (TIME_WAIT) has no process and therefore no
+            // threads. Saying so beats an empty section with no explanation.
+            DetailSection thr;
+            thr.title = L"Threads";
+            thr.note = L"this row has no owning process.";
+            m.sections.push_back(std::move(thr));
+        }
+        // c.pid != 0, nothing published yet, empty: the first sample is still in
+        // flight (see ProcessThreads). Rendered as NO section rather than an
+        // empty one - an empty "Threads" heading would assert "zero threads",
+        // and every process has at least one. The next refresh fills it in.
+    }
 
     DetailSection live;
     live.title = L"Live stats (this refresh)";
@@ -1827,7 +1938,11 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
     if (eo.traffic) {
         JoinTrafficPids(store, std::vector<DWORD>(1, chosen.pid));
     }
-    const DetailModel m = BuildDetailModel(store.Rows()[idx], store);
+    // A one-shot command pays the ~48 ms thread snapshot inline, because the
+    // alternative is to exit before the background worker ever answers - which
+    // is what the first version did, and it printed no Threads section at all.
+    const DetailModel m =
+        BuildDetailModel(store.Rows()[idx], store, /*threadsMayBlock=*/true);
     r.out = WideToUtf8(m.ToPlainText()) + "\r\n";
     return r;
 }

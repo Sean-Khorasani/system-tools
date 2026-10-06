@@ -125,6 +125,22 @@ A sectioned, modeless window with the process identity, command line, creation t
 - **Every connection owned by that PID is listed** - all of them, not a preview. It used to stop at 25 rows and report *… and N more*, which hid the one section that answers "what is this process actually connected to"; the cap is gone rather than made expandable, because an expander would put the answer behind a click on a window whose whole model is "read, and collapse sections". A browser process with 70-odd sockets lists all of them.
 - Note that a multi-process browser puts each process in its **own PID**, so `PID 50092` never mixes in another `chrome.exe`'s sockets, and rows belonging to other PIDs are never listed at all. The list is scoped to the selected row's process, not to everything in the snapshot.
 
+### Threads
+
+A **Threads** section lists the process's own threads, ranked by CPU time with the busiest first:
+
+- Each row is one thread: `TID`, total CPU time since it started, how long ago it started, and its base priority.
+- **Ranked by CPU**, because that ordering is the answer to "what is this process doing". A ranked list says which thread is working; an unordered one says only how many there are.
+- All of them are listed. A 460-thread process shows 460 rows.
+- Threads whose times cannot be read show `-`, not `0`, and sort **last**. That is a real condition for protected processes, and printing `0.00 s` for them would be a fabricated measurement rather than an admission of ignorance.
+- The note says how long ago the sample was taken, and that the CPU figure is lifetime-since-thread-start rather than since the window opened - otherwise "cpu 3985 s" beside a window opened five minutes ago reads as a rate.
+- The section appears within one refresh of opening, not instantly: the enumeration costs about 48 ms because `CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)` walks every thread on the machine, and that runs on a worker so it never freezes the window. `wintcp.exe details` has no such problem - it is a one-shot command and waits for the answer.
+
+**There is deliberately no per-connection thread column, because none exists.** Windows has no notion of a socket's owning thread: `MIB_TCPROW_OWNER_PID` - the row behind the `GetExtendedTcpTable` call this whole app is built on - carries no thread id, and an AFD endpoint is owned by the *process*. That is why TCPView, Process Explorer and Wireshark all stop at the PID too. The only thread association available comes from ETW event headers, and it is the thread that *performed an I/O*, not an owner: on a socket shared between threads it changes from packet to packet, and it is only observable while a trace session runs. A column headed *Thread* holding that would be a label the data does not support.
+
+For the same reason the section omits each thread's current state. `GetThreadInfo`/`THREADINFO` is a legacy kernel32 export that the Windows SDK no longer declares for user mode, and its state and wait-reason values are not published - so "Waiting"/"Running" would mean inventing a mapping. Better absent than wrong.
+
+
 ### Layout
 
 Fields are laid out as a **two-column table**, one row per field:
@@ -205,4 +221,3 @@ Reloading works on a live session: picking another file replaces the previous on
 
 ## Settings and reset
 
-All toggles and window placement are stored in `HKCU\Software\WinTCP`. It is the only key WinTCP writes. Delete it to reset the application to its defaults.
