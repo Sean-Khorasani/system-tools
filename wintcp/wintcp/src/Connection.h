@@ -42,15 +42,37 @@ enum RowTag : unsigned {
 //
 // Windows does not expose a foreign process's plaintext to a separate
 // process, so a TLS row is described by its *handshake*, which is itself
-// unencrypted. Three sources feed this, weakest first, and the strongest
-// available source wins (see the "TLS" section of README.md):
+// unencrypted.
 //
-//   1. SIO_TLS_INFO on a duplicated socket handle - no elevation, gives the
-//      negotiated protocol and cipher suite but no SNI and no certificate.
-//   2. The ETW Schannel provider - elevation, adds SNI and certificate for
-//      a live connection.
-//   3. A packet capture of the handshake - elevation, same two fields, and
-//      available for connections that are no longer live.
+// !! NOTHING POPULATES THIS STRUCT TODAY. Every field below keeps its
+// default, so `tls` reads as an em-dash on every row, the `tls:`/`ssl:`
+// filters never match, and the Details window never shows its TLS section.
+// The renderer, the filter and the sort all exist and are tested; only a
+// producer is missing.
+//
+// WHY THERE IS NO CHEAP SOURCE. An earlier version of this comment claimed
+// the first source was "SIO_TLS_INFO on a duplicated socket handle - no
+// elevation, gives the negotiated protocol and cipher suite". There is no
+// such ioctl: SIO_TLS_INFO is not declared anywhere in the Windows SDK, and
+// TCP_INFO_v0 - which the non-admin traffic scan already reads, and which is
+// the only socket-level info ioctl available to another process - carries
+// State, Mss, ConnectionTimeMs, TimestampsEnabled, RttUs, MinRttUs,
+// BytesInFlight, Cwnd, SndWnd, RcvWnd, RcvBuf, BytesOut, BytesIn,
+// BytesReordered, BytesRetrans, FastRetrans, DupAcksIn, TimeoutEpisodes and
+// SynRetrans. Not one TLS field. So the cheap source this struct was designed
+// around does not exist, which is the likeliest reason nothing was ever
+// written here.
+//
+// THE TWO SOURCES THAT DO EXIST, and neither is cheap:
+//
+//   1. The ETW Schannel provider (Microsoft-Windows-Schannel), which reports
+//      negotiated parameters per connection. Needs elevation, like the traffic
+//      counters. Not implemented.
+//   2. A packet capture of the handshake, parsed by TlsDecode.cpp. Needs
+//      elevation, and only covers connections the user chooses to capture -
+//      which is why it can never fill a column over every row. The parser
+//      EXISTS and is tested (see the TlsDecode section of Bench.cpp); it has
+//      no caller, because `capture` does not hand its bytes to it yet.
 //
 // 'known' false means TLS was looked for and not established, or no source
 // was able to look; the column then shows the same em-dash the other

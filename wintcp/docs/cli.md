@@ -163,8 +163,11 @@ Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separate
 | Process | `process`, `service`, `path`, `ppid` (parent, as *`<pid> <name>`*) |
 | Process trust | `integrity` (mandatory level, *`+AC`* for AppContainer), `signature` (Authenticode verdict; needs `--signatures`) |
 | Live, per process | `traffic`, `rx`, `tx`, `nettotal`, `cpu`, `mem`, `disk`, `procspeed` |
-| Live, per connection | `duration`, `bandwidth` (header *Speed*), `rtt`, `minrtt`, `cwnd`, `retrans`, `tls` |
+| Live, per connection | `duration`, `bandwidth` (header *Speed*), `rtt`, `minrtt`, `cwnd`, `retrans` |
+| Present but never populated | `tls` - see the note below |
 | Enrichment | `host` (needs `--dns`), `country` (needs `--db`), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
+
+> **The `tls` column is inert.** It is accepted, it sorts, it is rendered and it is unit-tested, but **nothing populates it**, so every row shows `-`. Measured on one Windows 11 host: **299 of 299** rows carried the unknown marker, including **62 of 62** established connections, while `host` over those same 62 rows filled **31** - so the enrichment pipeline works and `tls` alone has no producer. There is no cheap way to fill it: Windows has no socket-level TLS ioctl, and `TCP_INFO_v0` - the only socket info a separate process can read - carries no TLS fields at all. The two real sources both need elevation, and the capture-based one can only ever cover the connections you choose to capture, so it cannot fill a column across every row. Treat `tls` as a reserved column rather than a working one. The reasoning is recorded at the top of `Connection.h`.
 
 Value conventions:
 

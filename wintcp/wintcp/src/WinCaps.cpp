@@ -5,9 +5,10 @@
 //
 //   crypt32.dll  Certificate subject/issuer for the TLS column. Genuinely
 //                optional: it is absent from Nano Server and from some
-//                container base images. Everything else the TLS column shows
-//                (protocol, cipher, SNI) comes from TlsDecode.cpp and needs
-//                nothing but ws2_32.
+//                container base images. NOTE the TLS column has no producer at
+//                all today (see Connection.h), so nothing currently needs
+//                crypt32 either; the probe is kept because the column is real
+//                and this is the one dependency it would need beyond ws2_32.
 //   pdh.dll      Disk read/write rates. Present since NT4, but the PhysicalDisk
 //                counters are a DISMISSIBLE optional component ("Performance
 //                Counters" in the Windows Features dialog) and are genuinely

@@ -48,7 +48,7 @@ A `--select` selector must resolve to **exactly one live row**; see [Selectors](
 | `host:` | Reverse-DNS name | CLI: needs `--dns`. |
 | `proto:` | Protocol or family | `proto:udp`, `proto:tcp`, `proto:ipv6`. |
 | `country:` | GeoIP country code | `country:de`. CLI: needs `--db` — where to get a database and what `--db` does is in [GeoIP database](../README.md#geoip-database). |
-| `tls:` | TLS summary | `tls:1.3`. |
+| `tls:` | TLS summary | **Matches nothing** - the column is never populated. See [the note in the CLI reference](cli.md). |
 | `note:` | A bookmark's note | `note:vendor`. A bare `note:` means "has a note". |
 | `ppid:` | Parent process ID | `ppid:1588`. Accepts ranges: `ppid:1000-2000`. An exact number, not a substring. |
 | `parent:` | Parent's image name | `parent:services`. |
