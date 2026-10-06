@@ -172,20 +172,69 @@ call :t "last switch on list - event" "list --watch 1 --changes --event appear -
 REM The quiet check needs a .csv name: --out alone infers the format from the
 REM extension, and %OUT% is a .txt, so this one is about the switch list and
 REM not about format inference (which has its own check further down).
-call :t "last switch on export - quiet" "export --out %TEMP%\wngolden_q.csv --quiet" 0 "."
+REM %RANDOM% in the name, because R4 now REFUSES an existing --out. A fixed name
+REM made this case pass only because the overwrite was silent, and left a file
+REM in %TEMP% that made the NEXT run of this gate fail - a self-poisoning test.
+set QF=%TEMP%\wngolden_q_%RANDOM%.csv
+call :t "last switch on export - quiet" "export --out %QF% --quiet" 0 "."
+if exist "%QF%" del "%QF%" >nul 2>&1
 REM --limit is refused with export's OWN explanation, not the generic
 REM "not a switch of this command": export has a considered opinion about it
 REM (an export always writes the whole view, so a file cannot hold a subset and
 REM misreport its row count), and the generic message would hide that.
 call :t "export limit refused on principle" "export --out %OUT% --limit 5" 2 "not accepted"
+REM R4: --out replaces the whole file, so an existing path is refused unless
+REM --force authorises it. The write underneath is CREATE_ALWAYS, and before
+REM this the refusal did not exist: a 6-byte file was replaced by a 844-byte
+REM export, exit 0, nothing in the output about what it had destroyed.
+REM Three assertions, because the interesting failure is a silent one: the
+REM refusal must fire, the file must survive it, and --force must still work.
+set R4F=%TEMP%\wngolden_r4_%RANDOM%.csv
+echo PRE-EXISTING-CONTENT> "%R4F%"
+call :t "export refuses an existing --out" "export --out %R4F%" 2 "already exists"
+call :t "the refusal names the switch" "export --out %R4F%" 2 "--force"
+REM The file must be byte-identical afterwards. Asserting only the exit code
+REM would pass even if the refusal came after the write.
+set /a CHECKS+=1
+findstr /b /c:"PRE-EXISTING-CONTENT" "%R4F%" >nul 2>&1
+if errorlevel 1 (
+    echo FAIL export refused but still overwrote [file was destroyed]
+    set /a FAILURES+=1
+) else (
+    echo ok - export refused without touching the file
+)
+call :t "export --force replaces it" "export --out %R4F% --force" 0 "exported"
+set /a CHECKS+=1
+findstr /b /c:"PRE-EXISTING-CONTENT" "%R4F%" >nul 2>&1
+if not errorlevel 1 (
+    echo FAIL export --force did not replace the file
+    set /a FAILURES+=1
+) else (
+    echo ok - export --force replaced it
+)
+if exist "%R4F%" del "%R4F%" >nul 2>&1
+REM capture --out is the same CREATE_ALWAYS and the same rule, but the REFUSAL
+REM cannot be asserted from here: capture resolves --select before it reaches the
+REM guard, and no fixed selector matches exactly one row on an arbitrary machine
+REM - port:443 matches dozens, so the case exits 1 on the selector instead and
+REM would assert nothing. The guard itself is covered by the r4.* selftest checks
+REM in Bench.cpp against a real file. What IS worth asserting here is that
+REM capture ACCEPTS --force, since an unlisted switch would exit 2 and quietly
+REM make the whole feature unreachable.
+call :t "capture accepts --force" "capture --select port:443 --secs 1 --dry-run --force" 1 "refine to one"
+call :t "export accepts --force" "export --out %TEMP%\wngolden_r4f_%RANDOM%.csv --force" 0 "exported"
 REM D24, --quiet contract: it must now be a zero-byte contract on export too.
 REM It used to print "exported N rows" anyway, so a script using --quiet to
 REM keep a log clean got a line in it. Both streams must be empty.
 set XQOUTF=%TEMP%\wngolden_xq_%RANDOM%.txt
 set XQERRF=%TEMP%\wngolden_xqe_%RANDOM%.txt
+REM The exported file itself gets %RANDOM% too, for the R4 reason above: a
+REM fixed name here made this check fail on the SECOND run of the gate.
+set XQCSV=%TEMP%\wngolden_xq_%RANDOM%.csv
 if exist "%XQOUTF%" del "%XQOUTF%"
 if exist "%XQERRF%" del "%XQERRF%"
-"%BIN%" export --out "%TEMP%\wngolden_xq.csv" --quiet > "%XQOUTF%" 2> "%XQERRF%"
+if exist "%XQCSV%" del "%XQCSV%"
+"%BIN%" export --out "%XQCSV%" --quiet > "%XQOUTF%" 2> "%XQERRF%"
 set /a CHECKS+=1
 set XQBAD=0
 for %%F in ("%XQOUTF%") do if not "%%~zF"=="0" set XQBAD=1
@@ -198,6 +247,7 @@ if "%XQBAD%"=="1" (
 )
 if exist "%XQOUTF%" del "%XQOUTF%"
 if exist "%XQERRF%" del "%XQERRF%"
+if exist "%XQCSV%" del "%XQCSV%"
 REM D25: --event selects which change kinds print. Before it there was NO way
 REM to ask "what OPENED", which is the question an event feed exists for, and
 REM `--filter event:appear` did not work either (no such field name, so it
@@ -649,6 +699,9 @@ REM path too - a 0-row file with no explanation is the exact failure this
 REM exists for. :t merges both streams (rc + marker); :tout proves the advice
 REM stayed off the stdout data stream. Both are deterministic (switches only).
 call :t "export host advice" "export --out %CSV% --filter host:cdn --format csv" 0 "add --dns"
+REM Two cases, one path, and R4 now refuses the second because the first created
+REM it. They only ever worked together because the overwrite was silent.
+if exist "%CSV%" del "%CSV%"
 call :tout "export advice off stdout" "export --out %CSV% --filter host:cdn --format csv" "add --dns"
 if exist "%CSV%" del "%CSV%"
 

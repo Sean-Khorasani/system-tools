@@ -1076,7 +1076,8 @@ exported 48 rows to by-proc.csv
 
 | Switch | Why it is in this recipe |
 |---|---|
-| `export --out FILE` | Mandatory. Without `--format`, the **extension** picks the format (`.csv`, `.tsv`, `.json`); an unknown extension is refused with instructions rather than guessed at. |
+| `export --out FILE` | Mandatory. Without `--format`, the **extension** picks the format (`.csv`, `.tsv`, `.json`); an unknown extension is refused with instructions rather than guessed at. An **existing** file at that path is refused too (exit `2`) — see the note below. |
+| `export --force` | Authorises replacing an existing `--out` file. The recipe's own filenames are new, so the command above does not need it; a script that re-exports to the same path every day does. |
 | `export --filter` | Same grammar as `list --filter`. Exports are views, not dumps: the filter keeps a spreadsheet from being 300 rows of `TIME_WAIT`. |
 | `export --columns a,b,c` | The exact column list, in the order you want. `default`, `minimal` and `full` are shorthands. Applies to CSV, TSV and JSON alike. |
 | `export --group --traffic --sort` | A per-process file: "one row per process, heaviest first", a shape `list` can print but a spreadsheet cannot derive. |
@@ -1093,6 +1094,16 @@ With `--group` and no `--columns`, the file gets a default set that a group can 
 ```
 
 Compare the flat `conns.csv` header (`Proto,Local address,Local port,Remote address,Remote port,…`): four of the ten flat columns have no meaning for a group. Naming a per-connection column together with `--group` is refused with exit `2`, and no file is written (see [Grouped views](cli.md#grouped-views)).
+
+Run any of those four commands a second time and it exits `2` instead:
+
+```text
+export: 'conns.csv' already exists. --out replaces the whole file and this
+command cannot ask before doing that. Add --force to replace it, or write
+somewhere else.
+```
+
+That is deliberate. `--out` truncates, so an export aimed at a file you already had would destroy it with no warning and an exit code that says nothing went wrong — measured here: a 6-byte file became an 844-byte export, exit `0`. The GUI asks first, through the save dialog's own overwrite prompt; a script has no way to ask, so `--force` is how it says yes. `capture --out` follows the same rule and checks it before the capture window opens, so `--dry-run` is enough to find out.
 
 Two further details: **CSV and TSV carry a UTF-8 BOM and JSON never does** (verified byte-wise by `tests\cli.bat`), and **`--limit` is refused, not ignored**, because a file that quietly holds 5 of 300 rows while the tool reports success is a lie about the machine. Narrow with `--filter`, or pipe `list --limit` output instead.
 

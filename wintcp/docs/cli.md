@@ -299,7 +299,8 @@ What appears depends entirely on where the capture window fell relative to the h
 |---|---|
 | `--text` | Print the reassembled stream to stdout as a hex dump, one block per direction. This is the command-line equivalent of the GUI's *Follow TCP stream*, which was removed on 2026-10-05. |
 | `--dir both\|first\|second` | Which direction `--text` prints. `first`/`a` and `second`/`b` are accepted, as are the `server`/`client` spellings. Default `both`. An unrecognised value is refused, never treated as `both`. |
-| `--out FILE` | Save the capture as **pcapng**, byte-for-byte, so it opens in Wireshark or `tshark` with no conversion by the reader. |
+| `--out FILE` | Save the capture as **pcapng**, byte-for-byte, so it opens in Wireshark or `tshark` with no conversion by the reader. An existing file there is refused (exit `2`) unless `--force`. |
+| `--force` | Authorise replacing an existing `--out` file. Checked **before** the capture window opens, so `--dry-run` reports a taken destination. |
 
 - **Each direction is labelled by the endpoint that sent it**, not by `client`/`server`. `pktmon` does not reliably report which end sent the SYN, so those words would be a claim the capture cannot support. The labels are derived from the same endpoint ordering the reassembler used, so a label cannot disagree with which half of the bytes it is.
 - The offsets in the dump are that direction's **own** stream offsets, so they line up with the TCP sequence base when a SYN was seen.
@@ -312,7 +313,8 @@ What appears depends entirely on where the capture window fell relative to the h
 
 | Switch | Behavior |
 |---|---|
-| `--out FILE` | Required. Without `--format` the extension picks the format (`.csv`, `.tsv`, `.json`). An unknown extension is refused with instructions. |
+| `--out FILE` | Required. Without `--format` the extension picks the format (`.csv`, `.tsv`, `.json`). An unknown extension is refused with instructions. An **existing** file at that path is refused (exit `2`) unless `--force` is given. |
+| `--force` | Authorise replacing an existing `--out` file. Without it the write never happens. |
 | `--format csv\|tsv\|json` | Overrides the extension. Use `tsv` when a value may contain a comma and the consumer is not Excel. |
 | `--filter` | Same grammar as `list --filter`. |
 | `--columns` | Exact column list in your order; `default`, `minimal`, `full` are shorthands. Applies identically to CSV, TSV and JSON. |
@@ -321,6 +323,7 @@ What appears depends entirely on where the capture window fell relative to the h
 
 - CSV and TSV are UTF-8 **with a BOM** (otherwise Excel on a Western locale mangles non-ASCII paths and names). JSON is UTF-8 **without** one (a BOM makes some parsers reject the file).
 - `--limit` is **refused**, not ignored. An export always writes the whole view, because a file that silently holds 5 of 300 rows while the tool reports success misrepresents the machine. Narrow with `--filter`, or pipe `list --limit`.
+- **An existing `--out` file is refused** (exit `2`), not replaced. The write is `CREATE_ALWAYS`, so before this rule an export aimed at an occupied path destroyed that file with no warning and nothing in the exit code to say so. Measured on one host: a 6-byte file became an 844-byte export, exit `0`, one line naming the destination and nothing about what it had replaced. The GUI already asks, through the common dialog's own overwrite prompt; a script cannot be asked, so it says `--force` instead. The same rule covers `capture --out`, whose pcapng write is `CREATE_ALWAYS` too - and there the check runs before the capture window opens, so a dry run tells you the destination is taken.
 - CSV fields are escaped **RFC 4180** style: a value containing a comma, a `"`, a CR or a LF is wrapped in quotes and every embedded `"` is doubled, so a path or a note can never split a row. `tsv` needs no quoting rule - a tab, CR or LF inside a value is replaced by a space instead.
 
 ```bat

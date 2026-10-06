@@ -52,10 +52,10 @@ preset apply --name rmcheck --limit 10 --columns pid,process,remote,rport
 preset save --name rmcheck --filter "port:80"
 preset save --name rmcheck --filter "port:80" --force
 preset delete --name rmcheck
-export --out %TEMP%\rmc_a.csv --filter "tcp: state:listen"
-export --out %TEMP%\rmc_a.tsv --format tsv --columns proto,pid,process,state
-export --out %TEMP%\rmc_b.csv --group --traffic --sort nettotal --desc
-export --out %TEMP%\rmc_c.csv --quiet
+export --out %TEMP%\rmc_a.csv --filter "tcp: state:listen" --force
+export --out %TEMP%\rmc_a.tsv --format tsv --columns proto,pid,process,state --force
+export --out %TEMP%\rmc_b.csv --group --traffic --sort nettotal --desc --force
+export --out %TEMP%\rmc_c.csv --quiet --force
 list --format json --columns proto,local,lport,remote,rport,state,pid,process --limit 2
 list --format json --columns full --limit 1
 list --format jsonl --columns proto,local,lport,remote,rport,state,pid,process --limit 2

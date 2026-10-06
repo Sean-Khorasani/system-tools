@@ -401,7 +401,7 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe export --out FILE [--format csv|tsv|json]\r\n"
      "                         [--filter F] [--sort COL] [--asc|--desc]\r\n"
-     "                         [--columns SET|a,b,c] [--group]\r\n"
+     "                         [--columns SET|a,b,c] [--group] [--force]\r\n"
      "                         [--traffic] [--dns] [--db FILE] [--quiet]\r\n"
      "\r\n"
      "Same content the GUI export writes: CSV/TSV carry a BOM for Excel,\r\n"
@@ -412,11 +412,16 @@ const CommandHelp kCommandHelps[] = {
      "--quiet still writes the file but prints no confirmation line; the exit\r\n"
      "code still says whether any row was written.\r\n"
      "\r\n"
+     "--out REPLACES the whole file, so an existing path is REFUSED (exit 2)\r\n"
+     "unless --force is given. The GUI asks before overwriting; a script\r\n"
+     "cannot be asked, so it has to say so.\r\n"
+     "\r\n"
      "Examples:\r\n"
      "  wintcp.exe export --out conns.csv --filter \"tcp:\"\r\n"
      "  wintcp.exe export --out conns.json --format json --filter \"port:443\"\r\n"
      "  wintcp.exe export --out procs.tsv --format tsv --columns proto,pid,process,state\r\n"
      "  wintcp.exe export --out by-proc.csv --group --traffic --sort nettotal --desc\r\n"
+     "  wintcp.exe export --out today.csv --force\r\n"
      "  wintcp.exe export --out snap.csv --quiet\r\n"},
     {"geoip",
      "geoip - country lookup from a local MaxMind database\r\n"
@@ -438,7 +443,7 @@ const CommandHelp kCommandHelps[] = {
      "Usage: wintcp.exe capture --select <filter> [--secs N]\r\n"
      "                          [--yes] [--dry-run]\r\n"
      "                          [--text] [--dir both|first|second]\r\n"
-     "                          [--out FILE]\r\n"
+     "                          [--out FILE] [--force]\r\n"
      "\r\n"
      "Installs a pktmon filter for the selected connection, records N\r\n"
      // Keep-in-step: default 5 / 1..60 restate kCaptureSecsDefault/Min/Max
@@ -456,7 +461,9 @@ const CommandHelp kCommandHelps[] = {
      "  --dir LIST     which direction --text prints: both (default), first\r\n"
      "                 (a) or second (b).\r\n"
      "  --out FILE     save the capture as pcapng, byte-for-byte, so it opens\r\n"
-     "                 in Wireshark or tshark.\r\n"
+     "                 in Wireshark or tshark. An existing path is REFUSED\r\n"
+     "                 (exit 2) unless --force is given, because --out replaces\r\n"
+     "                 the whole file and this command cannot ask.\r\n"
      "\r\n"
      "pktmon is a sampling driver, not a tap: only what happens AFTER the\r\n"
      "filter is armed is recorded, so a quiet connection legitimately returns\r\n"
@@ -1006,7 +1013,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"block", L"--select --yes --dry-run"},
     {L"unblock", L"--address --port --yes --dry-run"},
     {L"blocks", L""},     // takes no switches
-    {L"capture", L"--select --secs --yes --dry-run --text --dir --out"},
+    {L"capture", L"--select --secs --yes --dry-run --text --dir --out --force"},
     {L"follow", nullptr},  // alias: same as capture
     {L"bookmark", L"--address --port --tag --note --format"},
     {L"preset",
@@ -1020,7 +1027,7 @@ const VerbSwitches kVerbSwitches[] = {
      // cannot hold a subset and misreport its own row count. Listing it lets
      // the export-specific explanation win.
      L"--out --format --filter --sort --asc --desc --columns --group "
-     L"--traffic --dns --db --quiet --limit"},
+     L"--traffic --dns --db --quiet --limit --force"},
     {L"geoip", L"--db"},
     {L"version", L""},    // takes no switches
     {L"help", L""},       // takes no switches
@@ -1681,7 +1688,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         ListOptions opt = ToListOptions(a);
         // export --format csv|tsv|json names the file format here.
         SnapshotSource src;
-        const CommandResult r = CmdExport(src, opt, a.out);
+        const CommandResult r = CmdExport(src, opt, a.out, a.force);
         Emit(r);
         return r.exitCode;
     }
@@ -1715,6 +1722,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         co.text = a.captureText;
         co.outPath = a.out;
         co.dir = a.captureDir;
+        co.forceOverwrite = a.force;
         const CommandResult r = CmdCapture(src, a.select, mo, a.secs, co);
         Emit(r);
         return r.exitCode;

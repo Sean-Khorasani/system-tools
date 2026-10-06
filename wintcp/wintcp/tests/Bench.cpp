@@ -4782,6 +4782,89 @@ static const unsigned char kClientHello[] = {
                                                : dout.find('\r')));
         }
 
+        // R4: refuse to replace an existing file unless authorised.
+        //
+        // Driven against a REAL file rather than through the CLI, for the reason
+        // recorded in Commands.h: the failure being fixed is silent, and a test
+        // that only asserted an exit code would pass even if the refusal were
+        // raised after the write had already destroyed the file. So the file's
+        // CONTENTS are checked too.
+        {
+            wchar_t dir[MAX_PATH] = {0};
+            const DWORD n = ::GetTempPathW(MAX_PATH, dir);
+            const std::wstring path =
+                (n > 0 && n < MAX_PATH) ? std::wstring(dir) : std::wstring(L".\\");
+            std::wstring file = path + L"wintcp-selftest-r4.txt";
+            // Content that must survive a refusal. A marker a plain "exists" test
+            // could not tell apart from an overwritten file.
+            const wchar_t kMarker[] = L"PRE-EXISTING-CONTENT\r\n";
+            HANDLE h = ::CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr,
+                                     CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY,
+                                     nullptr);
+            if (h == INVALID_HANDLE_VALUE) {
+                Check(r, "r4.temp-file", false, "cannot create");
+            } else {
+                DWORD put = 0;
+                ::WriteFile(h, kMarker,
+                            static_cast<DWORD>(wcslen(kMarker) * sizeof(wchar_t)),
+                            &put, nullptr);
+                ::CloseHandle(h);
+
+                // Reads the marker back, so "the refusal arrived but the file is
+                // gone" cannot pass.
+                const auto stillHasMarker = [&file]() {
+                    HANDLE g = ::CreateFileW(file.c_str(), GENERIC_READ,
+                                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                            nullptr, OPEN_EXISTING,
+                                            FILE_ATTRIBUTE_NORMAL, nullptr);
+                    if (g == INVALID_HANDLE_VALUE) return false;
+                    wchar_t buf[64] = {0};
+                    DWORD got = 0;
+                    const bool ok =
+                        ::ReadFile(g, buf, sizeof(buf) - sizeof(wchar_t), &got,
+                                   nullptr) != 0;
+                    ::CloseHandle(g);
+                    return ok && wcsstr(buf, L"PRE-EXISTING-CONTENT") != nullptr;
+                };
+
+                std::wstring err;
+                Check(r, "r4.existing-refused",
+                      RefuseExistingOutput(L"export", file, false, &err) &&
+                          !err.empty());
+                // The reason must name the path AND the switch that changes it.
+                // A refusal that does not tell you how to proceed is a dead end.
+                Check(r, "r4.reason-names-path",
+                      err.find(file) != std::wstring::npos);
+                Check(r, "r4.reason-names-switch",
+                      err.find(L"--force") != std::wstring::npos);
+                Check(r, "r4.file-survived-refusal", stillHasMarker());
+
+                // --force is the authorisation, and it must not refuse.
+                std::wstring err2;
+                Check(r, "r4.force-allows",
+                      !RefuseExistingOutput(L"export", file, true, &err2) &&
+                          err2.empty());
+
+                // A path that does not exist must never be refused, with or
+                // without --force: otherwise --force would be the only way to
+                // export to a new path, which is absurd.
+                const std::wstring missing = file + L".absent";
+                ::DeleteFileW(missing.c_str());
+                std::wstring err3;
+                Check(r, "r4.absent-path-allowed",
+                      !RefuseExistingOutput(L"export", missing, false, &err3));
+                ::DeleteFileW(missing.c_str());
+
+                // An empty path is not "existing"; the caller validates that
+                // separately (--out is required) and this must not second-guess.
+                std::wstring err4;
+                Check(r, "r4.empty-path-allowed",
+                      !RefuseExistingOutput(L"export", L"", false, &err4));
+
+                ::DeleteFileW(file.c_str());
+            }
+        }
+
         // W1.2: a TLS 1.3 ServerHello's supported_versions extension carries
         // the real negotiated version as a single 2-byte field with NO length
         // prefix. The previous parser read a 1-byte length first and corrupted

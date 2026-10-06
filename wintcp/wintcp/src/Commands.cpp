@@ -2693,13 +2693,51 @@ std::string FormatChangeEvents(const std::vector<RowChange>& events,
     return out;
 }
 
+// R4. Refuse to write over an existing file unless the caller authorised it.
+//
+// WHY A REFUSAL AND NOT A DOCUMENTATION NOTE. The write is CREATE_ALWAYS, so
+// the previous behaviour destroyed whatever was at that path with no output and
+// nothing in the exit code to say so. Measured before this change: a 6-byte file
+// containing "AAAA" was replaced by an 844-byte export, exit 0, one line of
+// output naming the destination and nothing about what it replaced. A script
+// that exports on a schedule would do that to a real report and report success.
+//
+// WHY HERE AND NOT AT THE WRITE. Same ordering `capture` already uses - refuse
+// before the work, not after - so a refused request costs no snapshot and
+// touches no state.
+//
+// A DIRECTORY at that path counts as existing. Overwriting a directory with a
+// file fails anyway, but reporting it here says why, instead of surfacing a
+// CreateFile error about access.
+bool RefuseExistingOutput(const wchar_t* verb, const std::wstring& path,
+                          bool forceOverwrite, std::wstring* err) {
+    if (forceOverwrite || path.empty()) return false;
+    const DWORD attr = ::GetFileAttributesW(path.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES) return false;   // does not exist: fine
+    *err = std::wstring(verb) + L": '" + path +
+           L"' already exists. --out replaces the whole file and this command "
+           L"cannot ask before doing that. Add --force to replace it, or write "
+           L"somewhere else.\r\n";
+    return true;
+}
+
 CommandResult CmdExport(SnapshotSource& source, const ListOptions& opt,
-                        const std::wstring& outPath) {
+                        const std::wstring& outPath,
+                        bool forceOverwrite) {
     if (outPath.empty()) {
         CommandResult r;
         r.exitCode = kExitArgs;
         r.err = "export: --out <file> is required.\r\n";
         return r;
+    }
+    {
+        std::wstring existsErr;
+        if (RefuseExistingOutput(L"export", outPath, forceOverwrite, &existsErr)) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = WideToUtf8(existsErr);
+            return r;
+        }
     }
     // D27: the same rule RenderList applies, needed here because export writes
     // the file itself and does not go through RenderList. Checked BEFORE the
@@ -3121,6 +3159,20 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
     // One builder for both front ends (see StreamCapture.h): binary fields,
     // never the display strings that carry the port.
     const CaptureTarget t = MakeCaptureTarget(c);
+    // R4, and it belongs BEFORE --dry-run for the same reason the --yes gate
+    // does: a dry run that hides the fact the destination is occupied is not a
+    // dry run of this command. The pcapng write is CREATE_ALWAYS, so without
+    // this an existing capture file is destroyed with no warning.
+    if (!co.outPath.empty()) {
+        std::wstring existsErr;
+        if (RefuseExistingOutput(L"capture", co.outPath, co.forceOverwrite,
+                                 &existsErr)) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = WideToUtf8(existsErr);
+            return r;
+        }
+    }
     // The plan (and the --yes gate) come before the elevation gate: a
     // dry run must never demand elevation, and refusing must not either.
     // Order: resolve -> dry-run -> confirm -> availability -> start.

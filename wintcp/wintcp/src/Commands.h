@@ -346,8 +346,24 @@ CommandResult CmdPresetApply(SnapshotSource& source, const std::wstring& name,
                              const ListOptions* overrides = nullptr);
 
 // ---- export ----------------------------------------------------------------
+// 'forceOverwrite' is R4. The write underneath is CREATE_ALWAYS, so without it
+// an export aimed at an existing path destroys that file's contents with no
+// warning and no way to tell afterwards - silent data loss, which this codebase
+// treats as the failure rather than as a trade-off. The house convention is
+// Presets::Save, which reports kExists and leaves the caller to authorise the
+// overwrite; a non-interactive CLI cannot ask, so the authorisation arrives as
+// a switch instead. The GUI passes true, because it asks the user first.
 CommandResult CmdExport(SnapshotSource& source, const ListOptions& opt,
-                        const std::wstring& outPath);
+                        const std::wstring& outPath,
+                        bool forceOverwrite = false);
+
+// R4. True when `path` exists and the caller did not authorise replacing it, with
+// the reason written to `err`. Declared here rather than left file-local so the
+// selftest can drive it against a real file: the failure mode being fixed is a
+// SILENT one, and a test that only checked an exit code would pass even if the
+// refusal arrived after the write had already destroyed the file.
+bool RefuseExistingOutput(const wchar_t* verb, const std::wstring& path,
+                          bool forceOverwrite, std::wstring* err);
 
 // ---- geoip -----------------------------------------------------------------
 CommandResult CmdGeoIpLookup(SnapshotSource& source,
@@ -378,6 +394,10 @@ struct CaptureOptions {
     bool text = false;
     // Save the capture as pcapng here. Empty = do not keep it.
     std::wstring outPath;
+    // R4: the pcapng write is CREATE_ALWAYS, so an existing file at outPath
+    // would be destroyed silently. Same convention as export: refuse without
+    // this, and the CLI's --force is what sets it.
+    bool forceOverwrite = false;
     // Which half --text prints. Parsed by ParseCaptureDir.
     std::wstring dir = L"both";
 };
