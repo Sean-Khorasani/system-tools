@@ -22,7 +22,7 @@
 ## Model
 
 - **One command, one snapshot, then exit.** Nothing waits for a keypress.
-- **Only `--watch` polls.** `--count N` bounds it, which is what makes it safe in a script.
+- **Only `--watch` polls.** `--count N` bounds it, which is what makes it safe in a script. `--interval N` is an alias for `--watch N` (same 1..3600 range). Without `--count` the loop runs until Ctrl+C; a redirected stdout is warned once on stderr.
 - **Data on stdout, advice on stderr.** A consumer can redirect either without losing the other.
 - **Exit codes are part of the interface.** See below.
 
@@ -39,7 +39,7 @@ Usage: wintcp.exe <command> [switches]
 |---|---|---|
 | Monitor | `list` (alias `conn`) | Connections table: filter, sort, group, choose columns. The widest verb; the others take subsets of its switches. |
 | | `ps` | One row per process: connection count, CPU, memory, disk. |
-| | `top` | Synonym for `ps`: same rows, same switches, same defaults. |
+| | `top` | Synonym for `ps`: same rows, same switches, same defaults. Not interactive: prints once and exits; use `list --watch` for live. |
 | | `stat` (alias `sys`) | System CPU, memory, disk and network rates. |
 | | `details` | Full report for exactly one connection. |
 | Act | `kill` | End the process that owns a connection, or a PID. |
@@ -63,7 +63,7 @@ The act verbs (`kill`, `close`, `block`, `unblock`, `capture`) require `--yes` a
 |---|---|---|
 | `0` | Success. | A command ran; a `--quiet` filter matched; a `--dry-run` printed its plan. |
 | `1` | Failure or empty result. | No row matched; a `--select` matched 0 or more than 1 rows; `list --quiet` found nothing; `capture` or `close` was run unelevated. |
-| `2` | Bad arguments. | Unknown or misplaced switch; `kill --pid 4` (a refused target); `export --group --columns …,remote`. |
+| `2` | Bad arguments. | Unknown or misplaced switch; `kill --pid 4` (a refused target); `export --group --columns …,remote`; `list --quiet --filter country:x` without `--db`. |
 | `3` | Refused. | A mutating command without `--yes`; `preset save` over an existing name without `--force`. |
 
 Exit `2` and exit `3` differ on purpose. `2` means the command line was wrong; `3` means it was well-formed but not confirmed. A script can branch on whether an action was *refused* as opposed to *failed*.
@@ -90,6 +90,7 @@ A switch that a command does not use is an error that names both the switch and 
 > wintcp.exe export --out snap.csv --changes
 export: --changes is not a switch of this command; it would be ignored.
 Try 'wintcp.exe help export'.
+export honours: --filter --sort --asc --desc --group --format --columns --quiet --traffic --dns --db --out --force.
 :: exit code 2
 ```
 
@@ -112,7 +113,14 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
               bracket.
 --columns C   default | minimal | full (wide = full), or a comma-separated list.
 --limit N     at most N rows.
---quiet       print nothing; exit 0 when any row matches, else 1.
+--quiet       print nothing; exit 0 when any row matches, else 1. An
+              enrichment filter without its source switch (--dns, --db,
+              --traffic, --signatures) exits 2 instead: quiet would turn
+              "unanswerable" into "no match".
+--out FILE    write the table to FILE instead of stdout. csv/tsv carry
+              the same BOM export uses; json/jsonl never do; an existing
+              file needs --force. One snapshot: --out refuses --watch,
+              --changes and --quiet (exit 2, naming the conflict).
 --traffic     per-PID byte totals via one bounded socket scan.
 --dns         reverse-DNS the printed rows only (slow; bound with --limit).
 --db FILE     load this .mmdb and join country codes for printed rows.
@@ -133,6 +141,7 @@ Notes:
 
 - `--watch` re-prints the table; with `--changes` it prints only deltas. The interval **is** the sensitivity: at 1 s you catch short-lived sockets, at 10 s you miss them.
 - `--count` counts **snapshots, not events**. On a busy machine four snapshots can emit hundreds of lines; pipe through `head` if you need exactly N.
+- `--watch` without `--count` runs until Ctrl+C — right for a terminal, a trap for a redirected script. When stdout is **not** a console, a one-line warning is printed on stderr; pass `--count` in scripts.
 - `--event` takes a comma-separated list. An unrecognised name exits `2`; it is never silently dropped.
 - `--sort` takes the column names in the [column reference](#column-reference). `ps` uses its own six keys (see [`ps` and `top`](#ps-and-top)).
 
@@ -250,6 +259,8 @@ thread id. See [the GUI guide](gui.md#threads) for the full reasoning.
 ### `kill`
 
 `--select SEL` resolves to one live row and ends the process that owns it; `--pid N` names a PID directly. Before acting the PID is re-validated against the process creation time, so a recycled PID is refused. PID 0 and PID 4 are always refused (exit `2`).
+
+The default end-mode is the hybrid: `WM_CLOSE`, then terminate if the process is still alive after 3 s. `--close` asks and waits the same 3 s but **never forces** — a survivor is exit `1` with the reason; `--force` terminates immediately with no `WM_CLOSE` at all. The two switches are mutually exclusive (together, exit `2`), and a `--dry-run` plan names the mode it would use.
 
 ### `close`
 

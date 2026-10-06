@@ -204,8 +204,8 @@ Grouping answers "who", not "which socket" - the difference between recipe 5 in 
 | `Ctrl+C` | Copy selected connections |
 | `Ctrl+A` | Select all rows |
 | `Ctrl+F` | Focus the filter box |
+| `Ctrl+S` | Save view as preset |
 | `Ctrl+E` | Export to CSV |
-| `Ctrl+S` | Save the current view as a preset |
 | `Esc` | Clear the filter |
 | `Del` | Graceful close: `WM_CLOSE`, then terminate |
 | `A`-`Z` | Type to jump to a row by process name |
@@ -220,7 +220,7 @@ Grouping answers "who", not "which socket" - the difference between recipe 5 in 
 
 Type-to-jump matches a prefix of the process name and moves the selection with each keystroke, so a stray letter typed over the list is harmless rather than destructive. Two details make it usable: pressing the **same character again cycles** to the next match, so a prefix shared by a dozen rows (`svchost.exe`) still moves; and a repeated character is never appended, so pressing `s` twice means "the next row starting with s" rather than a prefix of `ss` that matches nothing. A pause of about a second (the Explorer's interval) breaks the sequence, so the first keystroke after thinking always starts a fresh search. Matching is prefix-only by design: typing `svch` lands on rows *beginning* `svch`, never on the first row that merely contains it somewhere.
 
-`Ctrl+S` is the one entry the in-app sheet does not list, though the menu labels it; it saves the current filter, sort and column selection as a preset that **File -> Load preset...** restores.
+`Ctrl+S` saves the current filter, sort and column selection as a preset that **File -> Load preset...** restores; it is listed by the menu, bound in the accelerator table, and present in the F1 sheet like every other shortcut.
 
 ## Export
 
@@ -272,7 +272,9 @@ A file that will not load reports the parser's own reason under **GeoIP database
 
 Reloading works on a live session: picking another file replaces the previous one, and a peer that moves out of the new database's coverage has its country **cleared** rather than keeping a stale answer — the one way a swap could look like it worked while showing the wrong country. Nothing is downloaded either way. [GeoIP database](../README.md#geoip-database) explains why not, where a free `GeoLite2-Country.mmdb` comes from, and how `geoipupdate` keeps it current.
 
-**The choice does not survive a restart.** Window placement, columns, sort, filter, always-on-top and tray all persist in `HKCU\Software\WinTCP`; the database path is not among them, so a relaunched window opens with an empty `Country` column and the file has to be picked again. That is a gap in the settings schema rather than a statement that country data is optional. Until the path is stored, a workflow that needs it on every launch either re-picks the file or uses the command line, where `--db FILE` is explicit per run — and `list --watch --db FILE` re-reads the file on every tick, so a refreshed database shows up without restarting anything.
+**The choice survives a restart.** Window placement, columns, sort, filter, always-on-top, tray and the database path all persist in `HKCU\Software\WinTCP`. Pick a database once and the next launch silently reloads the stored path, so the `Country` column repopulates without a second trip through the picker. A moved or deleted file fails to load quietly — `Country` shows "—" as it would for no database at all, which is the honest outcome — and **View → GeoIP database** still reports the parser's reason under **GeoIP database not loaded** when it does fail.
+
+The path is the only thing remembered, not the database's contents: a file replaced in place is picked up on the next refresh. From the command line `--db FILE` stays explicit per run, and `list --watch --db FILE` re-reads the file on every tick, so a refreshed database shows up without restarting anything.
 
 ## Windows integration
 

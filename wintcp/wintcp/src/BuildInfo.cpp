@@ -37,6 +37,7 @@ const std::vector<Shortcut>& AllShortcuts() {
         {L"Ctrl+C",     L"Copy selected connections"},
         {L"Ctrl+A",     L"Select all rows"},
         {L"Ctrl+F",     L"Focus the filter box"},
+        {L"Ctrl+S",     L"Save view as preset"},
         {L"Ctrl+E",     L"Export to CSV"},
         {L"Esc",        L"Clear the filter"},
         {L"Del",        L"Graceful close: WM_CLOSE, then terminate"},

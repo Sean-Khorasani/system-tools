@@ -616,6 +616,7 @@ void GeoIpDatabase::MoveFrom(GeoIpDatabase& other) noexcept {
     recordCount_ = other.recordCount_;
     nodeCount_ = other.nodeCount_;
     version_ = std::move(other.version_);
+    sourcePath_ = std::move(other.sourcePath_);
 
     other.mappedView_ = nullptr;
     other.fileSize_ = 0;
@@ -630,6 +631,7 @@ void GeoIpDatabase::MoveFrom(GeoIpDatabase& other) noexcept {
     other.recordCount_ = 0;
     other.nodeCount_ = 0;
     other.version_.clear();
+    other.sourcePath_.clear();
 }
 
 void GeoIpDatabase::Close() {
@@ -666,6 +668,12 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
         return false;
     };
     if (error != nullptr) error->clear();
+
+    // 9.1.5: remember the path so the caller can persist it. Set BEFORE the
+    // success/fail branches, so a failed load still records what was tried -
+    // a stale path is the honest thing to hand back, and the only reader
+    // (MainWindow) asks Loaded() first and persists "" when it is false.
+    sourcePath_ = path;
 
     // A failed reload must leave the object empty rather than holding the
     // previous file, so the caller cannot mix results from two databases.

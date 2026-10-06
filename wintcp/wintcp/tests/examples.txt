@@ -84,6 +84,7 @@ list --traffic --sort rtt --desc --limit 4 --columns process,remote,rport,rtt,mi
 list --traffic --filter "rtt:100" --columns process,rtt,cwnd
 list --traffic --filter "retrans:1KB" --columns process,retrans
 list --traffic --watch 1 --count 3 --filter "state:estab" --columns process,bandwidth,procspeed --limit 8
+list --traffic --interval 1 --count 2 --columns process,bandwidth --limit 3
 list --traffic --group --sort procspeed --desc --limit 6 --columns pid,process,procspeed
 # F5.1 / F5.2 / F5.3: the parent, integrity and signature columns, and the
 # filters that read them. `--signatures` is in the list because Authenticode

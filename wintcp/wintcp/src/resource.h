@@ -122,5 +122,8 @@
 #define IDM_OPEN_FILE_LOCATION  40061
 #define IDM_PROCESS_PROPERTIES  40062
 #define IDM_BLOCK_CONNECTION    40063
+// D30: tray menu - remove every rule `block` ever created (the item the
+// Block confirmation has always pointed at; it did not exist until now).
+#define IDM_TRAY_UNBLOCK_ALL   40064
 
 #define IDS_APP_TITLE           50000

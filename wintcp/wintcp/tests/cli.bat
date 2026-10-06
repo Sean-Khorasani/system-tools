@@ -153,10 +153,10 @@ REM that belongs to this verb but is refused on principle (export --limit).
 REM No parentheses in a check name: :t echoes the name from inside an
 REM `if (...)` block, and a stray `)` closes the block early (cmd then reports
 REM "[rc was unexpected at this time" and aborts the whole run).
-call :t "switch not on export - changes" "export --out %OUT% --changes" 2 "not a switch of this command"
-call :t "switch not on export - pid" "export --out %OUT% --pid 1" 2 "not a switch of this command"
+call :t "switch not on export - changes" "export --out %OUT% --changes" 2 "honours:"
+call :t "switch not on export - pid" "export --out %OUT% --pid 1" 2 "honours:"
 call :t "switch not on list - pid" "list --pid 1" 2 "not a switch of this command"
-call :t "switch not on list - out" "list --out x" 2 "not a switch of this command"
+call :t "switch not on list - name" "list --name x" 2 "not a switch of this command"
 call :t "switch not on details - format" "details --select pid:1 --format json" 2 "not a switch of this command"
 call :t "switch not on ps - group" "ps --group" 2 "not a switch of this command"
 call :t "switch not on stat - traffic" "stat --traffic" 2 "not a switch of this command"
@@ -375,6 +375,10 @@ REM --out IS shared with list/export on purpose (same meaning: a file to write),
 REM so it is accepted here rather than refused. Dry run only: a real run starts
 REM pktmon, which the harness must not do unattended.
 call :t "capture accepts out" "capture --select pid:99999999 --out C:\nope.pcapng --dry-run" 1 "no live row"
+call :t "list accepts interval" "list --filter tcp: --interval 1 --count 1 --quiet" 0 "."
+call :t "ps accepts interval" "ps --interval 1 --count 1 --quiet" 0 "."
+call :t "stat accepts interval" "stat --interval 1 --count 1" 0 "."
+call :t "stat interval refused on export" "export --out %OUT% --interval 1" 2 "not a switch"
 
 REM The test suite moved OUT of the product (2026-10-02): `selftest`, `bench`
 REM and `--uiharness` used to be compiled into wintcp.exe. wintcp-tests.exe now
@@ -728,6 +732,62 @@ if exist "%CSV%" del "%CSV%"
 REM A name with no known extension is REJECTED, never guessed at.
 call :t "export format not inferred" "export --out %TEMP%\wngolden_noext --filter tcp:" 2 "cannot infer"
 if exist "%TEMP%\wngolden_noext" del "%TEMP%\wngolden_noext"
+REM 9.2.2: --quiet on an enrichment FILTER without its source switch is an
+REM argument error (exit 2) naming the switch, not a silent "no match" (1).
+REM A quiet filter WITHOUT enrichment must keep working - covered by the
+REM many quiet gates above (e.g. "quiet filter matches").
+call :t "quiet enrichment refusal" "list --quiet --filter country:x" 2 "refusing"
+call :t "quiet enrichment names switch" "list --quiet --filter country:x" 2 "add --db"
+call :t "quiet traffic refusal" "list --quiet --filter rtt:100" 2 "add --traffic"
+
+REM 9.3.3/D33: a near-miss command and a near-miss switch are corrected, not
+REM merely refused. A far miss stays bare - "nonsense" must not gain a
+REM suggestion (its check above pins the bare message).
+call :t "did you mean switch" "list --trafffic" 2 "Did you mean --traffic?"
+call :t "did you mean command" "lst" 2 "Did you mean 'list'?"
+call :t "did you mean help topic" "help lst" 2 "Did you mean 'list'?"
+
+REM 9.3.6: the plan names the kill mode, and the two modes conflict.
+REM --dry-run only: this gate never ends a process (header safety rule).
+call :t "kill close plan" "kill --pid 1 --dry-run --close" 0 "WM_CLOSE only"
+call :t "kill force plan" "kill --pid 1 --dry-run --force" 0 "terminate immediately"
+call :t "kill mode conflict" "kill --close --force --pid 1" 2 "exclude each other"
+
+REM 9.3.4: list --out - each contradiction is exit 2 naming its conflict;
+REM the happy path and the existing-file refusal need the FILE, so they are
+REM bespoke below (same pattern as export's).
+call :t "list out refuses watch" "list --out %TEMP%\wng_out_x.csv --watch 1" 2 "one snapshot"
+call :t "list out refuses quiet" "list --out %TEMP%\wng_out_x.csv --quiet" 2 "empty file"
+set OUTCSV=%TEMP%\wng_out_%RANDOM%.csv
+if exist "%OUTCSV%" del "%OUTCSV%"
+"%BIN%" list --limit 2 --out "%OUTCSV%" > "%OUT%" 2>&1
+set ORC=%ERRORLEVEL%
+set /a CHECKS+=1
+if not "%ORC%"=="0" (
+    echo FAIL list --out happy path [rc=%ORC%, want 0]
+    set /a FAILS+=1
+) else (
+    findstr /c:"wrote" "%OUT%" >nul 2>&1
+    if errorlevel 1 (
+        echo FAIL list --out happy path [no confirmation line]
+        set /a FAILS+=1
+    ) else if not exist "%OUTCSV%" (
+        echo FAIL list --out happy path [file missing]
+        set /a FAILS+=1
+    ) else (
+        echo ok - list --out happy path
+    )
+)
+"%BIN%" list --limit 2 --out "%OUTCSV%" > "%OUT%" 2>&1
+set ORC2=%ERRORLEVEL%
+set /a CHECKS+=1
+if not "%ORC2%"=="2" (
+    echo FAIL list --out exists without force [rc=%ORC2%, want 2]
+    set /a FAILS+=1
+) else (
+    echo ok - list --out exists without force
+)
+if exist "%OUTCSV%" del "%OUTCSV%"
 
 echo.
 echo CLI: %CHECKS% checks, %FAILS% failures.

@@ -190,6 +190,13 @@ std::vector<FilterClause> PreJoinClauses(const std::wstring& filter);
 // unanswerable filter says so instead of printing an empty table. Empty when
 // nothing is missing or --quiet is set. Pure: no snapshot, no network.
 std::string MissingEnrichmentAdvice(const ListOptions& opt);
+
+// 9.2.2: the FILTER half of that advice - no quiet gate, no column half.
+// The CLI refuses a `--quiet` run whose filter needs a switch that is off
+// (exit 2) and calls this to see exactly what the advisory path suppresses.
+// Only filter clauses qualify: `--quiet`'s exit code answers "does the
+// filter match", and a requested column cannot change that answer.
+std::string FilterEnrichmentAdvice(const ListOptions& opt);
 // View-scoped enrichment for list/export: DNS + GeoIP + traffic over the
 // printed rows only. False + err when the GeoIP database fails. 'advice'
 // (optional) receives advisory hints - the missing-switch note above and the
@@ -246,6 +253,10 @@ void ApplyPresetViewToStore(const ViewState& v, ConnectionStore& store,
 struct MutateOptions {
     bool yes = false;             // confirmed
     bool dryRun = false;          // print plan, change nothing
+    // 9.3.6: how `kill` ends the process. Neither set = the documented
+    // hybrid (WM_CLOSE, wait kKillGraceMs, then TerminateProcess).
+    bool closeOnly = false;       // WM_CLOSE + wait only; never terminate
+    bool forceNow = false;        // terminate immediately; no WM_CLOSE
 };
 
 // Can this process be ended, and if not, why.

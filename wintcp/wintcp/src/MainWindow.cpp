@@ -725,6 +725,21 @@ void MainWindow::OnCreate() {
     for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
     visibleCols_ = kDefaultVisibleCols;
     settings_.Load();                       // (pre-set by Create())
+
+    // 9.1.5: auto-load the remembered GeoIP database on startup. This is
+    // best-effort and silent - a moved file would pop a nag on every
+    // launch, so a failed load just leaves Country as "—", which is the
+    // same honest "unknown" as never having picked a database. The next
+    // refresh fills the rows via OfferGeoIpForAllRows(); View > GeoIP
+    // database still reports the parser's reason on demand.
+    if (settings_.geoIpPath[0] != L'\0') {
+        std::wstring err;
+        if (geo_.Load(settings_.geoIpPath, &err)) {
+            OfferGeoIpForAllRows();
+            ApplyView();
+        }
+    }
+
     visibleCols_ = settings_.colVisible;
     if (settings_.colWidthsValid) {
         for (int i = 0; i < COL_COUNT; ++i) {
@@ -1972,6 +1987,9 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
         case IDM_BLOCK_CONNECTION:
             BlockSelectedConnection();
             break;
+        case IDM_TRAY_UNBLOCK_ALL:
+            RemoveAllWinTcpBlocks();
+            break;
         case IDM_VIEW_RESOLVE: {
             dnsEnabled_ = !dnsEnabled_;
             dns_.SetEnabled(dnsEnabled_);
@@ -2220,12 +2238,26 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
                     break;
                 case COL_MEM:
                 case COL_DISK:
-                case COL_TLS:
                 case COL_COUNTRY:
                 default:
                     // For every other column the cell already shows the whole
                     // value, so an empty string tells the control to use its
                     // own default rather than a tooltip that says nothing.
+                    break;
+                case COL_TLS:
+                    // The cell shows the negotiated TLS layer, but only when the
+                    // handshake was captured (`capture --text`) or via ETW; an
+                    // empty cell really means "we did not capture it", and a
+                    // plain em-dash would read as "no TLS" rather than
+                    // "not available".
+                    if (c->tls.known && c->tls.secure) {
+                        add(L"TLS", TlsSummary(c->tls));
+                    } else {
+                        // Say WHY the cell is empty instead of showing an em-dash
+                        // that reads as "no TLS".
+                        add(L"TLS",
+                            L"not available (TLS is only populated via capture --text)");
+                    }
                     break;
             }
             if (tip.empty()) break;
@@ -3089,6 +3121,61 @@ void MainWindow::CloseSelectedConnection() {
     Refresh(false);   // the row disappears (and flashes red as a ghost)
 }
 
+void MainWindow::RemoveAllWinTcpBlocks() {
+    // D30: remove every WinTCP block rule the ledger remembers - i.e., every
+    // rule that `block` created. The ledger, not a full enumeration, is the
+    // source of truth, so this removes exactly what this application added
+    // and nothing else.
+    const int count = CountWinTcpRules();
+
+    if (count == 0) {
+        // count == 0 also means "firewall API not accessible" (not
+        // elevated); a removal attempt surfaces that before we say
+        // "nothing to remove".
+        std::wstring error;
+        (void)RemoveAllWinTcpRules(&error);
+        if (!error.empty()) {
+            ::MessageBoxW(hwnd_, error.c_str(),
+                          L"Remove All WinTCP Blocks", MB_OK | MB_ICONERROR);
+            return;
+        }
+        ::MessageBoxW(hwnd_,
+                      L"No WinTCP firewall rules are currently present. "
+                      L"Nothing to remove.",
+                      L"WinTCP - Remove all blocks",
+                      MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // Confirm before tearing down every rule at once - one wrong click
+    // must not leave a whole range of peers suddenly open.
+    wchar_t prompt[640] = {0};
+    ::swprintf_s(prompt,
+                 L"Remove ALL WinTCP firewall blocks?\n\n"
+                 L"This removes %d rule(s) and unblocks every peer that was "
+                 L"previously blocked with `block`. Rules can always be "
+                 L"recreated by blocking the peer again.",
+                 count);
+    if (::MessageBoxW(hwnd_, prompt, L"WinTCP - Remove all blocks",
+                      MB_YESNO | MB_ICONWARNING) != IDYES) {
+        return;
+    }
+
+    std::wstring error;
+    const bool removed = RemoveAllWinTcpRules(&error);
+    if (!removed) {
+        ::MessageBoxW(hwnd_, error.c_str(),
+                      L"Remove All WinTCP Blocks", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    ::MessageBoxW(hwnd_,
+                  (L"Removed " + std::to_wstring(count) +
+                   L" WinTCP firewall rule(s).").c_str(),
+                  L"WinTCP - Remove all blocks",
+                  MB_OK | MB_ICONINFORMATION);
+}
+
 LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
     switch (cd->nmcd.dwDrawStage) {
         case CDDS_PREPAINT:
@@ -3812,6 +3899,12 @@ void MainWindow::LoadGeoIpDatabase() {
         return;
     }
 
+    // 9.1.5: persist the path the user picked, so it survives a relaunch.
+    // Only reached on a successful load: a cancelled picker returned above,
+    // and a load that failed returned with the parser's reason.
+    ::wcsncpy_s(settings_.geoIpPath, file, _TRUNCATE);
+    settings_.Save();
+
     // Fill immediately rather than waiting for the next tick, so the Country
     // column appears at once. The user chose a file precisely to see results.
     OfferGeoIpForAllRows();
@@ -3846,6 +3939,12 @@ void MainWindow::SaveSettings() {
     const std::wstring filter = CurrentSearchText();
     ::wcsncpy_s(settings_.filter, filter.c_str(), _TRUNCATE);
     settings_.Save();                      // best effort
+    // 9.1.5: the GeoIP path is part of the view, not just the data - it has
+    // to leave here with everything else the user chose.
+    ::wcsncpy_s(settings_.geoIpPath,
+                geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
+                _TRUNCATE);
+    settings_.Save();
 }
 
 // ---- change log -------------------------------------------------
@@ -4135,6 +4234,14 @@ void MainWindow::ShowTrayMenu() {
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (topMost_ ? MF_CHECKED : 0),
                   IDM_VIEW_TOPMOST, L"Always on top");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // D30: this is the item the Block confirmation has always pointed at
+    // ("use Remove All WinTCP Blocks from the tray menu"). It did not exist
+    // until now, so the documented removal path has a handler; the handler
+    // reports "no rules" / "needs elevation" honestly. Always shown - built
+    // directly from the menu, no COM-query gymnastics required.
+    ::AppendMenuW(menu, MF_STRING, IDM_TRAY_UNBLOCK_ALL,
+                  L"Remove All WinTCP Blocks");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
 

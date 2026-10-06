@@ -1007,8 +1007,13 @@ std::vector<FilterClause> PreJoinClauses(const std::wstring& filter) {
 // clock ages rows with no --traffic involved, so "add --traffic" would be a
 // lie there; in a one-shot the Duration column already shows the 0s the
 // filter is failing on, so the empty match is visible in the row itself.
-std::string MissingEnrichmentAdvice(const ListOptions& opt) {
-    if (opt.quiet) return {};
+// 9.2.2: split into parts so the two contracts cannot drift. The FILTER
+// half is quiet-agnostic - the CLI's quiet refusal (exit 2) needs to see
+// exactly what the advisory path suppresses - and excludes columns,
+// because `--quiet`'s exit code answers "does the FILTER match" and a
+// requested column cannot change that answer. MissingEnrichmentAdvice
+// below keeps its original promise: advisory only, silent under quiet.
+std::string FilterEnrichmentAdvice(const ListOptions& opt) {
     std::string out;
     if (!opt.filter.empty()) {
         std::vector<FilterClause> all;
@@ -1089,6 +1094,11 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
             }
         }
     }
+    return out;
+}
+
+std::string ColumnEnrichmentAdvice(const ListOptions& opt) {
+    std::string out;
     // The columns half (D13): a printed enrichment column whose switch is off
     // is the same silent-empty failure this advice exists to prevent for
     // filters - every row comes out blank and nothing says why. Measured:
@@ -1140,6 +1150,15 @@ std::string MissingEnrichmentAdvice(const ListOptions& opt) {
                " without --traffic: the socket scan never ran, so every value "
                "is \"—\"; add --traffic.\r\n";
     return out;
+}
+
+std::string EnrichmentAdvice(const ListOptions& opt) {
+    return FilterEnrichmentAdvice(opt) + ColumnEnrichmentAdvice(opt);
+}
+
+std::string MissingEnrichmentAdvice(const ListOptions& opt) {
+    if (opt.quiet) return {};
+    return EnrichmentAdvice(opt);
 }
 
 PrintSelection SelectedForPrint(ConnectionStore& store,
@@ -2023,6 +2042,11 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     }
     std::string plan = "kill PID " + std::to_string(pid);
     if (!label.empty()) plan += " (" + WideToUtf8(label) + ")";
+    // 9.3.6: the plan names the mode. A --dry-run that hid the difference
+    // between "ask" and "terminate" would be the swallowed-switch problem
+    // in plan form.
+    if (mo.forceNow) plan += " [terminate immediately]";
+    else if (mo.closeOnly) plan += " [WM_CLOSE only, never forced]";
     plan += "\r\n";
     if (mo.dryRun) {
         CommandResult r;
@@ -2051,13 +2075,31 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
         r.err = WideToUtf8(buf);
         return r;
     }
-    (void)PostCloseToProcessWindows(pid);
-    const DWORD wait = ::WaitForSingleObject(h, kKillGraceMs);
     bool ok = false;
-    if (wait == WAIT_OBJECT_0) {
-        ok = true;
-    } else {
+    if (mo.forceNow) {
+        // 9.3.6 --force: terminate at once - no WM_CLOSE, no wait.
         ok = ::TerminateProcess(h, 1) != FALSE;
+    } else {
+        (void)PostCloseToProcessWindows(pid);
+        const DWORD wait = ::WaitForSingleObject(h, kKillGraceMs);
+        if (wait == WAIT_OBJECT_0) {
+            ok = true;
+        } else if (!mo.closeOnly) {
+            ok = ::TerminateProcess(h, 1) != FALSE;
+        } else {
+            // 9.3.6 --close: never escalate. Report the survival honestly;
+            // exiting 0 after a refused force would be the silent-answer
+            // failure this tool does not ship.
+            ::CloseHandle(h);
+            CommandResult rr;
+            rr.exitCode = kExitFail;
+            rr.err = "kill: PID " + std::to_string(pid) +
+                     " is still running after " +
+                     std::to_string(kKillGraceMs / 1000) +
+                     " s of WM_CLOSE; --close never forces. Retry with "
+                     "--force to terminate it.\r\n";
+            return rr;
+        }
     }
     ::CloseHandle(h);
     CommandResult r;

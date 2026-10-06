@@ -1389,6 +1389,18 @@ TestResult RunSelfTest() {
         q.quiet = true;
         Check(r, "enrich.advice.quiet-stays-silent",
               MissingEnrichmentAdvice(q).empty());
+        // 9.2.2: the quiet REFUSAL sees what the advisory path suppresses.
+        // If this ever returns empty, quiet runs silently go back to
+        // answering "no match" for a question nobody asked.
+        Check(r, "enrich.quiet-refusal-sees-filter-advice",
+              FilterEnrichmentAdvice(q).find("--dns") != std::string::npos,
+              FilterEnrichmentAdvice(q));
+        ListOptions qc;   // a quiet run whose COLUMNS need a switch must
+        qc.quiet = true;  // NOT refuse: columns cannot change the match
+        qc.columns.push_back(COL_COUNTRY);
+        Check(r, "enrich.quiet-refusal-ignores-columns",
+              FilterEnrichmentAdvice(qc).empty(),
+              FilterEnrichmentAdvice(qc));
 
         ListOptions d;
         d.filter = L"duration:1h";

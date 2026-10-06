@@ -144,6 +144,7 @@ BEGIN
     VK_F6,      IDM_VIEW_FREEZE,  VIRTKEY   ; 5.5 pause/freeze
     VK_F7,      IDM_VIEW_GROUP,   VIRTKEY   ; 5.1 group by process
     "C",        IDM_CTX_COPY_SELECTED, VIRTKEY, CONTROL
+    "S",        IDM_FILE_PRESET_SAVE, VIRTKEY, CONTROL ; 9.4.8: menu promised Ctrl+S, accel was missing
     "A",        IDM_EDIT_SELECTALL,     VIRTKEY, CONTROL
     "F",        IDM_EDIT_FOCUSFILTER,   VIRTKEY, CONTROL
     "E",        IDM_FILE_EXPORT,        VIRTKEY, CONTROL

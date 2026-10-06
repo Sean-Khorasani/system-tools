@@ -112,6 +112,13 @@ struct Settings {
     // Export
     wchar_t lastExportDir[MAX_PATH] = {0};
 
+    // GeoIP (9.1.5): the GUI's picked .mmdb path, persisted. Empty = never
+    // picked (or the file moved - a stale path is retried silently on the
+    // next launch and Country stays "—" until one loads). Deliberately NOT
+    // a ColVersion bump: the column schema does not change, this is one new
+    // REG_SZ that older keys simply lack.
+    wchar_t geoIpPath[MAX_PATH] = {0};
+
     // Read from HKCU; never fails hard (defaults stay on missing values).
     bool Load();
     bool Save() const;         // best effort; returns false on write failure

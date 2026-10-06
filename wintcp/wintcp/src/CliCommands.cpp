@@ -122,8 +122,8 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe list [--filter F] [--sort COL] [--asc|--desc]\r\n"
      "                       [--group] [--format table|csv|tsv|json|jsonl]\r\n"
-     "                       [--columns SET|a,b,c] [--limit N]\r\n"
-     "                       [--quiet] [--watch [sec]] [--count N]\r\n"
+     "                       [--columns SET|a,b,c] [--limit N] [--out FILE]\r\n"
+     "                       [--quiet] [--watch [sec]] [--interval N] [--count N]\r\n"
      "\r\n"
      "  --filter F    filter-box grammar: chrome, port:443, pid:1000-2000,\r\n"
      "                state:estab, process:svchost, proto:udp, remote:1.2.3.4,\r\n"
@@ -148,6 +148,8 @@ const CommandHelp kCommandHelps[] = {
      "                service,host,path,traffic,rx,tx,nettotal,cpu,mem,\r\n"
      "                disk,duration,bandwidth,procspeed,tls,country,pinned,\r\n"
      "                note,rtt,minrtt,cwnd,retrans,ppid,integrity,signature.\r\n"
+      "                tls is reserved: nothing populates it - use `capture --text`\r\n"
+      "                to capture the handshake; see the note in the CLI reference.\r\n"
      "                Applies to every shape, json included.\r\n"
      // B6: the CLI has no saved column default and no widths. That is the
      // joint consequence of B2 (CLI stays hive-independent) and B3 (no config
@@ -171,6 +173,13 @@ const CommandHelp kCommandHelps[] = {
      "                --signatures: without it the cell is \"—\".\r\n"
      "  --limit N     at most N rows.\r\n"
      "  --quiet       print nothing; exit 0 when any row matches, else 1.\r\n"
+     "                An enrichment filter without its source switch (--dns,\r\n"
+     "                --db, --traffic, --signatures) exits 2 instead: quiet\r\n"
+     "                would turn \"unanswerable\" into \"no match\".\r\n"
+     "  --out FILE    write the table to FILE instead of stdout. csv/tsv\r\n"
+     "                carry the same BOM export uses; json/jsonl never\r\n"
+     "                do; an existing file needs --force. One snapshot:\r\n"
+     "                --out refuses --watch, --changes and --quiet.\r\n"
      "  --traffic     per-PID byte totals via one bounded socket scan over\r\n"
      "                the whole view (adds up to ~4 s on machines with wedged\r\n"
      "                sockets, usually ms). Sampled before sorting, so\r\n"
@@ -224,7 +233,7 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe ps [--filter F] [--format table|csv|json]\r\n"
      "                     [--sort cpu|mem|disk|conns|pid|process]\r\n"
-     "                     [--limit N] [--quiet] [--watch [sec]] [--count N]\r\n"
+     "                     [--limit N] [--quiet] [--watch [sec]] [--interval N] [--count N]\r\n"
      "\r\n"
      "Aggregates the connection rows by PID: process name, connection count,\r\n"
      "CPU %, working set and disk I/O. Default order is CPU, hottest first\r\n"
@@ -245,11 +254,11 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe top [--filter F] [--limit N]\r\n"
      "                      [--sort cpu|mem|disk|conns|pid|process]\r\n"
-     "                      [--watch [sec]] [--count N]\r\n"
+     "                      [--watch [sec]] [--interval N] [--count N]\r\n"
      "\r\n"
      "Same rows as ps, CPU-sorted. Unlike interactive top, a bare `top`\r\n"
      "prints once and exits - it never polls unless you ask: add --watch\r\n"
-     "to poll, --count N to bound the loop for scripts.\r\n"
+     "to poll (or --interval as its alias), --count N to bound the loop for scripts.\r\n"
      "\r\n"
      "Examples:\r\n"
      "  wintcp.exe top --limit 5\r\n"
@@ -281,8 +290,8 @@ const CommandHelp kCommandHelps[] = {
     {"kill",
      "kill - end a process by PID, or by the connection it owns\r\n"
      "\r\n"
-     "Usage: wintcp.exe kill --pid N [--yes] [--dry-run]\r\n"
-     "       wintcp.exe kill --select <filter> [--yes] [--dry-run]\r\n"
+     "Usage: wintcp.exe kill --pid N [--yes] [--dry-run] [--close|--force]\r\n"
+     "       wintcp.exe kill --select <filter> [--yes] [--dry-run] [--close|--force]\r\n"
      "\r\n"
      "Asks the process to close first (WM_CLOSE), then terminates it if it\r\n"
      // Keep-in-step: "3 s" restates kKillGraceMs (Commands.cpp). Same
@@ -294,6 +303,12 @@ const CommandHelp kCommandHelps[] = {
      "answers \"which process holds this port, and end it\" in one step.\r\n"
      "Without --yes the command prints its plan and exits 3; --dry-run\r\n"
      "prints the plan and changes nothing (exit 0).\r\n"
+     "\r\n"
+     "Modes (mutually exclusive; together they are exit 2):\r\n"
+     "  --close       WM_CLOSE only, wait the 3 s, NEVER force. If the\r\n"
+     "                process survives, kill fails (exit 1) and says so.\r\n"
+     "  --force       terminate immediately: no WM_CLOSE, no wait.\r\n"
+     "  (default)     WM_CLOSE, then force after 3 s - the hybrid above.\r\n"
      "\r\n"
      "Examples:\r\n"
      "  wintcp.exe kill --pid 1234 --dry-run\r\n"
@@ -478,18 +493,19 @@ const CommandHelp kCommandHelps[] = {
      "stat - system CPU / memory / disk / network (one sample, then exit)\r\n"
      "\r\n"
      "Usage: wintcp.exe stat [--format table|json] [--watch [sec]]\r\n"
-     "                       [--count N]\r\n"
+     "                       [--interval N] [--count N]\r\n"
      "\r\n"
      "Each run samples for ~1 s first (CPU and network are rates between\r\n"
      "two reads). Disk shows n/a when the PDH counters are disabled.\r\n"
-    "Run `version` for this machine's optional-feature report: it names\r\n"
-    "what is unavailable and what would provide it.\r\n"
-     "Add --watch to poll, --count N to bound it for scripts.\r\n"
+     "Run `version` for this machine's optional-feature report: it names\r\n"
+     "what is unavailable and what would provide it.\r\n"
+     "Add --watch (or its --interval alias) to poll, --count N to bound it for scripts.\r\n"
      "\r\n"
      "Examples:\r\n"
      "  wintcp.exe stat\r\n"
      "  wintcp.exe stat --format json\r\n"
-     "  wintcp.exe stat --watch 2 --count 5\r\n"},
+     "  wintcp.exe stat --watch 2 --count 5\r\n"
+     "  wintcp.exe stat --interval 2 --count 5\r\n"},
     {"version",
      "version - build banner and capability summary\r\n"
      "\r\n"
@@ -550,6 +566,7 @@ bool IsHelpToken(const std::wstring& t) {
 bool TakesValue(const std::wstring& t) {
     return t == L"--filter" || t == L"--sort" || t == L"--format" ||
            t == L"--columns" || t == L"--limit" || t == L"--watch" ||
+            t == L"--interval" ||
            t == L"--count" || t == L"--out" || t == L"--select" ||
            t == L"--pid" || t == L"--address" || t == L"--port" ||
            t == L"--tag" || t == L"--note" || t == L"--name" ||
@@ -632,6 +649,9 @@ struct Args {
     bool yes = false;
     bool dryRun = false;
     bool force = false;
+    // 9.3.6: kill's WM_CLOSE-only mode. `--force` shares `force` with
+    // export/capture - the word means "don't ask / don't wait" in both.
+    bool closeOnly = false;
     std::wstring out;
     std::wstring select;
     DWORD pid = 0;
@@ -708,6 +728,11 @@ std::vector<int> ParseColumns(const std::wstring& csv) {
     return std::vector<int>();
 }
 
+// 9.3.3/D33: nearest-known-name suggestion for a token the parser has just
+// rejected. Defined beside kSwitchNames below; declared here because the
+// parser is the first place a typo is seen.
+std::string SuggestSwitchName(const std::wstring& typed);
+
 // Parse switches starting at argv[pos]. Returns "" on ok, else an error.
 std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
     for (int i = pos; i < argc; ++i) {
@@ -755,6 +780,18 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
                 if (!ParseUint(argv[i + 1], &s) || s < kWatchMinSec ||
                     s > kWatchMaxSec)
                     return RangeErr("--watch", kWatchMinSec, kWatchMaxSec);
+                a->watchSec = s;
+                ++i;
+            }
+        } else if (t == L"--interval") {
+            // 9.2.3: alias for --watch; same range (1..3600), same parsing shape.
+            a->watch = true;
+            if (i + 1 < argc && argv[i + 1] != nullptr &&
+                argv[i + 1][0] != L'-') {
+                unsigned s = 0;
+                if (!ParseUint(argv[i + 1], &s) || s < kWatchMinSec ||
+                    s > kWatchMaxSec)
+                    return RangeErr("--interval", kWatchMinSec, kWatchMaxSec);
                 a->watchSec = s;
                 ++i;
             }
@@ -850,6 +887,9 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             a->hasEvent = true;
         } else if (t == L"--quiet" || t == L"-q") {
             a->quiet = true;
+        } else if (t == L"--close") {
+            // 9.3.6: kill --close = WM_CLOSE only, never forced.
+            a->closeOnly = true;
         } else if (t == L"--secs") {
             std::wstring v;
             if (!need(&v)) return "missing value for --secs";
@@ -857,7 +897,11 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
                 a->secs > kCaptureSecsMax)
                 return RangeErr("--secs", kCaptureSecsMin, kCaptureSecsMax);
         } else if (!t.empty() && t[0] == L'-') {
-            return "unknown switch: " + WideToUtf8(t);
+            // 9.3.3/D33: a near-miss switch gets its correction inline.
+            const std::string sugg = SuggestSwitchName(t);
+            return "unknown switch: " + WideToUtf8(t) +
+                   (sugg.empty() ? std::string()
+                                 : "\r\nDid you mean " + sugg + "?");
         } else {
             // positional: bookmark/preset/geoip subverb or geoip ip
             if (a->sub.empty())
@@ -962,15 +1006,84 @@ std::string InferExportFormat(const std::wstring& path) {
 // row count - that is a documented non-switch, not a silent one.
 const wchar_t* const kSwitchNames[] = {
     L"--filter", L"--sort", L"--asc", L"--desc", L"--group", L"--format",
-    L"--columns", L"--limit", L"--quiet", L"--watch", L"--count", L"--out",
+    L"--columns", L"--limit", L"--quiet", L"--watch", L"--interval", L"--count", L"--out",
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
     L"--text", L"--dir",
-    L"--event", L"--yes", L"-y", L"--dry-run", L"--force",
+    L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
 };
 constexpr size_t kSwitchNameCount =
     sizeof(kSwitchNames) / sizeof(kSwitchNames[0]);
+
+// 9.3.3/D33: bounded Levenshtein for "did you mean". Fixed rows, a 64-char
+// cap (every switch and command name is far shorter); beyond the cap the
+// answer is "far" rather than an allocation. ASCII case-fold only: every
+// candidate is ASCII, and the parser's own matching is case-insensitive.
+size_t EditDistance(const std::wstring& a, const std::wstring& b) {
+    if (a.size() > 64 || b.size() > 64) return 99;
+    size_t prev[65], cur[65];
+    const size_t n = a.size(), m = b.size();
+    for (size_t j = 0; j <= m; ++j) prev[j] = j;
+    for (size_t i = 1; i <= n; ++i) {
+        cur[0] = i;
+        for (size_t j = 1; j <= m; ++j) {
+            wchar_t ca = a[i - 1];
+            wchar_t cb = b[j - 1];
+            if (ca >= L'A' && ca <= L'Z') ca = static_cast<wchar_t>(ca - L'A' + L'a');
+            if (cb >= L'A' && cb <= L'Z') cb = static_cast<wchar_t>(cb - L'A' + L'a');
+            const size_t cost = (ca == cb) ? 0u : 1u;
+            size_t best = prev[j] + 1;                      // deletion
+            if (cur[j - 1] + 1 < best) best = cur[j - 1] + 1;   // insertion
+            if (prev[j - 1] + cost < best) best = prev[j - 1] + cost;  // sub
+            cur[j] = best;
+        }
+        for (size_t j = 0; j <= m; ++j) prev[j] = cur[j];
+    }
+    return prev[m];
+}
+
+// The nearest known switch within edit distance 2, or "" when nothing is
+// close. Distance 2 covers the usual slips (doubled letter, dropped char,
+// a transposition as two edits) without ever proposing something the user
+// did not mean - a wrong suggestion is worse than none.
+std::string SuggestSwitchName(const std::wstring& typed) {
+    std::wstring bestName;
+    size_t bestDist = 3;
+    for (size_t i = 0; i < kSwitchNameCount; ++i) {
+        const std::wstring cand(kSwitchNames[i]);
+        const size_t d = EditDistance(typed, cand);
+        if (d < bestDist) { bestDist = d; bestName = cand; }
+    }
+    if (bestName.empty()) return "";
+    return WideToUtf8(bestName.c_str());
+}
+
+// Same for commands, over the names column of the help table (aliases
+// included, so `cno` is told about `conn`).
+std::string SuggestCommandName(const std::wstring& typed) {
+    std::wstring bestName;
+    size_t bestDist = 3;
+    for (size_t i = 0; i < kCommandHelpCount; ++i) {
+        const std::string names = kCommandHelps[i].names;
+        size_t pos = 0;
+        for (;;) {
+            const size_t sp = names.find(' ', pos);
+            const std::string one = (sp == std::string::npos)
+                                        ? names.substr(pos)
+                                        : names.substr(pos, sp - pos);
+            if (!one.empty()) {
+                const std::wstring cand(one.begin(), one.end());
+                const size_t d = EditDistance(typed, cand);
+                if (d < bestDist) { bestDist = d; bestName = cand; }
+            }
+            if (sp == std::string::npos) break;
+            pos = sp + 1;
+        }
+    }
+    if (bestName.empty()) return "";
+    return WideToUtf8(bestName.c_str());
+}
 
 // "group-by verb" sets of switch names, space separated. A verb not listed
 // here allows nothing and is reported by name, which keeps a new verb from
@@ -989,9 +1102,11 @@ struct VerbSwitches {
 
 const VerbSwitches kVerbSwitches[] = {
     {L"list",
+     // --out/--force: 9.3.4, the table written to a file instead of stdout;
+     // --force only exists because --out refuses an existing path.
      L"--filter --sort --asc --desc --group --format --columns --limit "
-     L"--quiet --watch --count --traffic --dns --db --changes --event "
-     L"--signatures"},
+     L"--quiet --watch --interval --count --traffic --dns --db --changes --event "
+     L"--signatures --out --force"},
     {L"conn", nullptr},   // alias: same as list
     {L"ps",
      // --columns is deliberately absent. ps renders one fixed set of six
@@ -1002,13 +1117,16 @@ const VerbSwitches kVerbSwitches[] = {
      // output unchanged, while `list --columns nosuchcolumn` exited 2.
      // list, export and preset honour --columns; ps does not, so it
      // refuses it like any other switch it does not act on.
-     L"--filter --format --limit --quiet --watch --count --sort "
+     L"--filter --format --limit --quiet --watch --interval --count --sort "
      L"--asc --desc"},
     {L"top", nullptr},    // alias: same as ps
-    {L"stat", L"--format --watch --count"},
+    {L"stat", L"--format --watch --interval --count"},
     {L"sys", nullptr},    // alias: same as stat
     {L"details", L"--select --traffic --dns --db --signatures"},
-    {L"kill", L"--pid --select --yes --dry-run"},
+    {L"kill",
+     // 9.3.6: --close (ask only) and --force (terminate at once); the
+     // default stays the documented hybrid.
+     L"--pid --select --yes --dry-run --close --force"},
     {L"close", L"--select --yes --dry-run"},
     {L"block", L"--select --yes --dry-run"},
     {L"unblock", L"--address --port --yes --dry-run"},
@@ -1089,8 +1207,12 @@ bool CheckVerbSwitches(const Args& a, const std::wstring& verb,
         // An unknown COMMAND, not an unknown switch: point at the overview.
         // The switch-level errors below carry their own "try help <verb>",
         // and this is the one case where there is no verb to point at.
+        // 9.3.3/D33: a near-miss spelling is corrected, not just refused.
         if (err != nullptr) {
-            *err = WideToUtf8(verb) + ": unknown command.\r\n"
+            const std::string sugg = SuggestCommandName(verb);
+            *err = WideToUtf8(verb) + ": unknown command.\r\n" +
+                   (sugg.empty() ? std::string()
+                                 : "Did you mean '" + sugg + "'?\r\n") +
                    "Try 'wintcp.exe help'.";
         }
         return false;
@@ -1104,9 +1226,17 @@ bool CheckVerbSwitches(const Args& a, const std::wstring& verb,
         if (a.given.find(name) == a.given.end()) continue;  // not typed here
         if (SwitchAllowed(allowed, name)) continue;
         if (err != nullptr) {
+            // 9.3.3: name the allowed set so a typo is debuggable, not just
+            // refused. The full list is short and the verb owns it above.
+            std::string hint;
+            if (allowed != nullptr && *allowed != L'\0')
+                hint = WideToUtf8(allowed);
             *err = WideToUtf8(verb) + ": " + WideToUtf8(name) +
                    " is not a switch of this command; it would be ignored.\r\n"
-                   "Try 'wintcp.exe help " + WideToUtf8(canonical) + "'.";
+                   "Try 'wintcp.exe help " + WideToUtf8(canonical) + "'." +
+                   (hint.empty() ? std::string()
+                                 : "\r\n" + WideToUtf8(canonical) +
+                                   " honours: " + hint + ".");
         }
         return false;
     }
@@ -1123,8 +1253,21 @@ BOOL WINAPI CmdCtrlHandler(DWORD type) {
     return FALSE;
 }
 
+// 9.2.3: --watch without --count runs until Ctrl+C - right for a terminal,
+// a trap for a redirected script. Warn once, on stderr, only when stdout is
+// NOT a console: an interactive user watching output scroll needs no
+// warning; a pipeline filling a disk does.
+void WarnUnboundedWatch(const Args& a) {
+    if (a.count != 0) return;
+    DWORD mode = 0;
+    if (::GetConsoleMode(::GetStdHandle(STD_OUTPUT_HANDLE), &mode)) return;
+    WriteErr("warning: --watch without --count runs until Ctrl+C; "
+             "add --count N to bound it for scripts.\r\n");
+}
+
 int RunPollLoop(const Args& a, std::function<CommandResult()> once) {    ::SetConsoleCtrlHandler(CmdCtrlHandler, TRUE);
     g_cmdStop = 0;
+    WarnUnboundedWatch(a);
     unsigned n = 0;
     int rc = 0;
     for (;;) {
@@ -1168,6 +1311,7 @@ int RunChangesLoop(const Args& a, const ListOptions& opt) {
     unsigned n = 0;
     int rc = 0;
     bool first = true;
+    WarnUnboundedWatch(a);   // 9.2.3: same contract as RunPollLoop
     for (;;) {
         std::wstring err;
         if (!BuildStoreSnapshot(source, store, /*procStats=*/false,
@@ -1236,8 +1380,14 @@ int RunCliCommand(int argc, wchar_t** argv) {
             return 0;
         }
         if (PrintCommandHelp(topic)) return 0;
-        WriteErr("unknown command: '" + WideToUtf8(topic) +
-                 "'. Try 'wintcp.exe help'.\r\n");
+        {
+            // 9.3.3/D33: a near-miss topic gets its correction.
+            const std::string sugg = SuggestCommandName(topic);
+            WriteErr("unknown command: '" + WideToUtf8(topic) + "'." +
+                     (sugg.empty() ? std::string()
+                                   : " Did you mean '" + sugg + "'?") +
+                     " Try 'wintcp.exe help'.\r\n");
+        }
         return 2;
     }
 
@@ -1358,10 +1508,48 @@ int RunCliCommand(int argc, wchar_t** argv) {
             return 2;
         }
         ListOptions opt = ToListOptions(a);
+        // 9.3.4: --out writes ONE rendered snapshot to a file. Each refusal
+        // names its own contradiction instead of picking a side for the
+        // user: a watch would overwrite the file every tick, a change
+        // stream is not a table, and a quiet run renders nothing.
+        if (!a.out.empty()) {
+            if (a.watch) {
+                WriteErr("list: --out writes one snapshot; --watch polls. "
+                         "Drop one.\r\n");
+                return 2;
+            }
+            if (opt.changes) {
+                WriteErr("list: --out holds one table; --changes streams "
+                         "deltas. Drop one.\r\n");
+                return 2;
+            }
+            if (opt.quiet) {
+                WriteErr("list: --quiet renders nothing, so --out would "
+                         "write an empty file. Drop one.\r\n");
+                return 2;
+            }
+        }
+        // 9.2.2: --quiet turns the exit code into the ONLY answer, so a
+        // quiet run whose filter asks an enrichment question its switches
+        // left unanswerable would answer "no match" (1) as a fact. Refuse
+        // instead (exit 2), naming the switch. The advisory text stays
+        // suppressed under quiet - an argument error is not advice.
+        if (opt.quiet) {
+            const std::string missing = FilterEnrichmentAdvice(opt);
+            if (!missing.empty()) {
+                WriteErr(missing +
+                         "list: refusing a --quiet run that can only answer "
+                         "\"no match\" (exit 2). Add the switch above, or "
+                         "drop --quiet to see this note as advice.\r\n");
+                return 2;
+            }
+        }
         // D15: the CLI's list verb prints its fixed column header as soon
         // as the snapshot exists, not after the enrichment joins; json has
         // no header line, --quiet prints nothing (zero bytes, always).
-        opt.streamHeader = !opt.quiet && opt.format != "json";
+        // 9.3.4: with --out nothing streams to stdout, so the header stays
+        // in r.out and lands in the file.
+        opt.streamHeader = !opt.quiet && opt.format != "json" && a.out.empty();
         if (opt.changes) {
             if (!a.watch && a.count == 0) {
                 WriteErr("list: --changes needs --watch (or --count).\r\n");
@@ -1409,6 +1597,40 @@ int RunCliCommand(int argc, wchar_t** argv) {
         }
         SnapshotSource src;
         const CommandResult r = CmdList(src, opt);
+        if (!a.out.empty()) {
+            // Nothing worth writing: report the failure as it came, never
+            // an empty file that looks like an answer.
+            if (r.exitCode != 0 && r.out.empty()) {
+                Emit(r);
+                return r.exitCode;
+            }
+            // 9.3.4: same file rules as export --out. Refuse an existing
+            // path without --force (an --out that overwrites by default is
+            // how a script loses yesterday's data); BOM for csv/tsv/table,
+            // never for json/jsonl - both verbs share
+            // WriteUtf8FileWithBom so the rules cannot drift.
+            {
+                std::wstring existsErr;
+                if (RefuseExistingOutput(L"list", a.out, a.force,
+                                          &existsErr)) {
+                    WriteErr(WideToUtf8(existsErr));
+                    return 2;
+                }
+            }
+            const bool isJson = (opt.format == "json");
+            const std::wstring werr =
+                WriteUtf8FileWithBom(a.out, r.out, !isJson);
+            if (!werr.empty()) {
+                WriteErr("list: cannot write --out: " + WideToUtf8(werr) +
+                         "\r\n");
+                return 1;
+            }
+            // Honest confirmation: the path is a fact, the row count is
+            // not (CmdList owns its store) - so no invented number.
+            WriteOut("wrote " + WideToUtf8(a.out) + "\r\n");
+            if (!r.err.empty()) WriteErr(r.err);
+            return r.exitCode;
+        }
         Emit(r);
         return r.exitCode;
     }
@@ -1471,9 +1693,18 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return r.exitCode;
     }
     if (cmd == L"kill") {
+        // 9.3.6: the two modes are exclusions, not preferences. Accepting
+        // both and picking one silently would be the swallowed-switch bug.
+        if (a.closeOnly && a.force) {
+            WriteErr("kill: --close (never force) and --force (never ask) "
+                     "exclude each other. Pick one.\r\n");
+            return 2;
+        }
         MutateOptions mo;
         mo.yes = a.yes;
         mo.dryRun = a.dryRun;
+        mo.closeOnly = a.closeOnly;
+        mo.forceNow = a.force;
         SnapshotSource src;
         if (!a.select.empty()) {
             // Find by connection, kill its process: the flow taskkill
@@ -1751,8 +1982,15 @@ int RunCliCommand(int argc, wchar_t** argv) {
         Emit(r);
         return r.exitCode;
     }
-    WriteErr("unknown command: '" + WideToUtf8(argv[1]) +
-             "'.\r\nTry 'wintcp.exe help'.\r\n");
+    {
+        // 9.3.3/D33: near-miss command names are corrected here too - this
+        // is the path `nonsense` takes (no --help token, parse succeeds).
+        const std::string sugg = SuggestCommandName(argv[1]);
+        WriteErr("unknown command: '" + WideToUtf8(argv[1]) + "'." +
+                 (sugg.empty() ? std::string()
+                               : " Did you mean '" + sugg + "'?") +
+                 "\r\nTry 'wintcp.exe help'.\r\n");
+    }
     return 2;
 }
 

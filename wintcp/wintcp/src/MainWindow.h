@@ -187,6 +187,7 @@ private:
     // be invoked with a bare path, so this action never worked.
     // void ShowSelectedProcessProperties(); // 4.6: ShellExecute "properties"
     void BlockSelectedConnection();       // 4.4: firewall block
+    void RemoveAllWinTcpBlocks();         // D30: tray - every WinTCP rule at once
     // sectioned builder + silent live-update while open.
     DetailModel BuildDetails(const Connection& c) const;
     void RefreshDetailsWindow();           // no-op unless details visible

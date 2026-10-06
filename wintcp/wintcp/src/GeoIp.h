@@ -57,6 +57,11 @@ public:
 
     bool Loaded() const { return dataSectionSize_ != 0; }
 
+    // The path Load() was given, so the GUI can persist it (9.1.5). Empty when
+    // nothing has been loaded; not a separate "has been loaded" flag, because
+    // Loaded() answers that and this is only ever read alongside it.
+    const std::wstring& SourcePath() const { return sourcePath_; }
+
     // Look up an address. Returns an ISO 3166-1 alpha-2 code (L"US"), or an
     // empty string when the address is absent from the database, has no
     // country record, or the database is not loaded.
@@ -122,6 +127,11 @@ private:
     // file-absolute address that its own bounds check then rejected.
     size_t dataSectionBase_ = 0;
     size_t dataSectionSize_ = 0;
+
+    // 9.1.5: the path Load() was given, so the GUI can persist it across
+    // restarts. Empty when nothing has been loaded; never read alongside
+    // Loaded() being false.
+    std::wstring sourcePath_;
 
     // ip_version from the metadata, 4 or 6 only. In a v6 tree the IPv4 half
     // sits behind 96 bits of zeros, so an IPv4 lookup would otherwise walk 32

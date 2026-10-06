@@ -36,6 +36,8 @@ const wchar_t* kValFilter = L"Filter";
 const wchar_t* kValLogEnabled = L"LogEnabled";
 const wchar_t* kValLogPath = L"LogPath";
 const wchar_t* kValLastExportDir = L"LastExportDir";
+    // 9.1.5: the picked .mmdb survives a relaunch (gui.md's admitted gap).
+    const wchar_t* kValGeoIpPath = L"GeoIpPath";
 
 bool GetDword(HKEY root, const wchar_t* path, const wchar_t* name, DWORD& out) {
     DWORD value = 0;
@@ -306,6 +308,9 @@ bool Settings::Load() {
     if (!GetSz(root, kKeyPath, kValLastExportDir, lastExportDir,
                sizeof(lastExportDir) / sizeof(lastExportDir[0])))
         lastExportDir[0] = L'\0';
+    if (!GetSz(root, kKeyPath, kValGeoIpPath, geoIpPath,
+               sizeof(geoIpPath) / sizeof(geoIpPath[0])))
+        geoIpPath[0] = L'\0';
 
     return true;
 }
@@ -350,6 +355,7 @@ bool Settings::Save() const {
     ok &= SetSz(key, kValFilter, filter);
     ok &= SetSz(key, kValLogPath, logPath);
     ok &= SetSz(key, kValLastExportDir, lastExportDir);
+    ok &= SetSz(key, kValGeoIpPath, geoIpPath);
 
     ::RegCloseKey(key);
     return ok;
