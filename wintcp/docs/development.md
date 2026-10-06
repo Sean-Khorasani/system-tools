@@ -114,6 +114,16 @@ The command list `examples.bat` executes. One command per line, in the order the
 
 Its contract is deliberately narrow: it asserts **exit codes only**, and only **rc 2** (bad arguments) counts as a failure. rc 0 and rc 1 are both acceptable - rc 1 means "nothing matched", which is a legitimate answer for a filter on a machine that has no such row. Output content is *not* asserted, because sample output is captured on one host and is explicitly documented as machine-specific.
 
+**`;expect=N` annotates a command whose contract IS a non-zero exit.** Appended to the end of a line, and stripped before the binary ever sees it:
+
+```text
+kill --pid 4 ;expect=2
+```
+
+Without it, such a command cannot be gated at all - and that is not hypothetical. Two documented commands are in exactly this position: `kill --pid 4`, which the CLI reference says is *always* refused because PID 4 owns no real image, and `export --changes`, whose documented answer is exit 2. Both were absent from `examples.txt` for as long as this rule stood, because including them failed the gate for behaving correctly. `;` appears in no documented command, so the separator cannot collide with a command's own text.
+
+Both directions are asserted, and the harness's self-test proves it: a command annotated `;expect=2` that returns 2 **passes**, and one that returns 0 **fails**. An annotation feature that only checked the passing direction would look correct while verifying nothing. The run also prints `ANNOTATED: N of M`, because the characteristic failure of an annotation is a typo that never matches - which leaves the line running unannotated, so the count is how you notice.
+
 A nested double quote is why it runs through PowerShell rather than a batch `for /f` loop: the documented way to keep a space inside a filter value is `--filter "note:""corporate dns"""`, which a batch loop truncates to `--filter "note:""corporate`.
 
 **If you add or change a documented command, add its line here.**
@@ -181,7 +191,7 @@ Timings vary by machine and by what else is running - they are the one number in
 ## Documentation conventions
 
 - **The README is a set.** "The README" means the root `README.md` plus every sub-document in `docs\`. Neither is complete alone: the root is the entry point, `docs\` is the reference.
-- **Every documented command is executable.** Anything shown as a command must exist in `wintcp\tests\examples.txt`, or the `examples` gate will not check it and it can rot silently. No gate parses Markdown, so documentation can be wrong with all gates green.
+- **Every documented command is executable.** Anything shown as a command must exist in `wintcp\tests\examples.txt`, or the `examples` gate will not check it and it can rot silently. No gate parses Markdown, so documentation can be wrong with all gates green. A command whose documented exit code is 2 carries `;expect=2`.
 - **Sample output carries the machine disclaimer.** Output was captured on one Windows 11 host; PIDs, process names, ports and byte totals are machine-specific. Do not invent output to fill a block - if you cannot run it, do not print it.
 - **Do not copy measured numbers between runs.** Check counts, gate counts and benchmark timings all move. Update them from the binary, never from the previous paragraph.
 - **Case studies have a fixed shape**: a lead sentence, the command block, its output, then a table explaining each switch and why it is in *that* command.

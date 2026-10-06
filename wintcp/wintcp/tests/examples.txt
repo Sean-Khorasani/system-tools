@@ -4,6 +4,10 @@ kill --select "local:port:49665" --dry-run
 kill --select "ipv4: local:port:49665" --dry-run
 kill --pid 999999
 kill --pid 999999 --dry-run
+# L2310: documented as ALWAYS refused (exit 2) - cli.md says so, because PID 4
+# owns no real image. Without the ;expect= annotation this line could not be
+# gated at all: an rc of 2 is exactly what this harness reads as a rejection.
+kill --pid 4 ;expect=2
 block --select "remote:20.47.110.73 state:estab" --dry-run
 blocks
 unblock --address 20.47.110.73 --port 443 --dry-run
@@ -56,6 +60,9 @@ export --out %TEMP%\rmc_a.csv --filter "tcp: state:listen" --force
 export --out %TEMP%\rmc_a.tsv --format tsv --columns proto,pid,process,state --force
 export --out %TEMP%\rmc_b.csv --group --traffic --sort nettotal --desc --force
 export --out %TEMP%\rmc_c.csv --quiet --force
+# L2310: the documented answer here IS exit 2, and cli.md prints that
+# number. Same reason: gateable only with the annotation.
+export --out %TEMP%\l2310_changes.csv --changes ;expect=2
 list --format json --columns proto,local,lport,remote,rport,state,pid,process --limit 2
 list --format json --columns full --limit 1
 list --format jsonl --columns proto,local,lport,remote,rport,state,pid,process --limit 2
