@@ -510,6 +510,15 @@ void DetailsDialog::OnPaint() {
     // the "the table goes under the buttons" report, and it was a missing bound
     // rather than a layout error: Layout() already computed viewHeight_ correctly
     // and the hand-drawn scrollbar already honoured it.
+    //
+    // DEPENDS ON viewHeight_ BEING SET BEFORE THE FIRST PAINT, because it
+    // defaults to 0 and `m + 0 == m` would clip the body to nothing - a blank
+    // window rather than a wrong one, which is at least not silently plausible.
+    // Two independent paths establish it: WM_CREATE calls ApplyFont, which calls
+    // Layout(GetClientRect) at the end; and WM_SIZE calls Layout directly, and a
+    // created window is always sent WM_SIZE before it is ever painted. So this
+    // bound is safe today, but it is a landmine for anyone who adds a paint path
+    // that can run before both - if you add one, call Layout() first.
     const int contentBottom = m + viewHeight_;
     // The rule is drawn once for the whole body rather than per row, so it needs
     // the same clip: from the top margin to the content bottom.
