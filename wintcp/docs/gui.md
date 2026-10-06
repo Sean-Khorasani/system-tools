@@ -122,6 +122,8 @@ A sectioned, modeless window with the process identity, command line, creation t
 - It opens centered over the main window and scales with DPI.
 - While open it **refreshes silently on every auto-refresh**. If the tracked process exits, a note appears once.
 - **Copy** and **Open file location** buttons are provided, in a row below the body.
+- **Every connection owned by that PID is listed** - all of them, not a preview. It used to stop at 25 rows and report *… and N more*, which hid the one section that answers "what is this process actually connected to"; the cap is gone rather than made expandable, because an expander would put the answer behind a click on a window whose whole model is "read, and collapse sections". A browser process with 70-odd sockets lists all of them.
+- Note that a multi-process browser puts each process in its **own PID**, so `PID 50092` never mixes in another `chrome.exe`'s sockets, and rows belonging to other PIDs are never listed at all. The list is scoped to the selected row's process, not to everything in the snapshot.
 
 ### Layout
 

@@ -5162,6 +5162,83 @@ static const unsigned char kClientHello[] = {
             Check(r, "details.reallabels-fit-too", widest > 0 && widest <= 24,
                   "widest real label is " + std::to_string(widest) + " chars");
         }
+
+        // The connection list must not be truncated (todo.md 8.8 G4). There was
+        // a hardcoded `kMaxListed = 25` here with the comment "25 sibling lines
+        // fit the dossier on one screen", which stopped being true once the
+        // window scrolled - and the section it truncated is the only part of
+        // Details that answers "what is this connected to".
+        //
+        // Fixture: the SELECTED row plus 90 siblings all on one PID, so the
+        // expected total is 91. The count is asserted against the number of rows
+        // actually put IN rather than a literal, and 90 is well past the old cap
+        // rather than just past it - a cap merely raised to 30 or 50 still
+        // fails. Plus one DECOY on a different PID that must not appear, because
+        // the list means "this process's connections", not "every connection in
+        // the snapshot".
+        //
+        // The first version of this check put the siblings on a different PID
+        // from the row it asked about, and failed with "listed 1 of 90" - which
+        // was the fixture being wrong, not the code.
+        {
+            constexpr DWORD kOwnerPid = 4242;
+            constexpr DWORD kSiblingCount = 90;
+            const size_t kExpected = kSiblingCount + 1;   // + the selected row
+            std::vector<Connection> fam;
+            fam.reserve(kExpected + 1);
+            const auto makeRow = [](DWORD pid, UINT lport, UINT rport,
+                                    const wchar_t* raddr) {
+                Connection s;
+                s.family = AF_INET;
+                s.protocol = IPPROTO_TCP;
+                s.state = MIB_TCP_STATE_ESTAB;
+                s.pid = pid;
+                s.localPort = lport;
+                s.remotePort = rport;
+                s.local4.S_un.S_addr = ::htonl(0x0A000005);
+                s.remote4.S_un.S_addr = ::htonl(0x5DB8D822);
+                s.localAddress = L"10.0.0.5";
+                s.remoteAddress = raddr;
+                return s;
+            };
+            // The selected row, first so it is also the one Details is asked
+            // about. processName set so the model has a title.
+            Connection self = makeRow(kOwnerPid, 50000, 443, L"93.184.216.34");
+            self.processName = L"synth.exe";
+            fam.push_back(self);
+            for (DWORD i = 0; i < kSiblingCount; ++i) {
+                fam.push_back(makeRow(kOwnerPid, static_cast<UINT>(20000 + i), 443,
+                                       (L"93.184.216." + std::to_wstring(i)).c_str()));
+            }
+            // The decoy: same shape, different PID, must stay out of the list.
+            fam.push_back(makeRow(9999, 51000, 443, L"1.2.3.4"));
+
+            ConnectionStore sibStore;
+            sibStore.ReplaceSnapshot(std::move(fam));
+            const DetailModel sibModel = BuildDetailModel(self, sibStore);
+            Check(r, "details.connections-not-truncated",
+                  sibModel.connectionLines.size() == kExpected,
+                  "listed " + std::to_string(sibModel.connectionLines.size()) +
+                      " of " + std::to_string(kExpected));
+            // connectionTotal counting rows the lines do not cover is exactly
+            // what produced the "… and N more" the user saw, so the two must
+            // agree. The renderer keeps its guard; this is why it never fires.
+            Check(r, "details.total-matches-listed",
+                  sibModel.connectionTotal == sibModel.connectionLines.size());
+            // The decoy proves the filter is on PID and not "everything".
+            Check(r, "details.siblings-are-one-pid-only",
+                  sibModel.connectionTotal == kExpected &&
+                      sibModel.ToPlainText().find(L"1.2.3.4") == std::wstring::npos);
+
+            // And the plain-text rendering must not reintroduce the truncation
+            // as a summarisation: it is what the Copy button pastes.
+            const std::wstring sibText = sibModel.ToPlainText();
+            Check(r, "details.plaintext-not-truncated",
+                  sibText.find(L" more") == std::wstring::npos &&
+                      sibText.find(L"more") == std::wstring::npos &&
+                      sibText.find(L"Connections (" + std::to_wstring(kExpected) +
+                                   L")") != std::wstring::npos);
+        }
     }
 
     // The per-connection actions must take their addresses from the BINARY

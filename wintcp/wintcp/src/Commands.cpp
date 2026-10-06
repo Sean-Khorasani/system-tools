@@ -1716,15 +1716,32 @@ DetailModel BuildDetailModel(const Connection& c,
         add(conn, L"Duration", FormatDuration(DurationSeconds(c)));
     m.sections.push_back(std::move(conn));
 
-    // B4: dev constant, no --peers knob on details. 25 sibling lines fit the
-    // dossier on one screen; connectionTotal still reports the true count.
-    constexpr size_t kMaxListed = 25;
+    // EVERY sibling connection is listed. There was a 25-line cap here
+    // ("25 sibling lines fit the dossier on one screen", with connectionTotal
+    // still reporting the true count), and the justification had stopped being
+    // true: the window scrolls.
+    //
+    // A user who opened Details on a browser with 46 sockets got 25 rows and
+    // an unexpandable "... and 21 more". That answers none of the questions
+    // they opened the window to ask, and the section it truncated is the only
+    // one that shows what the process is actually connected to.
+    //
+    // The cap is removed rather than made expandable. An expander would have
+    // been a second control on a window whose whole design is "read, and
+    // collapse sections", and it would still have hidden the answer behind a
+    // click. The selected row is in that list too, so scrolling to it was the
+    // only other way to find it.
+    //
+    // connectionTotal therefore always equals connectionLines.size() for a
+    // model built here. Both fields and the "... and N more" rendering stay:
+    // DetailModel is a shared struct that the CLI `details` verb also reads,
+    // and deleting the contract is a wider break than this fix is worth. The
+    // renderer keeps its guard, which now simply never fires.
     for (const Connection& row : store.Rows()) {
         if (row.pid != c.pid || (row.flags & kRowRemoved)) continue;
         ++m.connectionTotal;
-        if (m.connectionLines.size() >= kMaxListed) continue;
         std::wstring line = row.protoLabel + L"  " + row.localEndpoint +
-                            L"  →  " + row.remoteEndpoint + L"  (" +
+                            L"   " + row.remoteEndpoint + L"  (" +
                             row.stateLabel + L")";
         if (!row.hostname.empty()) line += L"  @ " + row.hostname;
         m.connectionLines.push_back(std::move(line));
