@@ -4618,6 +4618,170 @@ static const unsigned char kClientHello[] = {
             Check(r, "tls.truncated-handshake-safe", !h.sawCertificate);
         }
 
+        // The `tls:` lines capture prints, driven through the SAME real
+        // ClientHello rather than a synthetic one - the point of these checks is
+        // the report's honesty about negatives, and a synthetic hello would only
+        // prove the report agrees with a synthetic hello.
+        {
+            const std::wstring l1 = L"10.0.0.92:12924";
+            const std::wstring l2 = L"104.18.24.129:443";
+            ReasmResult a;                 // the client side, carrying the hello
+            a.bytes = ch;
+            ReasmResult b;                 // nothing at all
+            const std::string both =
+                TlsCaptureLines(a, b, l1, l2);
+            // The real facts from this exact capture must appear.
+            Check(r, "capture.tls-report.sni",
+                  both.find("SNI=www.cloudflare.com") != std::string::npos);
+            Check(r, "capture.tls-report.alpn",
+                  both.find("ALPN=http/1.1") != std::string::npos);
+            Check(r, "capture.tls-report.offered-version",
+                  both.find("offered=TLS 1.2") != std::string::npos);
+            // Named by ENDPOINT, never "client"/"server": pktmon does not
+            // reliably report which end sent the SYN.
+            Check(r, "capture.tls-report.endpoint-labels",
+                  both.find("to first endpoint (10.0.0.92:12924)") !=
+                      std::string::npos &&
+                      both.find("from first endpoint (104.18.24.129:443)") !=
+                          std::string::npos);
+            // A direction with no payload says so rather than being omitted:
+            // silence is indistinguishable from a decoder that did not run.
+            Check(r, "capture.tls-report.empty-direction-named",
+                  both.find("from first endpoint (104.18.24.129:443) captured "
+                            "no payload") != std::string::npos);
+            // And it must NOT claim the pair is "not TLS", because one
+            // direction plainly is.
+            Check(r, "capture.tls-report.no-false-negative",
+                  both.find("neither direction begins with a TLS record") ==
+                      std::string::npos);
+
+            // The genuine negative: two plaintext directions. This must be
+            // stated, not left silent.
+            ReasmResult p1;
+            p1.bytes = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+            ReasmResult p2;
+            p2.bytes = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
+            const std::string plain = TlsCaptureLines(p1, p2, l1, l2);
+            Check(r, "capture.tls-report.plaintext-stated",
+                  plain.find("neither direction begins with a TLS record") !=
+                      std::string::npos);
+            // ...and a plaintext capture must never print a handshake field.
+            Check(r, "capture.tls-report.plaintext-no-sni",
+                  plain.find("SNI=") == std::string::npos);
+
+            // TLS bytes with NO handshake message - the mid-capture start. The
+            // distinction that matters: the session exists, we missed its
+            // opening. Reporting this as "no TLS" would be a false negative.
+            ReasmResult m1;
+            m1.bytes = std::string("\x17\x03\x03\x00\x10", 5) +
+                       std::string(16, '\xAB');
+            ReasmResult m2;
+            const std::string mid =
+                TlsCaptureLines(m1, m2, l1, l2);
+            Check(r, "capture.tls-report.midstream-not-negative",
+                  mid.find("no handshake message") != std::string::npos &&
+                      mid.find("neither direction begins") ==
+                          std::string::npos);
+            Check(r, "capture.tls-report.encrypted-bytes-counted",
+                  mid.find("16 bytes of application_data") !=
+                      std::string::npos);
+
+            // A hole means everything after it is misaligned, and the report has
+            // to say so rather than printing a decode it cannot trust.
+            ReasmResult g1;
+            g1.bytes = ch;
+            g1.hasGap = true;
+            g1.bytesMissing = 37;
+            const std::string gapped = TlsCaptureLines(g1, b, l1, l2);
+            Check(r, "capture.tls-report.gap-caveat",
+                  gapped.find("37 byte(s) missing") != std::string::npos &&
+                      gapped.find("unreliable") != std::string::npos);
+
+            // The reassembly cap is a floor, not a total - same rule the byte
+            // counters follow.
+            ReasmResult c1;
+            c1.bytes = ch;
+            c1.truncated = true;
+            const std::string capped = TlsCaptureLines(c1, b, l1, l2);
+            Check(r, "capture.tls-report.cap-caveat",
+                  capped.find("reassembly cap") != std::string::npos);
+        }
+
+        // The mid-record case, which is the COMMON one for a connection that was
+        // already up when the capture window opened - and the case where a naive
+        // "does not begin with a TLS record" tells a reader their HTTPS
+        // connection is not encrypted.
+        //
+        // Built as: junk that cannot be a header, then FIVE contiguous records
+        // whose declared lengths put each next header at an exact offset. That
+        // contiguity is the whole evidence, so the decoy below has to show it
+        // is not something a coincidence produces.
+        {
+            const std::wstring l1 = L"10.0.0.92:12924";
+            const std::wstring l2 = L"104.18.24.129:443";
+            const auto rec = [](uint8_t type, size_t payload) {
+                std::string r;
+                r.push_back(static_cast<char>(type));
+                r.push_back(static_cast<char>(0x03));
+                r.push_back(static_cast<char>(0x03));
+                r.push_back(static_cast<char>((payload >> 8) & 0xFF));
+                r.push_back(static_cast<char>(payload & 0xFF));
+                r.append(payload, '\xAB');
+                return r;
+            };
+            // 7 bytes of leading junk, so the stream cannot start with a header.
+            std::string mid = std::string("\x01\x02\x03\x04\x05\x06\x07", 7);
+            for (int i = 0; i < 5; ++i)
+                mid += rec(kTlsApplicationData, 40 + i);
+            ReasmResult m1;
+            m1.bytes = mid;
+            ReasmResult none;
+            const std::string out = TlsCaptureLines(m1, none, l1, l2);
+            Check(r, "capture.tls-report.midrecord-detected",
+                  out.find("contiguous TLS records start at offset 7") !=
+                      std::string::npos,
+                  "line=" + out.substr(0, out.find('\r') == std::string::npos
+                                             ? out.size()
+                                             : out.find('\r')));
+            // It must be called TLS, and must NOT claim there is no handshake
+            // message in bytes that never contained one.
+            Check(r, "capture.tls-report.midrecord-says-tls",
+                  out.find("this is TLS whose records began before") !=
+                      std::string::npos);
+            Check(r, "capture.tls-report.midrecord-no-false-negative",
+                  out.find("neither direction begins with a TLS record") ==
+                          std::string::npos ||
+                      out.find("neither direction begins with a TLS record, "
+                               "and neither holds a run of them") ==
+                          std::string::npos);
+
+            // THE DECOY: header-shaped bytes that do NOT chain. A header scan
+            // alone would call this TLS. Two of them, far apart, so no
+            // contiguity can be inferred.
+            std::string decoy(64, '\x00');
+            const std::string one = rec(kTlsApplicationData, 16);
+            decoy.replace(4, one.size(), one);
+            const std::string two = rec(kTlsApplicationData, 16);
+            decoy.replace(40, two.size(), two);
+            ReasmResult d1;
+            d1.bytes = decoy;
+            const std::string dout = TlsCaptureLines(d1, none, l1, l2);
+            // NB: the affirmative phrase "contiguous TLS records" also appears
+            // inside the NEGATIVE sentence ("no run of contiguous TLS records
+            // appears anywhere in it"), so matching that substring alone would
+            // pass a report that claims TLS. Assert on the two claims that only
+            // a positive finding makes.
+            Check(r, "capture.tls-report.decoy-not-tls",
+                  dout.find("this is TLS") == std::string::npos &&
+                      dout.find("contiguous TLS records start at offset") ==
+                          std::string::npos &&
+                      dout.find("no run of contiguous TLS records appears "
+                                "anywhere in it") != std::string::npos,
+                  "line=" + dout.substr(0, dout.find('\r') == std::string::npos
+                                               ? dout.size()
+                                               : dout.find('\r')));
+        }
+
         // W1.2: a TLS 1.3 ServerHello's supported_versions extension carries
         // the real negotiated version as a single 2-byte field with NO length
         // prefix. The previous parser read a 1-byte length first and corrupted

@@ -274,6 +274,25 @@ thread id. See [the GUI guide](gui.md#threads) for the full reasoning.
 
 `pktmon` is a **sampling driver, not a tap**: only what happens after the filter is armed is recorded. A connection that has gone quiet during the window legitimately returns nothing, and an empty result is not evidence of a fault. Generate traffic during the window, or widen `--secs`.
 
+#### Reading the TLS handshake
+
+Every capture also prints `tls:` lines describing the TLS session, parsed out of the bytes it just reassembled. This is the **only** place WinTCP can report a TLS session: Windows has no socket-level TLS ioctl (there is no `SIO_TLS_INFO` in the SDK, and `TCP_INFO_v0` carries no TLS field), so the handshake is the only source, and it is visible only because TLS sends it in the clear. The `tls` **column** therefore stays empty - see its note in the [column reference](#column-reference).
+
+What appears depends entirely on where the capture window fell relative to the handshake, and every case is stated rather than left to inference:
+
+| Case | What is printed |
+|---|---|
+| The window includes the handshake | `ClientHello:` with SNI, the offered ALPN and the offered version; `ServerHello:` with the negotiated version and cipher; `certificate:` with subject, issuer and validity. |
+| The stream starts mid-record | `does not begin with a TLS record, but N contiguous TLS records start at offset X: this is TLS whose records began before the capture window`. |
+| The stream is TLS but carries no handshake message | `begins with TLS records but no handshake message was captured (the window opened after the handshake)`, plus the number of `application_data` bytes seen. |
+| The stream is not TLS | `does not begin with a TLS record, and no run of contiguous TLS records appears anywhere in it`. |
+
+- **A direction that captured no bytes is named, not omitted.** "One side of this connection has no bytes" is otherwise indistinguishable from "we only looked one way".
+- **`not TLS` is only claimed when neither direction begins with a record *and* neither holds a run of them.** One direction holding a contiguous run is positive evidence of TLS, and it outranks the other direction's silence.
+- The test for a run is **contiguity, not a header count**. Random bytes resemble a record header often enough to matter: on one real 131,072-byte mid-stream TLS capture, 13 offsets passed a header test and 5 of those were coincidence. A real record layer declares each record's length, so consecutive headers land at exact offsets, and coincidence cannot fake that.
+- **To see an SNI, capture a connection that is being established** - not one that has been up. `pktmon` records only what happens after the filter is armed, so on an established connection the handshake is simply not there to find.
+- Directions are named by endpoint, for the reason given under [Reading the stream](#reading-the-stream).
+
 #### Reading the stream
 
 | Switch | Behavior |

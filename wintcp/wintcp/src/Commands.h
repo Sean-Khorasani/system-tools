@@ -31,6 +31,7 @@
 #include "DetailModel.h"
 #include "Snapshot.h"
 #include "SysStats.h"
+#include "TcpReasm.h"
 #include "ViewState.h"
 
 namespace wintcp {
@@ -424,5 +425,24 @@ std::string ViewStateToJson(const ViewState& v);
 bool ViewStateFromPreset(const PresetView& v, ViewState* out);
 std::string FormatSystemStatsLine(const SystemStats& s);
 std::string SystemStatsToJson(const SystemStats& s);
+
+// ---- the TLS report capture prints -----------------------------------------
+//
+// Declared here, and not left as a private helper in Commands.cpp, for one
+// reason: it is pure formatting over two reassembled directions, and the
+// repository's convention is that pure logic gets tested rather than trusted
+// (see SocketTraffic.h's "split out for --selftest"). The test drives the real
+// captured ClientHello that Bench.cpp already carries.
+//
+// It is here, and only here, because it is the only place a TLS session can be
+// reported at all. Windows has no socket-level TLS ioctl - no SIO_TLS_INFO
+// exists in the SDK, and TCP_INFO_v0 carries no TLS field - so the handshake
+// bytes are the only source, and they are readable only for a connection the
+// user chose to capture. The `tls` column therefore stays unpopulated; see the
+// TlsInfo comment in Connection.h.
+std::string TlsCaptureLines(const ReasmResult& toServer,
+                            const ReasmResult& toClient,
+                            const std::wstring& dir1Label,
+                            const std::wstring& dir2Label);
 
 }  // namespace wintcp

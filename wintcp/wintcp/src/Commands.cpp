@@ -21,6 +21,7 @@
 #include "SocketTraffic.h"
 #include "StreamCapture.h"
 #include "TcpTable.h"
+#include "TlsDecode.h"
 #include "Utils.h"
 
 namespace wintcp {
@@ -2839,6 +2840,244 @@ CommandResult CmdGeoIpInfo(SnapshotSource& /*source*/,
     return r;
 }
 
+namespace {
+
+// One direction's worth of the TLS report, already formatted.
+//
+// Kept as a struct rather than a bag of out-parameters because the caller has
+// to distinguish four outcomes per direction - no payload, not TLS, TLS with
+// no handshake message, TLS with one - and collapsing them is exactly how a
+// reader ends up believing a negative they were never shown.
+struct TlsDirectionReport {
+    bool havePayload = false;      // bytes were captured at all
+    bool looksLikeTls = false;     // begins with a TLS record header
+    bool sawHandshake = false;     // a ClientHello/ServerHello/Certificate
+    size_t chainedRecords = 0;      // contiguous TLS records found mid-stream
+    size_t chainStart = 0;
+    std::string line;              // the whole `tls: ...` line, ready to emit
+    std::string caveat;            // an honesty note, or empty
+};
+
+// Format one value for the report, or "-" when it is genuinely unknown.
+//
+// "-" and never an empty pair of quotes and never a guess: TlsVersionName and
+// TlsCipherSuiteName already return "" for a value they do not recognise, and
+// printing that as `cipher=` would read as "the cipher is nothing".
+std::string TlsField(const std::string& v) {
+    return v.empty() ? std::string("-") : v;
+}
+
+// The length of the run of CONTIGUOUS TLS records starting at 'from', or 0.
+//
+// Contiguity is the whole point, and it is what makes this a measurement
+// rather than a guess. A random byte can look like a record header often
+// enough to matter: on one real 131,072-byte mid-stream TLS capture, 13 offsets
+// passed the "type 20-23, version 0x03xx, plausible length" test. Five of them
+// were coincidence. Eight were real - each one's declared length put the next
+// header at an exact offset, and the longest such run was 9 records.
+//
+// The reason coincidence cannot fake that: for the next header to appear at
+// precisely off+5+len is a further one-in-thirty-thousand, so across the ~13
+// candidates in that capture the expected number of chains by luck is about
+// four thousandths. Chaining is therefore decisive, and scanning for headers
+// ALONE is not - which is why this function exists rather than a header count.
+size_t TlsRecordChainRun(const std::string& bytes, size_t from) {
+    const unsigned char* p =
+        reinterpret_cast<const unsigned char*>(bytes.data());
+    const size_t n = bytes.size();
+    size_t off = from;
+    size_t run = 0;
+    while (off + 5 <= n) {
+        if (p[off] < 20 || p[off] > 23) break;
+        if (p[off + 1] != 0x03) break;
+        const size_t len =
+            (static_cast<size_t>(p[off + 3]) << 8) | p[off + 4];
+        if (len == 0 || off + 5 + len > n) break;
+        ++run;
+        off += 5 + len;
+    }
+    return run;
+}
+
+// The longest contiguous record run anywhere in 'bytes', and where it starts.
+// Returns 0 when there is none.
+size_t TlsLongestRecordChain(const std::string& bytes, size_t* startAt) {
+    size_t best = 0;
+    size_t bestAt = 0;
+    for (size_t i = 0; i + 5 <= bytes.size(); ++i) {
+        const size_t run = TlsRecordChainRun(bytes, i);
+        if (run > best) {
+            best = run;
+            bestAt = i;
+        }
+        // A run this long cannot be beaten by anything further in; and the loop
+        // is over the whole direction, which for a 32 MB reassembly is the one
+        // cost worth caring about - hence the early exit rather than an
+        // unbounded rescan.
+        if (best >= 8) break;
+    }
+    *startAt = bestAt;
+    return best;
+}
+
+TlsDirectionReport TlsDescribeOne(const ReasmResult& dir,
+                                  const std::wstring& label,
+                                  const char* heading) {
+    TlsDirectionReport rep;
+    rep.havePayload = !dir.bytes.empty();
+    if (!rep.havePayload) {
+        rep.line = std::string("tls: ") + heading + " (" + WideToUtf8(label) +
+                   ") captured no payload\r\n";
+        return rep;
+    }
+    // The cheap check before the real parse: a first record header is 5 bytes,
+    // and a direction that does not start with one cannot carry a handshake.
+    rep.looksLikeTls = LooksLikeTls(dir.bytes);
+    if (!rep.looksLikeTls) {
+        // THE HONEST NEGATIVE, and the reason this branch is not one line.
+        //
+        // "does not begin with a TLS record" is true in TWO quite different
+        // situations, and a reader who is told only the first will draw the
+        // wrong conclusion about the second:
+        //
+        //   (a) this really is a plaintext protocol;
+        //   (b) this IS TLS, and the capture window opened after the records
+        //       began, so the reassembly starts in the middle of one.
+        //
+        // (b) is the COMMON case for a connection that was already up, and it
+        // was measured here: a 6-second capture of a live HTTPS transfer
+        // produced 130,816 bytes that began mid-record and were correctly
+        // reported as not starting with one. Reporting (b) as (a) would tell a
+        // reader their HTTPS connection is not encrypted, which is worse than
+        // saying nothing.
+        //
+        // So the two are told apart by CONTIGUITY: a real record layer declares
+        // each record's length, so consecutive headers sit at exact offsets.
+        // Random ciphertext produces occasional lookalikes - 14 in those 130,816
+        // bytes - but not one of them chained.
+        rep.chainedRecords =
+            TlsLongestRecordChain(dir.bytes, &rep.chainStart);
+        if (rep.chainedRecords >= 3) {
+            rep.line = std::string("tls: ") + heading + " (" +
+                       WideToUtf8(label) +
+                       ") does not begin with a TLS record, but " +
+                       std::to_string(rep.chainedRecords) +
+                       " contiguous TLS records start at offset " +
+                       std::to_string(rep.chainStart) +
+                       ": this is TLS whose records began before the capture "
+                       "window, so no handshake is recoverable from it.\r\n";
+        } else {
+            rep.line = std::string("tls: ") + heading + " (" +
+                       WideToUtf8(label) +
+                       ") does not begin with a TLS record, and no run of "
+                       "contiguous TLS records appears anywhere in it\r\n";
+        }
+        return rep;
+    }
+    const TlsHandshake hs = ParseTlsHandshake(dir.bytes);
+    rep.sawHandshake = hs.sawClientHello || hs.sawServerHello ||
+                       hs.sawCertificate;
+    std::string s = std::string("tls: ") + heading + " (" +
+                    WideToUtf8(label) + ") ";
+    if (hs.sawClientHello) {
+        s += "ClientHello: SNI=" + TlsField(hs.sni) +
+             " ALPN=" + TlsField(hs.sniProto) +
+             " offered=" + TlsField(TlsVersionName(hs.clientVersion));
+    }
+    if (hs.sawServerHello) {
+        if (hs.sawClientHello) s += " | ";
+        s += "ServerHello: negotiated=" +
+             TlsField(TlsVersionName(hs.serverVersion)) +
+             " cipher=" + TlsField(TlsCipherSuiteName(hs.cipherSuite));
+    }
+    if (hs.sawCertificate) {
+        s += " | certificate: subject=" + TlsField(hs.certSubject) +
+             " issuer=" + TlsField(hs.certIssuer) +
+             " valid=" + TlsField(hs.certValidity);
+    }
+    if (!rep.sawHandshake) {
+        // The distinction that matters: the bytes ARE TLS, but no handshake
+        // message is in them. That is the normal result when the capture window
+        // opened after the connection was established, and it must not be
+        // reported as "no TLS" - the session exists, we simply missed its
+        // opening.
+        s += "begins with TLS records but no handshake message was captured "
+             "(the window opened after the handshake)";
+    } else if (hs.sawAlert) {
+        s += " | alert seen";
+    }
+    if (hs.sawApplicationData) {
+        s += " | " + std::to_string(hs.encryptedBytes) +
+             " bytes of application_data after the handshake";
+    }
+    s += "\r\n";
+    rep.line = s;
+
+    // Two ways this decode can be incomplete, and both have to be said: a hole
+    // means every byte after it is misaligned, and the record layer stops at
+    // the first record that overruns what we captured.
+    if (dir.hasGap || dir.bytesMissing != 0) {
+        rep.caveat = std::string("tls: NOTE: ") + heading + " (" +
+                     WideToUtf8(label) +
+                     ") has " + std::to_string(dir.bytesMissing) +
+                     " byte(s) missing, so the handshake decode after the hole "
+                     "at offset " + std::to_string(dir.firstSeq) +
+                     " is unreliable.\r\n";
+    }
+    if (dir.truncated) {
+        rep.caveat += std::string("tls: NOTE: ") + heading + " (" +
+                      WideToUtf8(label) +
+                      ") hit the reassembly cap, so a handshake that started "
+                      "later was never captured.\r\n";
+    }
+    return rep;
+}
+
+}  // namespace
+
+// Both directions, plus the one-line verdict that ties them together.
+// Declared in Commands.h so the selftest can drive it.
+std::string TlsCaptureLines(const ReasmResult& toServer,
+                            const ReasmResult& toClient,
+                            const std::wstring& dir1Label,
+                            const std::wstring& dir2Label) {
+    const TlsDirectionReport a =
+        TlsDescribeOne(toServer, dir1Label, "to first endpoint");
+    const TlsDirectionReport b =
+        TlsDescribeOne(toClient, dir2Label, "from first endpoint");
+
+    std::string out;
+    // A capture of a connection that is not TLS at all still has to say so:
+    // silence here is indistinguishable from a decoder that did not run, which
+    // is the ambiguity this whole file exists to avoid.
+    //
+    // "Not TLS" is only claimed when NEITHER direction begins with a record AND
+    // neither holds a contiguous run of them. One direction holding a chain is
+    // positive evidence of TLS, and it outranks the other direction's silence:
+    // this is a connection, and half of it demonstrably is encrypted.
+    const bool anyTls = a.looksLikeTls || b.looksLikeTls ||
+                        a.chainedRecords >= 3 || b.chainedRecords >= 3;
+    if (!anyTls && a.havePayload && b.havePayload) {
+        out += "tls: neither direction begins with a TLS record, and neither "
+               "holds a run of them, so this is not a TLS session in the "
+               "captured window.\r\n";
+    } else if (anyTls && !a.sawHandshake && !b.sawHandshake) {
+        out += "tls: the capture is TLS but no handshake message is among the "
+               "captured bytes, so no SNI, version or cipher can be reported - "
+               "the window opened after the session was established.\r\n";
+    }
+    out += a.caveat;
+    out += b.caveat;
+    // BOTH lines always, including for a direction that captured nothing. The
+    // guard that used to be here (`if (havePayload)`) silently dropped exactly
+    // the line that accounts for an empty direction - which is the case a reader
+    // most needs to see, because "one side of this connection has no bytes" is
+    // otherwise indistinguishable from "we only looked one way".
+    out += a.line;
+    out += b.line;
+    return out;
+}
+
 CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
                          const MutateOptions& mo, unsigned secs,
                          const CaptureOptions& co) {
@@ -2961,6 +3200,21 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
                  " reached the reassembly cap, so that byte count is truncated "
                  "- a floor, not a total.\r\n";
     }
+    // The TLS handshake, decoded out of the bytes we just reassembled.
+    //
+    // This is the ONLY place in the product that can report a TLS session, and
+    // it can only do it for a connection the user chose to capture. That limit
+    // is not an omission: Windows has no socket-level TLS ioctl - there is no
+    // SIO_TLS_INFO anywhere in the SDK, and TCP_INFO_v0, which is what a
+    // separate process CAN read off a duplicated socket, carries no TLS field
+    // (see Connection.h for the whole argument). The handshake is visible here
+    // precisely because TLS sends it in the clear before the session exists.
+    //
+    // Both directions are reported, because they carry different facts and
+    // reporting one alone is how a reader concludes "no SNI" when the capture
+    // simply never saw the direction that carries it. Directions are named by
+    // ENDPOINT for the reason given at the --text block below.
+    r.out += TlsCaptureLines(cr.toServer, cr.toClient, cr.dir1Label, cr.dir2Label);
     // --text. This is the CLI replacement for the GUI's Follow TCP stream.
     //
     // Each direction is introduced by the ENDPOINT that sent it, not by

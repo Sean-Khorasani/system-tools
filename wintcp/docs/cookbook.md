@@ -699,6 +699,19 @@ packets=<n> toServer=<n> toClient=<n> blocks=<n>
 
 `toServer` and `toClient` are the reassembly result in each direction; `blocks` is the number of TCP segments parsed.
 
+Every run also prints `tls:` lines, and that is the one place WinTCP can report a TLS session at all: Windows has no socket-level TLS ioctl, so the only source is the handshake, and the handshake is readable precisely because TLS sends it in the clear. Here is a real capture of an established HTTPS connection on one Windows 11 host:
+
+```text
+packets=1918 toServer=0 toClient=346685 blocks=4345
+tls: the capture is TLS but no handshake message is among the captured bytes, so no SNI, version or cipher can be reported - the window opened after the session was established.
+tls: to first endpoint ([2604:3d08:5d8a:f000:cffe:9c3c:8201:712b]:36677) captured no payload
+tls: from first endpoint ([2606:4700::6810:7c60]:443) begins with TLS records but no handshake message was captured (the window opened after the handshake) | 346230 bytes of application_data after the handshake
+```
+
+Read that as a limitation of *where the window fell*, not as a verdict on the connection. `pktmon` records only what happens after the filter is armed, so on a connection that was already up the handshake was never captured and no SNI exists to report. **To get an SNI you must capture a connection that is being established** - which is why this recipe starts with a `list`, so you can catch a row while it is still young. The four possible reports, and what each one is allowed to claim, are tabulated in the [CLI reference](cli.md#reading-the-tls-handshake).
+
+Note the `toServer=0` in that output: only the response direction carried bytes inside the window. A direction that captured nothing is named rather than omitted, because "one side of this connection has no bytes" would otherwise be indistinguishable from "we only looked one way".
+
 Two things stop it before any of that, and both exit 1 with the reason rather than an empty table. They are worth knowing because the selector in the first line is exactly how you meet them:
 
 - **Loopback.** `pktmon` does not capture `127.0.0.1` or `::1` at all, so a selector that resolves to a loopback connection reports *the capture produced no packets* and then names loopback as the cause. This is the trap recipe 24 warns about: `exclude:127.` drops `127.` but leaves `::1` rows in the list, and a `::1` row always fails here.

@@ -223,6 +223,7 @@ Every recipe in the cookbook answers a question that cannot be answered with one
 | RTT, congestion window and retransmits per connection | Not shown by `netstat` or `Get-NetTCPConnection`. | `list --traffic --sort rtt --desc --columns process,remote,rport,rtt,minrtt,cwnd,retrans` |
 | Capture one process's connection | `pktmon` filters by address and port, not by process. | `capture --select … --secs 8 --yes` |
 | Read one TCP stream's bytes | Nothing in the built-in tools reassembles a stream. | `capture --select . --secs 8 --text --yes` |
+| Read a connection's TLS handshake | `netstat` shows nothing about TLS; `pktmon` shows bytes, not meaning. | `capture --select . --secs 8 --yes`, and read the `tls:` lines |
 | Keep a capture to open in Wireshark | Same, plus a manual conversion step. | `capture --select . --secs 8 --out c:\tmp\s.pcapng --yes` |
 
 ## Documentation
