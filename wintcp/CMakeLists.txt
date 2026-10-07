@@ -279,6 +279,12 @@ target_link_libraries(wintcp-tests PRIVATE
     iphlpapi ws2_32 comctl32 psapi user32 gdi32 comdlg32 shell32 advapi32
     crypt32 wintrust pdh ole32 oleaut32 delayimp)
 target_link_options(wintcp-tests PRIVATE
+    # /guard:cf (Control Flow Guard): this target did NOT have it while the
+    # product target above did, so the path that gates every change was the
+    # uninstrumented one - the same inversion build.bat had. The test binary
+    # links the same product sources, so a control-flow-validity fault in
+    # them is exactly what the suite should be catching.
+    "/guard:cf"
     # Same reason as the product target above: wintcp.rc already embeds
     # RT_MANIFEST id 1, and letting the linker generate a second one gives
     # CVT1100 followed by LNK1123. Not optional, and the failure looks nothing

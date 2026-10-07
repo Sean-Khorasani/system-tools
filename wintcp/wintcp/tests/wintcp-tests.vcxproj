@@ -227,6 +227,14 @@
   <ItemDefinitionGroup>
     <Link>
       <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;shell32.lib;iphlpapi.lib;ws2_32.lib;comctl32.lib;psapi.lib;advapi32.lib;crypt32.lib;wintrust.lib;pdh.lib;ole32.lib;oleaut32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- CFG was missing here while wintcp.vcxproj has it in all four
+           configurations. This file has an unconditioned group that
+           applies to every configuration, so one entry is both correct
+           and the shape this project already uses for a shared property.
+           The test binary links the same product sources as the GUI, so a
+           control-flow-validity fault in them is exactly what the suite
+           should be catching. -->
+      <EnableControlFlowGuard>true</EnableControlFlowGuard>
       <!-- Bare DLL names, NOT /DELAYLOAD: flags. MSBuild's DelayLoadDLLs
            property takes the names; the flag form is accepted and silently
            ignored, with no warning, so the path simply does not defer

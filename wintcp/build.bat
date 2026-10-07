@@ -64,6 +64,12 @@ REM No firewall import library appears below: BlockConn resolves
 REM CLSID_NetFwPolicy2 with __uuidof(NetFwPolicy2), so there is no symbol to
 REM import. "hnetfw.lib" is the historical name and does not exist in any
 REM current Windows SDK, so linking it fails with LNK1104.
+REM /guard:cf (Control Flow Guard): was MISSING here and present in CMake
+REM and both .vcxproj files, so the PRIMARY build was the weakest of the four
+REM paths - the one that gates every change was the one not instrumented.
+REM Added to both the product and the test cl lines. It is a compile AND a
+REM link flag, and this script drives cl and link in one command, so one
+REM occurrence per line covers both.
 REM /SUBSYSTEM:CONSOLE, not WINDOWS: an interactive cmd.exe waits for a
 REM console child and prints its next prompt only when the command has
 REM finished, but it does NOT wait for a GUI-subsystem exe (batch scripts
@@ -71,7 +77,7 @@ REM DO wait - which is why the gates never caught this). With WINDOWS the
 REM prompt came back at once and the rows landed on top of it. main.cpp's
 REM wmain gives the GUI path its console back (hide + FreeConsole) so a
 REM double-click still opens no stray console window.
-cl /nologo /std:c++17 /EHsc /W4 /WX /permissive- /Zc:__cplusplus /utf-8 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /DWIN32_LEAN_AND_MEAN /O2 /MT /Gy /GL /GF /Os ^
+cl /nologo /std:c++17 /EHsc /W4 /WX /permissive- /Zc:__cplusplus /utf-8 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /DWIN32_LEAN_AND_MEAN /O2 /MT /Gy /GL /GF /Os /guard:cf ^
    /Fo"build/" /Fe"build\wintcp.exe" ^
    "wintcp\src\main.cpp" "wintcp\src\MainWindow.cpp" "wintcp\src\TcpTable.cpp" "wintcp\src\ProcessInfo.cpp" "wintcp\src\Utils.cpp" "wintcp\src\ConnectionStore.cpp" "wintcp\src\RefreshEngine.cpp" "wintcp\src\Snapshot.cpp" "wintcp\src\ViewState.cpp" "wintcp\src\SysStats.cpp" "wintcp\src\Commands.cpp" "wintcp\src\CliCommands.cpp" "wintcp\src\DnsResolver.cpp" "wintcp\src\Settings.cpp" "wintcp\src\DetailsDialog.cpp" "wintcp\src\DetailModel.cpp" "wintcp\src\Pcapng.cpp" "wintcp\src\TcpReasm.cpp" "wintcp\src\StreamCapture.cpp" "wintcp\src\TlsDecode.cpp" "wintcp\src\Elevate.cpp" "wintcp\src\Alerts.cpp" "wintcp\src\TypeToJump.cpp" "wintcp\src\Grouping.cpp" "wintcp\src\Freeze.cpp" "wintcp\src\BuildInfo.cpp" "wintcp\src\PromptDialog.cpp" "wintcp\src\ChartExport.cpp" "wintcp\src\ChangeLogWindow.cpp" "wintcp\src\Presets.cpp" "wintcp\src\Bookmarks.cpp" "wintcp\src\GeoIp.cpp" "wintcp\src\BlockConn.cpp" "wintcp\src\Cli.cpp" "wintcp\src\EtwTraffic.cpp" "wintcp\src\SocketTraffic.cpp" "wintcp\src\ProcStats.cpp" "wintcp\src\ChartsWindow.cpp" "wintcp\src\CrashDump.cpp" "wintcp\src\WinCaps.cpp" ^
    "build\wintcp.res" ^
@@ -113,7 +119,7 @@ REM keyboard shortcuts. Without it the window still constructs, the icons fall
 REM back to IDI_APPLICATION and hAccel goes null - so the GUI checks would pass
 REM while driving a subtly different program than the one that ships.
 if not exist build\tests md build\tests
-cl /nologo /std:c++17 /EHsc /W4 /WX /permissive- /Zc:__cplusplus /utf-8 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /DWIN32_LEAN_AND_MEAN /O2 /MT /Gy /GL /GF /Os /I wintcp\src ^
+cl /nologo /std:c++17 /EHsc /W4 /WX /permissive- /Zc:__cplusplus /utf-8 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /DWIN32_LEAN_AND_MEAN /O2 /MT /Gy /GL /GF /Os /guard:cf /I wintcp\src ^
    /Fo"build/tests/" /Fe"build\tests\wintcp-tests.exe" ^
    "wintcp\tests\TestMain.cpp" "wintcp\tests\Bench.cpp" "wintcp\tests\UiHarness.cpp" ^
    "wintcp\src\MainWindow.cpp" "wintcp\src\TcpTable.cpp" "wintcp\src\ProcessInfo.cpp" "wintcp\src\Utils.cpp" "wintcp\src\ConnectionStore.cpp" "wintcp\src\RefreshEngine.cpp" "wintcp\src\Snapshot.cpp" "wintcp\src\ViewState.cpp" "wintcp\src\SysStats.cpp" "wintcp\src\Commands.cpp" "wintcp\src\CliCommands.cpp" "wintcp\src\DnsResolver.cpp" "wintcp\src\Settings.cpp" "wintcp\src\DetailsDialog.cpp" "wintcp\src\DetailModel.cpp" "wintcp\src\Pcapng.cpp" "wintcp\src\TcpReasm.cpp" "wintcp\src\StreamCapture.cpp" "wintcp\src\TlsDecode.cpp" "wintcp\src\Elevate.cpp" "wintcp\src\Alerts.cpp" "wintcp\src\TypeToJump.cpp" "wintcp\src\Grouping.cpp" "wintcp\src\Freeze.cpp" "wintcp\src\BuildInfo.cpp" "wintcp\src\PromptDialog.cpp" "wintcp\src\ChartExport.cpp" "wintcp\src\ChangeLogWindow.cpp" "wintcp\src\Presets.cpp" "wintcp\src\Bookmarks.cpp" "wintcp\src\GeoIp.cpp" "wintcp\src\BlockConn.cpp" "wintcp\src\Cli.cpp" "wintcp\src\EtwTraffic.cpp" "wintcp\src\SocketTraffic.cpp" "wintcp\src\ProcStats.cpp" "wintcp\src\ChartsWindow.cpp" "wintcp\src\CrashDump.cpp" "wintcp\src\WinCaps.cpp" ^

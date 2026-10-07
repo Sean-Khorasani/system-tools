@@ -47,7 +47,28 @@ All three produce the same two binaries: `wintcp.exe` and `build\tests\wintcp-te
 
 Do not weaken any of these to make a build pass.
 
-`/guard:cf` (Control Flow Guard) is enabled on the **CMake** path (`/guard:cf`) and the **Visual Studio** path (`<EnableControlFlowGuard>true</EnableControlFlowGuard>` in all four configurations). It is not passed by `build.bat`.
+`/guard:cf` (Control Flow Guard) is now enabled on **all four** build paths:
+`build.bat` (`/guard:cf` on both its `cl` lines - it drives compile and link in
+one command, so one occurrence covers both), **CMake** (`/guard:cf` on both the
+`wintcp` and `wintcp-tests` targets), **Visual Studio** for the product
+(`<EnableControlFlowGuard>true</EnableControlFlowGuard>` in all four
+configurations) and **Visual Studio** for the tests (the same property in that
+project's unconditioned `ItemDefinitionGroup`, which covers every configuration).
+
+**This was an inversion, and the direction of it was the bug.** `build.bat` is the
+primary path - it is what gates every change - and it was the one path with no CFG,
+while the two secondary paths had it. The same inversion existed twice more: the
+CMake `wintcp-tests` target and `wintcp-tests.vcxproj` both lacked it while their
+product counterparts had it. So all three gaps had the same shape: the thing that
+gates every change was the thing not instrumented. A gap is worth closing by name;
+an inversion is worth closing by shape, because it will recur.
+
+Verified rather than assumed: `dumpbin /headers` reports **Control Flow Guard** in
+the `DllCharacteristics` of both `build\wintcp.exe` and `build\tests\wintcp-tests.exe`,
+and all four gates pass with it enabled. That second part matters more than it looks:
+CFG is a *runtime* change as well as a link-time one, and this codebase resolves
+function pointers through `GetProcAddress` and delay-loads six DLLs, which is
+exactly the shape that CFG can fault on. It does not, here.
 
 `/analyze` is deliberately *not* part of any default build - it is far too slow to gate every compile. Run it ad hoc on the translation unit you are changing.
 
