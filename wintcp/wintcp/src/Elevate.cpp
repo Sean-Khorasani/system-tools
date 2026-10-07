@@ -8,6 +8,8 @@
 #include <cstring>
 #include <vector>
 
+#include "Utils.h"   // C10: bufferWasTooSmall - the truncation check
+
 namespace wintcp {
 namespace {
 
@@ -171,11 +173,20 @@ bool Reelevate(const std::wstring& featureName) {
     // A quoted path is required if the image path contains spaces, which it
     // normally does. Quote it unconditionally - GetCommandLine returns the
     // raw string, and a bare path with spaces would be split into arguments.
-    wchar_t exePath[MAX_PATH] = {0};
-    if (::GetModuleFileNameW(nullptr, exePath, MAX_PATH) == 0) return false;
+    //
+    // C10. `== 0` tested for failure; truncation is reported as the CAPACITY, not
+    // as 0 (measured: an 8-char buffer for this exe returned 8). So a path
+    // longer than MAX_PATH would have been SILENTLY TRUNCATED, and that
+    // truncated string is what gets quoted into the command line below - so
+    // elevation would have launched the wrong file, or failed with an error
+    // that points nowhere near the real cause. Refusing is the right answer: the
+    // caller reports the refusal rather than elevating to a partial path.
+    wchar_t exePath[MAX_PATH * 2] = {0};
+    const DWORD exeLen = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH * 2);
+    if (bufferWasTooSmall(exeLen, MAX_PATH * 2)) return false;
 
     std::wstring newCmd;
-    newCmd.reserve(cmd.size() + MAX_PATH + 64);
+    newCmd.reserve(cmd.size() + MAX_PATH * 2 + 64);
     newCmd += L"\"";
     newCmd += exePath;
     newCmd += L"\"";
@@ -194,8 +205,13 @@ bool Reelevate(const std::wstring& featureName) {
     newCmd += kElevatedMarker;
     newCmd += L"\"";
 
-    wchar_t dir[MAX_PATH] = {0};
-    if (::GetCurrentDirectoryW(MAX_PATH, dir) == 0) dir[0] = L'\0';
+    // C10: same defect as the image path above. GetCurrentDirectoryW reports a
+    // too-small buffer as the REQUIRED size (measured: 14 for an 8-char
+    // buffer), so `== 0` passed and 'dir' was left empty - and an empty lpCurrentDirectory
+    // tells the elevated child to start wherever the shell feels like.
+    wchar_t dir[MAX_PATH * 2] = {0};
+    const DWORD dirLen = ::GetCurrentDirectoryW(MAX_PATH * 2, dir);
+    if (bufferWasTooSmall(dirLen, MAX_PATH * 2)) dir[0] = L'\0';
 
     // "runas" is what makes UAC prompt. Returns FALSE with
     // ERROR_CANCELLED when the user clicks No - which must NOT be treated as

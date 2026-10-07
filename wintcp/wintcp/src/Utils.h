@@ -169,4 +169,33 @@ bool HasLowerSubstring(const std::wstring& haystackLower,
 // the system DPI (used before any window exists). Never returns 0.
 UINT QueryDpiForWindow(HWND hwnd);
 
+// ---- C10: did a Win32 string read fit? ---------------------------------
+//
+// A family of Win32 calls fills a caller-supplied buffer and signals trouble in
+// the RETURN VALUE, never through GetLastError:
+//
+//   0            the call failed
+//   >= capacity  the buffer was too small, and 'buffer' does NOT hold the value
+//
+// `bufferWasTooSmall` exists because `rc == 0` is the test four call sites were
+// using, and it is the wrong one: 0 means failure, and truncation is reported as
+// a size. Measured, because the distinction decides whether this helper works:
+//
+//   GetEnvironmentVariableW  value 15 chars, cap 16 -> rc=15   fits
+//                           value 16 chars, cap 16 -> rc=17   required size
+//   GetCurrentDirectoryW    fits -> rc = length;  too small -> rc = required
+//   GetModuleFileNameW      too small -> rc = capacity exactly
+//   GetTempPathW            too small -> rc = required size
+//
+// So `>=` is right and `== cap` is not: three of the four report a size LARGER
+// than the capacity, and only GetModuleFileNameW reports exactly the capacity.
+// Using `== cap` would therefore miss the other three.
+//
+// The measured 15-into-16 row is the one that matters for correctness: a value
+// that exactly fills the buffer is NOT flagged, so there is no off-by-one and
+// no false refusal at the boundary.
+inline bool bufferWasTooSmall(DWORD rc, size_t capacity) {
+    return rc == 0 || rc >= capacity;
+}
+
 }  // namespace wintcp

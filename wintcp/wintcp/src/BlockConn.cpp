@@ -993,8 +993,23 @@ bool IsConnectionBlocked(const BlockRequest& req) {
 // without a ledger a new run would have no way to know what it left behind.
 
 std::wstring LedgerKey() {
-    wchar_t path[MAX_PATH] = {0};
-    if (::GetEnvironmentVariableW(L"APPDATA", path, MAX_PATH) == 0) {
+    // C10. Two changes, both needed.
+    //
+    // The buffer is grown to MAX_PATH * 2, which is what CrashDump.cpp already
+    // uses for the same variable - a deep %APPDATA% is the only way to reach
+    // MAX_PATH here, and growing is cheaper than handling it.
+    //
+    // And the return value is checked PROPERLY. `== 0` tested for failure, but
+    // GetEnvironmentVariableW reports a too-small buffer as the REQUIRED size
+    // and leaves the buffer EMPTY (measured: a 400-char variable into an 8-char
+    // buffer returns 401 with the buffer untouched). So the old check passed,
+    // std::wstring(path) was "", and the ledger path became L"\\WinTCP\\blocked.txt"
+    // - RELATIVE, resolved against whatever directory the user ran from. Rules
+    // the user had every reason to believe were persisted would quietly go to
+    // the wrong place. See bufferWasTooSmall in Utils.h for the measurements.
+    wchar_t path[MAX_PATH * 2] = {0};
+    const DWORD n = ::GetEnvironmentVariableW(L"APPDATA", path, MAX_PATH * 2);
+    if (bufferWasTooSmall(n, MAX_PATH * 2)) {
         return std::wstring();
     }
     return std::wstring(path) + L"\\WinTCP\\blocked.txt";

@@ -77,15 +77,26 @@ int RunTool(const std::wstring& exe, const std::wstring& args) {
 std::wstring PktmonPath() {
     wchar_t buf[MAX_PATH] = {0};
     const DWORD n = ::GetSystemDirectoryW(buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return L"pktmon.exe";
+    // This was the house model C10 points at, and it was already right. It now
+    // names the shared rule so the two forms cannot drift apart again.
+    if (bufferWasTooSmall(n, MAX_PATH)) return L"pktmon.exe";
     return std::wstring(buf, n) + L"\\pktmon.exe";
 }
 
 // A temp path in the user's temp dir, created with a distinctive name so a
 // stray file is recognisable. Returns empty on failure.
+//
+// C10. The worst of the four by consequence, because the result is a WRITE
+// TARGET. The old test was `== 0`, which detects failure and nothing else.
+// GetTempPathW reports a too-small buffer as the REQUIRED size (measured: 35
+// into an 8-char buffer), so the check passed with dir left empty and the
+// returned path was a bare relative filename - meaning a capture would have
+// been written into whatever the current directory happened to be, with
+// nothing said about it.
 std::wstring MakeTempPath(const wchar_t* ext) {
     wchar_t dir[MAX_PATH] = {0};
-    if (::GetTempPathW(MAX_PATH, dir) == 0) return std::wstring();
+    const DWORD n = ::GetTempPathW(MAX_PATH, dir);
+    if (bufferWasTooSmall(n, MAX_PATH)) return std::wstring();
     wchar_t name[kTempNameChars] = {0};
     ::swprintf_s(name, L"wintcp-stream-%lu-%lu%s",
                  ::GetCurrentProcessId(), ::GetTickCount(), ext);

@@ -3972,11 +3972,29 @@ TestResult RunSelfTest() {
     //      an unwind alike, and the abandon path calls release() explicitly.
     //
     //      WHAT THIS CHECKS. That the free still happens, by measuring the
-    //      process heap across many real passes. It cannot check the unwind
-    //      branch: forcing an exception inside Sample() between the allocation
-    //      and the free would need an injection point in production code, which
-    //      would be worse than the gap. So the destructor rule itself is
-    //      UNCOVERED and its comment says so.
+    //      process heap across a short run of real passes. It cannot check the
+    //      unwind branch: forcing an exception inside Sample() between the
+    //      allocation and the free would need an injection point in production
+    //      code, which would be worse than the gap. So the destructor rule
+    //      itself is UNCOVERED and its comment says so.
+    //
+    //      ONLY THREE PASSES. The first version used 40, which is not wrong but
+    //      is more than the measurement needs: a leaked scratch is about 9.2 MB,
+    //      so three passes put the real defect at 27.7 MB against a 1 MB bound,
+    //      and the whole unit suite still runs in about a second.
+    //
+    //      A HARNESS TRAP WORTH RECORDING, because it cost most of the time
+    //      spent on this check. Running the suite through PowerShell's
+    //      Start-Job made it appear to hang - reproducibly, past 420 s - and
+    //      bisecting the block then "proved" HeapCompact was responsible. Both
+    //      were wrong. Start-Job launches a fresh PowerShell that does NOT
+    //      inherit this shell's elevated token, and a non-elevated
+    //      SocketTrafficSampler cannot duplicate other processes' handles, so
+    //      Sample() blocked. Started with Start-Process instead, the very same
+    //      binaries finish in 1.1 s. The lesson is not about HeapCompact: a
+    //      harness that changes the token under the code under test will invent
+    //      hangs that do not exist, and bisecting against one will confidently
+    //      point at innocent code.
     //
     //      The measurement is a STEADY-STATE one, and that detail matters: the
     //      first Sample() legitimately grows the sampler, because it builds the
@@ -4012,25 +4030,29 @@ TestResult RunSelfTest() {
         // pass' worth of scratch that is then freed must be out of the way
         // before the baseline is taken.
         (void)leak.Sample(pids);
-        ::HeapCompact(::GetProcessHeap(), 0);
         const SIZE_T before = heapNow();
 
-        const int kPasses = 40;
+        const int kPasses = 3;
         for (int i = 0; i < kPasses; ++i) {
             (void)leak.Sample(pids);
         }
-        ::HeapCompact(::GetProcessHeap(), 0);
         const SIZE_T after = heapNow();
 
         const long long grew =
             static_cast<long long>(after) - static_cast<long long>(before);
-        // The bound is set from a MEASURED leak, not guessed. Deleting the free
-        // in ScratchOwner and re-running this exact check grows the heap by
-        // 379,092,992 bytes over these same 40 passes - about 9.5 MB per pass,
-        // which is the scratch's handle-table read buffer and its target queue.
-        // The allowance is 320 KB, so the check has three orders of magnitude of
-        // room below the real failure and still measures 0 on a healthy run.
-        const long long kAllowance = 8LL * 1024 * kPasses;
+        // NO HeapCompact, and its absence is measured rather than assumed.
+        // It looked necessary - freed memory stays COMMITTED, so the naive
+        // reading is that without compacting the free cannot show up at all.
+        // That is wrong: the next pass REUSES the block the previous one
+        // freed, so committed bytes barely move. Measured over these same three
+        // passes with compaction removed, in a standalone driver: healthy 0
+        // bytes, and 27,746,304 bytes when the free is deleted. Discrimination
+        // is unaffected, so the compaction is not worth its cost.
+        //
+        // 1 MB: healthy measures 0-48 KB across these passes, and the real
+        // defect measures 27.7 MB, so the bound sits more than 20x above the
+        // noise and more than 27x below the failure.
+        const long long kAllowance = 1024LL * 1024;
         Check(r, "c9.traffic.scratch-is-freed-every-pass",
               before != 0 && after != 0 && grew < kAllowance,
               "grew " + std::to_string(grew) + " bytes over " +
@@ -4052,6 +4074,162 @@ TestResult RunSelfTest() {
         Check(r, "c9.traffic.healthy-passes-do-not-abandon-the-scratch",
               leak.ScanFailureCount() == 0,
               "scanFailures=" + std::to_string(leak.ScanFailureCount()));
+    }
+// 12d. C10 - the truncation rule the four path reads now share.
+    //
+    //      The defect was that `rc == 0` tests for FAILURE, and these APIs
+    //      report a too-small buffer as a SIZE. So the check passed on
+    //      truncation and the caller acted on an empty or clipped string.
+    //      bufferWasTooSmall in Utils.h is the one rule all four sites now use,
+    //      and StreamCapture.cpp's own GetSystemDirectoryW call - which was
+    //      already right - was switched onto it so the two forms cannot drift.
+    //
+    //      WHY THE RULE IS DRIVEN AGAINST THE OS RATHER THAN A TABLE. The
+    //      obvious test would assert the numbers I measured and be a test of my
+    //      own table. These instead call each real API with a deliberately tiny
+    //      buffer, so if the documented semantics ever differ from what was
+    //      measured here, the gate fails - which is the only version of this
+    //      check worth having.
+    {
+        // The truth table itself, including the boundary that decided `>=`.
+        // A value that exactly fills the buffer must NOT be flagged: measured,
+        // a 15-char value in a 16-slot buffer returns 15, and flagging that
+        // would refuse a call that succeeded.
+        Check(r, "c10.trunc.rule-flags-failure",
+              wintcp::bufferWasTooSmall(0, 260), "rc=0 cap=260");
+        Check(r, "c10.trunc.rule-accepts-an-exact-fit",
+              !wintcp::bufferWasTooSmall(259, 260), "rc=259 cap=260");
+        Check(r, "c10.trunc.rule-flags-rc-equal-to-capacity",
+              wintcp::bufferWasTooSmall(260, 260),
+              "rc=260 cap=260 (GetModuleFileNameW's signature)");
+        Check(r, "c10.trunc.rule-flags-a-required-size",
+              wintcp::bufferWasTooSmall(401, 8),
+              "rc=401 cap=8 (GetEnvironmentVariableW's signature)");
+
+        // GetEnvironmentVariableW. Both triggers: a long value, and - the
+        // realistic one for this codebase - a long APPDATA.
+        {
+            const std::wstring longValue(400, L'q');
+            ::SetEnvironmentVariableW(L"WINTCP_C10", longValue.c_str());
+            wchar_t tiny[8] = {0};
+            const DWORD rc = ::GetEnvironmentVariableW(L"WINTCP_C10", tiny, 8);
+            Check(r, "c10.trunc.env-var-truncation-is-detected",
+                  wintcp::bufferWasTooSmall(rc, 8),
+                  "rc=" + std::to_string(rc) + " cap=8");
+            // And the measured consequence of the old check: the buffer is left
+            // EMPTY, not clipped. That is what turned the ledger path relative.
+            Check(r, "c10.trunc.env-var-truncation-leaves-an-empty-buffer",
+                  tiny[0] == L'\0',
+                  "first char=" + std::to_string(static_cast<int>(tiny[0])));
+            ::SetEnvironmentVariableW(L"WINTCP_C10", nullptr);
+
+            // The same API on a value that fits, to prove the check is not simply
+            // always-true.
+            wchar_t fits[64] = {0};
+            ::SetEnvironmentVariableW(L"WINTCP_C10", L"short");
+            const DWORD okRc = ::GetEnvironmentVariableW(L"WINTCP_C10", fits, 64);
+            Check(r, "c10.trunc.env-var-that-fits-is-not-flagged",
+                  !wintcp::bufferWasTooSmall(okRc, 64) && ::wcslen(fits) == 5,
+                  "rc=" + std::to_string(okRc) + " len=" +
+                      std::to_string(::wcslen(fits)));
+            ::SetEnvironmentVariableW(L"WINTCP_C10", nullptr);
+        }
+
+        // GetModuleFileNameW - the one Elevate.cpp relies on. Truncation here is
+        // reported as EXACTLY the capacity, which is why the rule cannot be
+        // `rc == capacity`: it works for this API and silently fails for the
+        // three that report a larger required size.
+        {
+            wchar_t full[1024] = {0};
+            const DWORD fullLen = ::GetModuleFileNameW(nullptr, full, 1024);
+            Check(r, "c10.trunc.module-path-fits-in-a-large-buffer",
+                  fullLen > 0 && !wintcp::bufferWasTooSmall(fullLen, 1024) &&
+                      ::wcslen(full) == fullLen,
+                  "len=" + std::to_string(fullLen));
+            wchar_t clip[8] = {0};
+            const DWORD clipRc = ::GetModuleFileNameW(nullptr, clip, 8);
+            Check(r, "c10.trunc.module-path-truncation-is-detected",
+                  wintcp::bufferWasTooSmall(clipRc, 8),
+                  "rc=" + std::to_string(clipRc) + " cap=8");
+            // The specific claim the rule rests on: this API reports the
+            // capacity, not a larger required size.
+            Check(r, "c10.trunc.module-path-reports-capacity-not-required-size",
+                  clipRc == 8, "rc=" + std::to_string(clipRc) + " (want 8)");
+        }
+
+        // GetCurrentDirectoryW - Elevate.cpp's other read.
+        {
+            wchar_t dir[8] = {0};
+            const DWORD rc = ::GetCurrentDirectoryW(8, dir);
+            Check(r, "c10.trunc.current-directory-truncation-is-detected",
+                  wintcp::bufferWasTooSmall(rc, 8),
+                  "rc=" + std::to_string(rc) + " cap=8");
+            wchar_t room[1024] = {0};
+            const DWORD okRc = ::GetCurrentDirectoryW(1024, room);
+            Check(r, "c10.trunc.current-directory-that-fits-is-not-flagged",
+                  okRc > 0 && !wintcp::bufferWasTooSmall(okRc, 1024) &&
+                      ::wcslen(room) == okRc,
+                  "rc=" + std::to_string(okRc));
+        }
+
+        // GetTempPathW - the StreamCapture.cpp read, and the one whose answer is
+        // a WRITE TARGET: a capture path built from an empty directory is a bare
+        // relative filename, so the capture lands in whatever the current
+        // directory happens to be.
+        //
+        // Triggered with a SMALL BUFFER rather than by overriding TMP/TEMP to a
+        // long path. The override version is the more realistic trigger and it
+        // was the first thing tried - and it HANGS THE WHOLE SUITE, because
+        // TMP/TEMP are process-wide and every other test that touches a temp
+        // file then inherits a 323-character directory that does not exist. A
+        // test that destabilises every other test is worse than the gap it
+        // closes, so the same truncation is provoked the other way: the API
+        // reports the REQUIRED size either way, which is the whole claim.
+        {
+            wchar_t tiny[8] = {0};
+            const DWORD rc = ::GetTempPathW(8, tiny);
+            Check(r, "c10.trunc.temp-path-truncation-is-detected",
+                  wintcp::bufferWasTooSmall(rc, 8),
+                  "rc=" + std::to_string(rc) + " cap=8");
+            // The consequence, pinned: the buffer is left EMPTY rather than
+            // clipped, so nothing downstream can tell the difference between a
+            // temp path and no temp path at all.
+            Check(r, "c10.trunc.temp-path-truncation-leaves-an-empty-buffer",
+                  tiny[0] == L'\0',
+                  "buffer len=" +
+                      std::to_string(static_cast<unsigned>(::wcslen(tiny))));
+            // And the same call that fits is not flagged, so the check is not
+            // simply always-true on this API.
+            wchar_t room[MAX_PATH] = {0};
+            const DWORD okRc = ::GetTempPathW(MAX_PATH, room);
+            Check(r, "c10.trunc.temp-path-that-fits-is-not-flagged",
+                  okRc > 0 && !wintcp::bufferWasTooSmall(okRc, MAX_PATH) &&
+                      ::wcslen(room) == okRc,
+                  "rc=" + std::to_string(okRc));
+        }
+
+        // GetSystemDirectoryW - the house model, on the shared rule now.
+        {
+            wchar_t buf[MAX_PATH] = {0};
+            const DWORD rc = ::GetSystemDirectoryW(buf, MAX_PATH);
+            Check(r, "c10.trunc.system-directory-that-fits-is-not-flagged",
+                  rc > 0 && !wintcp::bufferWasTooSmall(rc, MAX_PATH) &&
+                      ::wcslen(buf) == rc,
+                  "rc=" + std::to_string(rc));
+            wchar_t clip[8] = {0};
+            Check(r, "c10.trunc.system-directory-truncation-is-detected",
+                  wintcp::bufferWasTooSmall(::GetSystemDirectoryW(clip, 8), 8),
+                  "cap=8");
+        }
+
+        // HONESTLY: the four call sites' own behaviour is NOT driven here.
+        // MakeTempPath is only reachable from StartCapture, which spawns
+        // pktmon; LedgerKey only from the ledger read/write, which touch the
+        // real firewall ledger. What these checks pin is the rule every one of
+        // them now consults - so a site that used `== 0` again would still be
+        // wrong, and nothing here would notice. That is the gap, and it is a
+        // deliberate one: a test hook in the capture path would be worse than
+        // the uncovered line.
     }
     // 13. New columns (duration, speed, TLS, country, bookmarks). Each one
     //     carries an arithmetic or formatting decision that the list view
