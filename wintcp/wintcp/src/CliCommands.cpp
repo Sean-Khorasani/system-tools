@@ -1503,6 +1503,18 @@ int RunCliCommand(int argc, wchar_t** argv) {
         {
             SocketTrafficSampler probe;
             s.trafficFallback = !s.elevated && probe.Supported();
+            // 9.2.4: this probe sampler never ran a pass, so it has no opinion
+            // about gaps - and reporting "0" here would claim the CLI checked
+            // and found nothing. The counters belong to the process-lifetime
+            // sampler the --traffic verbs actually use, which is a different
+            // object. A run that never asked for --traffic has no opinion, and
+            // the About block omits the line rather than printing a confident
+            // zero.
+            if (const SocketTrafficSampler* live = ActiveTrafficSampler()) {
+                s.trafficScanRan = true;
+                s.trafficTimeouts = live->TimeoutCount();
+                s.trafficScanFailures = live->ScanFailureCount();
+            }
         }
         // R7: read the OS counters, do not track them ourselves. Both calls take
         // the current process and are one syscall each - no new infrastructure,

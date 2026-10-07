@@ -828,6 +828,9 @@ SocketTrafficSampler*& TrafficSamplerSlot() {
     return s;
 }
 
+SocketTrafficSampler* ActiveTrafficSampler() {
+    return TrafficSamplerSlot();
+}
 SocketTrafficSampler& TrafficSampler() {
     SocketTrafficSampler*& s = TrafficSamplerSlot();
     if (s == nullptr) s = new SocketTrafficSampler();
@@ -895,17 +898,44 @@ std::string TrafficScanFailedNote(unsigned passes) {
            "persists the handle table is being denied.\r\n";
 }
 
-// Returns how many passes FAILED during this call - see
-// SocketTrafficSampler::ScanFailureCount(). A failed pass merges nothing, so
-// every traffic cell it would have filled stays blank, and without this return
-// the caller cannot tell that blank from "this connection moved no bytes".
+// The STALE half, which is a different problem with a different remedy - see
+// TrafficScanGaps. Kept as its own sentence rather than folded into the
+// failure note: one means "these numbers are old", the other means "these
+// numbers are not there at all", and a sentence that said both at once would
+// leave the reader unable to tell which they are looking at.
+std::string TrafficScanDroppedNote(unsigned passes) {
+    return "note: " + std::to_string(passes) +
+           " traffic scan" + (passes == 1 ? "" : "s") +
+           " abandoned because a socket's byte counters would not return, so "
+           "the traffic columns show the LAST values read rather than current "
+           "ones. Closing the owning connection clears it.\r\n";
+}
+
+// What this call could not measure. 9.2.4 widened this from a single failure
+// count to both gap kinds, because a caller that learns about one and not the
+// other still cannot answer the reader's question:
 //
-// The early return on an empty PID set reports 0, not 1: there was nothing to
-// scan, so nothing failed. Counting it would fire the diagnostic on every
-// `--select` that matched no process at all.
-unsigned JoinTrafficPids(ConnectionStore& store, const std::vector<DWORD>& pids) {
-    if (pids.empty()) return 0;
-    const unsigned before = TrafficSampler().ScanFailureCount();
+//   failures - a pass could not read the process handle table at all, so
+//              NOTHING was merged and every traffic cell is UNMEASURED.
+//   dropped  - a pass was abandoned because a worker stopped making progress,
+//              so the PREVIOUS totals were kept and they are STALE.
+//
+// Both are deltas across this call, not the sampler's lifetime totals, because
+// a one-shot `list --traffic` must report what went wrong with ITS scan.
+//
+// The early return on an empty PID set reports zeros, not a failure: there was
+// nothing to scan, so nothing failed. Counting it would fire the diagnostic on
+// every `--select` that matched no process at all.
+struct TrafficScanGaps {
+    unsigned failures = 0;
+    unsigned dropped = 0;
+};
+
+TrafficScanGaps JoinTrafficPids(ConnectionStore& store,
+                                const std::vector<DWORD>& pids) {
+    if (pids.empty()) return TrafficScanGaps();
+    const unsigned failBefore = TrafficSampler().ScanFailureCount();
+    const unsigned dropBefore = TrafficSampler().TimeoutCount();
     const std::map<DWORD, PidTraffic> totals = TrafficSampler().Sample(pids);
     for (const auto& kv : totals)
         store.SetTraffic(kv.first, kv.second.rx, kv.second.tx);
@@ -937,7 +967,10 @@ unsigned JoinTrafficPids(ConnectionStore& store, const std::vector<DWORD>& pids)
     // both the per-connection and the per-process rate can be computed. See
     // ConnectionStore::ComputeRates for why this cannot happen earlier.
     (void)store.ComputeRates();
-    return TrafficSampler().ScanFailureCount() - before;
+    TrafficScanGaps gaps;
+    gaps.failures = TrafficSampler().ScanFailureCount() - failBefore;
+    gaps.dropped = TrafficSampler().TimeoutCount() - dropBefore;
+    return gaps;
 }
 
 // What the renderers will print for these options (remote addresses, GeoIP
@@ -1382,9 +1415,26 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
         // unenrichable note also declines to fire for traffic columns at all
         // (see its own comment: per-PID blanks used to be indistinguishable
         // from no-totals, which is precisely the gap this closes).
-        const unsigned failed = JoinTrafficPids(store, sel.pids);
-        if (failed != 0 && advice != nullptr) {
-            *advice += TrafficScanFailedNote(failed);
+        const TrafficScanGaps gaps = JoinTrafficPids(store, sel.pids);
+        // Both gap kinds, in the order that matters: UNMEASURED before STALE,
+        // because "we measured nothing" is the answer that must not be trusted
+        // and a reader who sees only the second would conclude the first did
+        // not happen.
+        // GATED ON QUIET, and that gate was MISSING here until 9.2.4 found it.
+        // MissingEnrichmentAdvice() returns {} under --quiet, but it only
+        // covers the advice it produces ITSELF - anything appended to the
+        // same string afterwards went straight out. The dropped-pass note hit
+        // that immediately: cli.bat's "quiet zero bytes" check failed, because
+        // --quiet promises no output at all and the exit code is the whole
+        // answer. The scan-failure note above had the SAME latent bug,
+        // invisible only because a failed scan is unreachable from a test.
+        //
+        // So the rule is enforced where a note is ADDED, not only where the
+        // advice string is CREATED. UnenrichableHeadWarning already gates on
+        // opt.quiet for the same reason.
+        if (advice != nullptr && !opt.quiet) {
+            if (gaps.failures != 0) *advice += TrafficScanFailedNote(gaps.failures);
+            if (gaps.dropped != 0) *advice += TrafficScanDroppedNote(gaps.dropped);
         }
     }
     if (HasEnrichmentClause(opt.filter)) {
@@ -2007,13 +2057,13 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
         // leaves every traffic field in the detail block at its unmeasured
         // value, and the reader would otherwise see a connection that simply
         // moved no bytes.
-        const unsigned failed =
+        const TrafficScanGaps gaps =
             JoinTrafficPids(store, std::vector<DWORD>(1, chosen.pid));
-        if (failed != 0) {
-            // Assigned, not appended: r.err is empty at this point, and the
-            // note already carries its own terminator.
-            r.err = TrafficScanFailedNote(failed);
-        }
+        // Assigned, not appended: r.err is empty at this point, and each note
+        // already carries its own terminator. Same two gap kinds, same order
+        // (UNMEASURED before STALE) as the list path.
+        if (gaps.failures != 0) r.err += TrafficScanFailedNote(gaps.failures);
+        if (gaps.dropped != 0) r.err += TrafficScanDroppedNote(gaps.dropped);
     }
     // A one-shot command pays the ~48 ms thread snapshot inline, because the
     // alternative is to exit before the background worker ever answers - which

@@ -1776,11 +1776,27 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         trafficColShown && !etw_.Running() && fallbackFlag_->load();
     const bool trafficBlocked = trafficColShown && !etw_.Running() &&
                                 !fallbackFlag_->load();
+    // 9.2.4: what the traffic scan could not measure, said where the traffic
+    // columns are. A blank traffic cell means three different things and the
+    // reader could previously not tell them apart - the connection moved no
+    // bytes, the row was unmeasurable, or the SCAN FAILED. Only the third is
+    // actionable, so it gets the pane.
+    //
+    // Both counters are 0 on a healthy machine, so this is silent until it is
+    // not, which is the point of a status pane. Failure outranks staleness
+    // because a failed pass measured nothing while a dropped pass kept the
+    // previous totals - and "nothing" is the worse of the two to trust.
+    const unsigned scanGaps =
+        (socketTraffic_ != nullptr) ? socketTraffic_->ScanFailureCount() : 0u;
+    const unsigned staleGaps =
+        (socketTraffic_ != nullptr) ? socketTraffic_->TimeoutCount() : 0u;
     const std::wstring right =
-        !errorText.empty() ? (L"Error: " + errorText)
-        : fallbackActive   ? L"TCP only — UDP needs admin"
-        : trafficBlocked   ? L"Traffic off — needs admin"
-                           : L"Ready";
+        !errorText.empty()      ? (L"Error: " + errorText)
+        : scanGaps != 0         ? L"Traffic FAILED"
+        : staleGaps != 0        ? L"Traffic stale"
+        : fallbackActive        ? L"TCP only - UDP needs admin"
+        : trafficBlocked        ? L"Traffic off - needs admin"
+                               : L"Ready";
     // 5.5: while frozen, pane 2 must say so AND say how stale it is. Showing
     // the pre-freeze "Updated: 14:32:05" on its own would be a lie - it reads
     // as current, and the user has no way to tell the list is not updating.
@@ -1813,20 +1829,39 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
                    reinterpret_cast<LPARAM>(RefreshAgeText().c_str()));
     ::SendMessageW(hwndStatus_, SB_SETTEXTW, 5,
                    reinterpret_cast<LPARAM>(right.c_str()));
+    // The tooltip is where the ACTIONABLE detail goes, because pane 5 is only
+    // ~170px wide (OnSize). 9.2.4 puts the two gap explanations ahead of the
+    // elevation ones: a machine that dropped a pass needs to know that before
+    // it needs to know it should have been run elevated.
+    std::wstring tip;
+    if (scanGaps != 0) {
+        tip = L"Traffic is UNMEASURED for this run: " + std::to_wstring(scanGaps) +
+              L" scan(s) could not read the process handle table, so nothing was"
+              L" merged and every traffic cell is blank rather than zero. This"
+              L" is not an elevation problem and no switch fixes it - the handle"
+              L" table was denied. Re-run; if it persists, something on this"
+              L" machine is blocking handle enumeration.";
+    } else if (staleGaps != 0) {
+        tip = L"Traffic is STALE: " + std::to_wstring(staleGaps) +
+              L" pass(es) were dropped because a socket's SIO_TCP_INFO never"
+              L" returned. The counters shown are the last values that were"
+              L" read, not current ones. Closing the owning connection usually"
+              L" clears it - the sockets are remembered, so no later pass wastes"
+              L" a worker on them again.";
+    } else if (fallbackActive) {
+        tip = L"TCP totals are read per-socket (SIO_TCP_INFO) - no elevation"
+              L" needed. UDP rows stay \"-\": run WinTCP as administrator and"
+              L" enable View > Per-PID traffic counters for the full ETW"
+              L" session (TCP+UDP).";
+    } else if (trafficBlocked) {
+        tip = L"Per-PID traffic counters need elevation: run WinTCP as"
+              L" administrator (View > Per-PID traffic counters).";
+    }
+    // Empty tip means "nothing to add", which is what the old ternary's 0
+    // meant; setting an empty string instead would create an empty tooltip
+    // balloon on every healthy refresh.
     ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 5,
-                   fallbackActive
-                       ? reinterpret_cast<LPARAM>(
-                             L"TCP totals are read per-socket "
-                             L"(SIO_TCP_INFO) - no elevation needed. UDP "
-                             L"rows stay \"—\": run WinTCP as administrator "
-                             L"and enable View > Per-PID traffic counters "
-                             L"for the full ETW session (TCP+UDP).")
-                       : trafficBlocked
-                             ? reinterpret_cast<LPARAM>(
-                                   L"Per-PID traffic counters need elevation: "
-                                   L"run WinTCP as administrator (View > "
-                                   L"Per-PID traffic counters).")
-                              : 0);
+                    tip.empty() ? 0 : reinterpret_cast<LPARAM>(tip.c_str()));
 }
 
 std::wstring MainWindow::SelectedSummary() const {
@@ -3864,6 +3899,15 @@ void MainWindow::ShowAboutBox() {
     s.elevated = IsElevated();
     s.etwRunning = etw_.Running();
     s.trafficFallback = fallbackFlag_->load(std::memory_order_relaxed);
+    // 9.2.4: the same two counters the status bar shows, so the About box and
+    // the pane cannot disagree. Reported only when the sampler exists at all:
+    // a window with traffic off has no opinion, and printing a confident 0
+    // there would claim a check nobody ran.
+    if (socketTraffic_ != nullptr) {
+        s.trafficScanRan = true;
+        s.trafficTimeouts = socketTraffic_->TimeoutCount();
+        s.trafficScanFailures = socketTraffic_->ScanFailureCount();
+    }
     s.geoIpLoaded = geo_.Loaded();
     s.presetsAvailable = true;   // the store is in-process; always available
     for (int i = 0; i < COL_COUNT; ++i)

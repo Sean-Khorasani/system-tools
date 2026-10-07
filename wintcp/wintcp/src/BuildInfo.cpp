@@ -108,6 +108,25 @@ std::wstring AboutText(const BuildSummary& s) {
                                           ? L"none (no collector is running)"
                                           : L"none (needs administrator)"))) +
            L"\r\n";
+    // 9.2.4: what the traffic scan could not measure. Printed only when a scan
+    // actually ran, and only the non-zero ones - a healthy machine gains
+    // nothing here, which is the point. See BuildSummary for why the two
+    // counters are separate fields.
+    if (s.trafficScanRan && (s.trafficTimeouts != 0 || s.trafficScanFailures != 0)) {
+        std::wstring lost;
+        if (s.trafficScanFailures != 0) {
+            lost += L"failed ";
+            lost += std::to_wstring(s.trafficScanFailures);
+            lost += L" time(s) - traffic UNMEASURED";
+        }
+        if (s.trafficTimeouts != 0) {
+            if (!lost.empty()) lost += L";";
+            lost += L"dropped ";
+            lost += std::to_wstring(s.trafficTimeouts);
+            lost += L" pass(es) - traffic STALE";
+        }
+        out += PadKeys(L"Traffic gaps") + lost + L"\r\n";
+    }
     out += PadKeys(L"GeoIP database") +
            std::wstring(s.geoIpLoaded
                             ? L"loaded"

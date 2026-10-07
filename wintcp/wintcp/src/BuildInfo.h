@@ -83,6 +83,29 @@ struct BuildSummary {
     // GUI view mask, so it has nothing to count; the line is omitted there
     // rather than printed as "0 of 23".
     bool columnCountKnown = true;
+
+    // 9.2.4: what the traffic scan could not measure, counted. Both are 0 on
+    // a healthy machine and both mean the traffic columns are incomplete for a
+    // REASON, which is the point: a blank traffic cell is otherwise
+    // indistinguishable from a connection that genuinely moved no bytes.
+    //
+    //   trafficTimeouts     - passes dropped because a worker stopped making
+    //                         progress (a socket whose SIO_TCP_INFO never
+    //                         returns). Previous totals are kept, so the
+    //                         numbers are STALE rather than absent.
+    //   trafficScanFailures - passes that could not read the process handle
+    //                         table at all, so nothing was merged and every
+    //                         traffic cell is UNMEASURED.
+    //
+    // The two are separate fields because the remedies differ: a timeout says
+    // "this machine has an unreadable socket", a failure says "the scan itself
+    // did not run". One number wearing two names would be useless.
+    unsigned trafficTimeouts = 0;
+    unsigned trafficScanFailures = 0;
+    // False when nothing was sampled in this process, so the lines are omitted
+    // rather than printed as a confident "0" - the same rule as the counters
+    // above. A CLI run that never asked for --traffic has no opinion.
+    bool trafficScanRan = false;
 };
 
 std::wstring AboutText(const BuildSummary& s);

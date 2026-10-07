@@ -127,6 +127,13 @@ bool BuildStoreSnapshot(SnapshotSource& source, ConnectionStore& store,
                         bool procStats, bool resolveDns, bool geoIp,
                         const wchar_t* geoIpPath, std::wstring* error);
 
+// 9.2.4: the process-lifetime traffic sampler, or nullptr if no --traffic verb
+// has created one yet. Lets a caller REPORT what the scan could not measure
+// without creating a sampler to ask - creating one would probe SIO_TCP_INFO
+// (a loopback connect) and would answer about a different object than the one
+// the traffic columns came from.
+class SocketTrafficSampler;
+SocketTrafficSampler* ActiveTrafficSampler();
 // ---- list (conn) -----------------------------------------------------------
 struct ListOptions {
     std::wstring filter;          // filter-box grammar, "" = all
