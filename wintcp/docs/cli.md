@@ -47,7 +47,7 @@ Usage: wintcp.exe <command> [switches]
 | | `block` | Close a live connection **and** add an outbound firewall rule for its remote endpoint. Admin. |
 | | `unblock` | Remove the rules `block` created for an address and port. Admin. |
 | | `capture` (alias `follow`) | Record and reassemble one TCP stream for a fixed window. Admin. |
-| Audit | `blocks` | Count firewall rules carrying the WinTCP tag. Read-only; exits `0`; needs no elevation and no `--yes`. |
+| Audit | `blocks` | Count firewall rules carrying the WinTCP tag. Read-only; exits `0`; needs no elevation and no `--yes`. If the ledger at `%APPDATA%\WinTCP\blocked.txt` cannot be read with confidence the count is **not** trustworthy and stderr says why — see [recipe 3](cookbook.md#3-block-a-peer-audit-the-rules-undo-them). |
 | Library | `bookmark` | Pin a remote endpoint with a color and a note. |
 | | `preset` | Save, show, apply and delete named views. |
 | | `export` | Write a view to CSV, TSV or JSON. |

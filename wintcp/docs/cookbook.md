@@ -146,6 +146,15 @@ unblock 20.47.110.73:443
 | `blocks` | Counts rules carrying the WinTCP tag, in any direction or family. `netsh advfirewall firewall show rule name=all` dumps thousands of rules; this answers "did I leave any of these behind" in one line. Exits `0`, needs no elevation. |
 | `unblock --address`, `--port` | `unblock` cannot take `--select`: by the time you want to undo, the connection is usually gone, so there is no row to select. A rule's identity is address plus port, and those are what you still have. Together they name exactly the rules `block` created and nothing else. |
 
+`blocks` finds its rules by reading a ledger at `%APPDATA%\WinTCP\blocked.txt`, one line per block, written when `block` succeeds so that a later session can still find rules the firewall enumerator omits. **A ledger that cannot be read with confidence is refused, not counted.** The count line still prints on stdout so a script keeps its number, and the reason prints on stderr:
+
+```text
+wintcp-firewall-rules: 0
+the block ledger C:\Users\you\AppData\Roaming\WinTCP\blocked.txt is 4560000 bytes, over the 4194304-byte limit; refusing to load it. A real ledger holds one short line per blocked peer.
+```
+
+Read that as "unknown", never as "you have no blocks". Three things make the file untrustworthy: over **4 MiB** (a real ledger is one short line per peer, so that is tens of thousands of lines), a line over **4096 bytes**, or a line that is not valid UTF-8. The whole file is refused rather than the bad line skipped, because a skipped line is a rule name nobody recorded — and `Remove all WinTCP blocks` would then leave that rule installed with no way to find it again. The same refusal stops `block` and `unblock` from rewriting a ledger they could not read, which would drop every other rule's record.
+
 ### 4. A refusal contract for dangerous actions
 
 No Windows tool has one. This is the recipe that makes the other three safe to script.

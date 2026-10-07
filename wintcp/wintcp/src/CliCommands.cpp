@@ -361,6 +361,13 @@ const CommandHelp kCommandHelps[] = {
      "Counts rules carrying the WinTCP tag, in any direction or family.\r\n"
      "Always succeeds (exit 0), no elevation needed to count.\r\n"
      "\r\n"
+     "The count comes from a ledger this tool wrote when `block` succeeded,\r\n"
+     "at %APPDATA%\\WinTCP\\blocked.txt. A ledger that cannot be read with\r\n"
+     "confidence is REFUSED, not counted: over 4 MiB, a line over 4096 bytes,\r\n"
+     "or a line that is not valid UTF-8. The count still prints on stdout so\r\n"
+     "a script keeps its number, and stderr says why it must not be trusted.\r\n"
+     "Treat that as \"unknown\", never as \"you have no blocks\".\r\n"
+     "\r\n"
      "Examples:\r\n"
      "  wintcp.exe blocks\r\n"},
     {"bookmark",

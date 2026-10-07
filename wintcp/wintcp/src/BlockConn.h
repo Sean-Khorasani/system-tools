@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>   // R3: ParseLedgerBytes hands back the parsed pairs
 
 namespace wintcp {
 
@@ -111,12 +112,40 @@ bool IsConnectionBlocked(const BlockRequest& req);
 // created, via Item(). That is O(number of possible peers) rather than
 // O(system rules), which is the right trade: correctness over speed for a
 // count that runs on demand.
-int CountWinTcpRules();
+// A count that cannot be made is not a count of zero: R3 added an error
+// channel because `blocks` reporting "0" for a ledger it refused to read is
+// the silent-wrong-answer shape this tool does not otherwise ship. *error is
+// optional and, when supplied, is set ONLY on that failure - a genuinely
+// empty ledger is not an error.
+int CountWinTcpRules(std::wstring* error = nullptr);
 
 // Delete every rule carrying the WinTCP tag. Intended for "remove all the
 // blocks this app created" on shutdown. Returns true when no tagged rule
 // survives; the failing names are appended to 'error'.
 bool RemoveAllWinTcpRules(std::wstring* error);
+
+// R3: parse the ledger's bytes into rule-name pairs. PURE - no file, no
+// registry, no environment - so the selftest can drive it with hostile input
+// without touching the real ledger under %APPDATA%, which is the one thing it
+// must never do. The file cap lives in ReadLedger (it needs the file size);
+// this covers the per-line cap and UTF-8 validation.
+//
+// FALSE + error on bytes that cannot be trusted - a line over
+// kLedgerMaxLineBytes, a NUL byte, or invalid UTF-8 - and *out is then left
+// UNTOUCHED, so a caller can never half-apply a ledger it has already
+// rejected. Refusing the whole file is deliberate: a skipped line is a rule
+// name nobody recorded, and the whole point of the ledger is that
+// RemoveAllWinTcpRules can still find the rule it created.
+bool ParseLedgerBytes(const char* data, size_t len,
+                      std::vector<std::wstring>* out, std::wstring* error);
+
+// R3: the per-line cap, in the header so the selftest that pins the boundary
+// uses the same number the parser does rather than a copy of it. A name is at
+// most kMaxRuleNameChars (255) wchar_t and a wchar_t is at most 4 bytes in
+// UTF-8, so a line this code can legitimately write cannot exceed
+// 2*255*4 + 1 = 2041 bytes; 4096 is 2x that headroom, and the limit is
+// inclusive.
+constexpr size_t kLedgerMaxLineBytes = 4096;
 
 // --- Layer 1 detail ---------------------------------------------------------
 //

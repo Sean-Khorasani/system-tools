@@ -2411,7 +2411,15 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
 
 CommandResult CmdBlocks() {
     CommandResult r;
-    const int n = CountWinTcpRules();
+    // R3: a count that could not be made must not be reported as zero. Before
+    // this, an unreadable ledger - over the 4 MiB cap, or holding a line that
+    // is not valid UTF-8 - produced "wintcp-firewall-rules: 0" with nothing on
+    // stderr, which is indistinguishable from "you have no blocks".
+    std::wstring error;
+    const int n = CountWinTcpRules(&error);
+    if (!error.empty()) {
+        r.err = WideToUtf8(error) + "\r\n";
+    }
     r.out = "wintcp-firewall-rules: " + std::to_string(n) + "\r\n";
     return r;
 }

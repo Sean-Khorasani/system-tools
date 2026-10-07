@@ -789,6 +789,74 @@ if not "%ORC2%"=="2" (
 )
 if exist "%OUTCSV%" del "%OUTCSV%"
 
+REM R3: the ledger read is bounded, and a ledger that cannot be read with
+REM confidence is ANNOUNCED rather than reported as a count of zero. These are
+REM here rather than in the selftest because the size cap needs a real file:
+REM the selftest drives ParseLedgerBytes, which is handed bytes.
+REM
+REM %APPDATA% is redirected to a scratch tree for these three checks only, so
+REM the real %APPDATA%\WinTCP\blocked.txt is never read or written. Restored
+REM immediately after - later checks use %LOCALAPPDATA% for crash dumps, and
+REM nothing else in this gate depends on %APPDATA%.
+REM
+REM fsutil ships with Windows (System32) and creates the oversized file
+REM instantly as a sparse file. It is NOT optional: a gate that quietly skips
+REM itself is worse than no gate, so a failure to create the file FAILS here.
+set APPDATA_SAVED=%APPDATA%
+set APPDATA=%TEMP%\wn_r3_ledger
+if exist "%APPDATA%\WinTCP" rmdir /s /q "%APPDATA%\WinTCP"
+if not exist "%APPDATA%\WinTCP" mkdir "%APPDATA%\WinTCP"
+
+REM Control first: no ledger at all is an empty ledger, NOT an error. If this
+REM ever printed the refusal, the "refused" checks below would pass vacuously.
+call :t "ledger absent is not an error" "blocks" 0 "."
+"%BIN%" blocks > "%OUT%" 2>&1
+findstr /c:"refusing" "%OUT%" >nul 2>&1
+set /a CHECKS+=1
+if not errorlevel 1 (
+    echo FAIL ledger absent must not be refused
+    set /a FAILS+=1
+) else (
+    echo ok - ledger absent must not be refused
+)
+
+REM 4,560,000 bytes against a 4,194,304-byte cap. All-zero bytes, so this also
+REM proves the SIZE is checked before the bytes are parsed - a 4.5 MB file of
+REM NULs would otherwise fail the per-line NUL check instead, and this gate
+REM would no longer be pinning the cap.
+fsutil file createnew "%APPDATA%\WinTCP\blocked.txt" 4560000 >nul 2>&1
+set /a CHECKS+=1
+if not exist "%APPDATA%\WinTCP\blocked.txt" (
+    echo FAIL oversized ledger not created [fsutil file createnew failed; this gate needs it]
+    set /a FAILS+=1
+) else (
+    echo ok - oversized ledger created
+)
+call :t "ledger over the size cap is refused" "blocks" 0 "over the 4194304-byte limit"
+call :t "oversized ledger names the byte count" "blocks" 0 "4560000 bytes"
+
+REM The refusal belongs on stderr: stdout carries the count a script reads, and
+REM a script must not have to parse prose to discover its number is not to be
+REM trusted. :tout asserts stdout alone does NOT contain the text.
+call :tout "oversized ledger keeps the refusal off stdout" "blocks" "refusing"
+
+REM Under the cap: read normally, no refusal. This is what stops the check
+REM above from passing merely because the path was wrong.
+del "%APPDATA%\WinTCP\blocked.txt" >nul 2>&1
+call :t "small ledger reads without complaint" "blocks" 0 "."
+"%BIN%" blocks > "%OUT%" 2>&1
+findstr /c:"refusing" "%OUT%" >nul 2>&1
+set /a CHECKS+=1
+if not errorlevel 1 (
+    echo FAIL small ledger must not be refused
+    set /a FAILS+=1
+) else (
+    echo ok - small ledger must not be refused
+)
+
+set "APPDATA=%APPDATA_SAVED%"
+rmdir /s /q "%TEMP%\wn_r3_ledger" >nul 2>&1
+
 echo.
 echo CLI: %CHECKS% checks, %FAILS% failures.
 if not "%FAILS%"=="0" exit /b 1

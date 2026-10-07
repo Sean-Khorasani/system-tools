@@ -45,6 +45,7 @@
 #include "ChartExport.h"   // chart CSV (7.7a) + zoom reset (7.7b)
 #include "ChangeLogWindow.h"  // change-log buffer cap (5.4)
 #include "Commands.h"    // abstract layer: details/preset/select helpers
+#include "BlockConn.h"   // R3: ParseLedgerBytes - the pure ledger parser
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -1442,6 +1443,187 @@ TestResult RunSelfTest() {
         Check(r, "enrich.advice.column-quiet-stays-silent",
               MissingEnrichmentAdvice(cq).empty(),
               MissingEnrichmentAdvice(cq));
+    }
+
+    // 3e. R3 - the ledger parser. ParseLedgerBytes is pure, so the hostile
+    //      input it exists to reject is driven here directly. Driving the real
+    //      file instead would mean pointing %APPDATA% at a scratch directory
+    //      and writing to it: the selftest must never touch the ledger that
+    //      RemoveAllWinTcpRules depends on.
+    //
+    //      What had to be true before the change: ReadLedger appended until
+    //      ReadFile returned 0, so file size was unbounded; there was no
+    //      per-line cap; and the conversion went through Utf8ToWide, which
+    //      passes flags 0 to MultiByteToWideChar and so substitutes U+FFFD for
+    //      a bad byte and REPORTS SUCCESS - a corrupt line became a rule name
+    //      nobody wrote.
+{
+        std::vector<std::wstring> out;
+        std::wstring err;
+        // Every check below calls the parser into NAMED locals first. C++ does
+        // not order function-argument evaluation, so folding the call into the
+        // condition while reading out.size() into the message would report the
+        // state from BEFORE the call - a diagnostic that is wrong precisely
+        // when it is needed.
+        auto detail = [&out, &err]() {
+            return " pairs=" + std::to_string(out.size()) +
+                   " err=" + WideToUtf8(err);
+        };
+
+        // The shape WriteLedger actually produces: two rule names, tab
+        // separated, CRLF terminated.
+        const std::string good =
+            "WinTCP block: CB0071A9-443-80-endpoint\tWinTCP block: CB0071A9-443-80-ports\r\n"
+            "WinTCP block: CB0071AA-8080-0-endpoint\tWinTCP block: CB0071AA-8080-0-ports\r\n";
+        const bool okGood =
+            ParseLedgerBytes(good.data(), good.size(), &out, &err);
+        Check(r, "r3.ledger.parses-a-real-shape",
+              okGood && out.size() == 2 && err.empty(), detail());
+        // The tab is what RemoveAllWinTcpRules splits on to recover a name; if
+        // the parser ever normalised it away, every removal would miss.
+        const std::string firstPair =
+            out.empty() ? std::string() : WideToUtf8(out[0]);
+        Check(r, "r3.ledger.keeps-the-tab",
+              out.size() == 2 &&
+                  firstPair ==
+                      "WinTCP block: CB0071A9-443-80-endpoint\t"
+                      "WinTCP block: CB0071A9-443-80-ports",
+              firstPair.empty() ? "<no pairs>" : firstPair);
+
+        // Empty file: an absent ledger is an empty ledger, not a failure.
+        out.clear();
+        const bool okEmpty = ParseLedgerBytes("", 0, &out, &err);
+        Check(r, "r3.ledger.empty-is-not-an-error",
+              okEmpty && out.empty() && err.empty(), detail());
+
+        // A final line with no terminator must still be read: a ledger whose
+        // write was cut short by a full disk is exactly this shape, and
+        // dropping its last line would lose one rule's record.
+        out.clear();
+        const std::string noEol = "a\tb";
+        const bool okNoEol =
+            ParseLedgerBytes(noEol.data(), noEol.size(), &out, &err);
+        Check(r, "r3.ledger.last-line-without-newline",
+              okNoEol && out.size() == 1 && out[0] == L"a\tb", detail());
+
+        // CRLF and LF both have to reduce to the same pair, or one ledger
+        // reads differently depending on what wrote it. A BARE CR is not a
+        // line terminator, so only CR *before* LF is trimmed.
+        out.clear();
+        const std::string mixed = "x\ty\r\nz\tw\nq\te";
+        const bool okMixed =
+            ParseLedgerBytes(mixed.data(), mixed.size(), &out, &err);
+        Check(r, "r3.ledger.crlf-and-lf-both-parse",
+              okMixed && out.size() == 3 && out[0] == L"x\ty" &&
+                  out[1] == L"z\tw" && out[2] == L"q\te",
+              detail());
+
+        // Blank and whitespace-only lines are skipped, not refused: a stray
+        // echo or an editor can leave one behind.
+        out.clear();
+        const std::string blanks = "\r\n\r\n   \r\nreal\tpair\r\n\r\n";
+        const bool okBlanks =
+            ParseLedgerBytes(blanks.data(), blanks.size(), &out, &err);
+        Check(r, "r3.ledger.skips-blank-lines",
+              okBlanks && out.size() == 1 && out[0] == L"real\tpair",
+              detail());
+
+        // Over the per-line cap: refused as a WHOLE file. Accepting the other
+        // lines would silently drop the record of one rule, and "remove all
+        // blocks" would then leave that rule installed forever.
+        {
+            const std::string huge(kLedgerMaxLineBytes + 1, 'A');
+            const std::string withHuge =
+                "keep\tme\r\n" + huge + "\r\nkeep2\tme\r\n";
+            out.assign(7, L"sentinel");
+            const bool ok = ParseLedgerBytes(withHuge.data(), withHuge.size(),
+                                             &out, &err);
+            Check(r, "r3.ledger.refuses-an-over-long-line",
+                  !ok && !err.empty(), "err=" + WideToUtf8(err));
+            // The refusal must name WHICH line, or a long file is undebuggable.
+            Check(r, "r3.ledger.refusal-names-the-line",
+                  err.find(L"line 2") != std::wstring::npos, WideToUtf8(err));
+            // The "never half-apply" promise: a rejected file must not leave
+            // the caller holding a usable-looking partial ledger.
+            Check(r, "r3.ledger.refusal-leaves-out-untouched",
+                  out.size() == 7 && out[0] == L"sentinel",
+                  "out.size=" + std::to_string(out.size()));
+        }
+
+        // Exactly at the cap is legal - the limit is inclusive. It has to be,
+        // because 2*255*4+1 = 2041 bytes is a line this code can really write
+        // and 4096 is above it.
+        {
+            const std::string atCap(kLedgerMaxLineBytes, 'B');
+            out.clear();
+            const bool ok =
+                ParseLedgerBytes(atCap.data(), atCap.size(), &out, &err);
+            Check(r, "r3.ledger.exactly-at-the-cap-is-accepted",
+                  ok && out.size() == 1 && err.empty(),
+                  "ok=" + std::string(ok ? "1" : "0") + " err=" + WideToUtf8(err));
+        }
+
+        // Invalid UTF-8, the case Utf8ToWide silently accepted. Every byte
+        // sequence below is one that MultiByteToWideChar replaces with U+FFFD
+        // and reports SUCCESS for when flags are 0.
+        {
+            struct Bad {
+                const char* name;
+                const char* bytes;
+                size_t len;
+            };
+            const Bad bad[] = {
+                {"lone-continuation", "\x80", 1},
+                {"truncated-2-byte", "\xC3\x28", 2},
+                {"truncated-3-byte", "\xE2\x82", 2},
+                {"invalid-lead-F5", "\xF5\x80\x80\x80", 4},
+                {"bare-FF", "\xFF", 1},
+                {"overlong-slash", "\xC0\xAF", 2},
+            };
+            for (const Bad& b : bad) {
+                const std::string text = std::string("keep\tme\r\n") +
+                                         std::string(b.bytes, b.len);
+                out.clear();
+                const bool ok =
+                    ParseLedgerBytes(text.data(), text.size(), &out, &err);
+                const std::string label =
+                    std::string("r3.ledger.rejects-") + b.name;
+                Check(r, label.c_str(), !ok && !err.empty(),
+                      "err=" + WideToUtf8(err));
+            }
+        }
+
+        // Valid multi-byte UTF-8 must survive: a rule name carries the process
+        // name as its label, so a block on a non-ASCII process writes real
+        // UTF-8 here. Rejecting it would break those blocks' bookkeeping.
+        {
+            const std::string text =
+                "WinTCP block: CB0071A9-443-80-endpoint-"
+                "\xE6\xB5\x8B\xE8\xAF\x95"
+                "\tWinTCP block: CB0071A9-443-80-ports\r\n";
+            out.clear();
+            const bool ok =
+                ParseLedgerBytes(text.data(), text.size(), &out, &err);
+            Check(r, "r3.ledger.accepts-valid-multibyte-utf8",
+                  ok && out.size() == 1 && err.empty() &&
+                      out[0].find(L"\x6D4B\x8BD5") != std::wstring::npos,
+                  detail());
+        }
+
+        // A NUL byte. This code never writes one, and a wstring carrying it
+        // loses its tail when handed to the firewall as a BSTR - so the name
+        // would silently become something shorter than what is on disk.
+        {
+            std::string text = "abc\tdef";
+            text.push_back('\0');
+            text += "hidden";
+            out.clear();
+            const bool ok = ParseLedgerBytes(text.data(), text.size(),
+                                             &out, &err);
+            Check(r, "r3.ledger.rejects-an-embedded-nul",
+                  !ok && err.find(L"NUL") != std::wstring::npos,
+                  "err=" + WideToUtf8(err));
+        }
     }
 
     // 3d3. The pre-join view. A filter with an enrichment clause had NO view
@@ -6646,4 +6828,3 @@ std::string RunBench(unsigned rows, unsigned iters) {
 }
 
 }  // namespace wintcp
-
