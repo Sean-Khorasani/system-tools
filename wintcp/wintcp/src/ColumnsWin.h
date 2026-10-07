@@ -47,11 +47,44 @@ static_assert(COL_COUNT <= 32,
               "below caps at 32. Widen the stored mask (and Settings' "
               "ColVersion migration) BEFORE adding a 33rd column.");
 
+// DECISION 2026-10-06 (9.1.1): FREEZE AT 32. Not "we ran out of room" - 32 was
+// chosen over widening, and this is the note saying so at the place a 33rd
+// column would be added.
+//
+// Why freeze rather than widen:
+//   - There is no 33rd column. Nothing today is blocked by this.
+//   - Widening is not one change. It is at least eight: the UINT32 mask, the
+//     registry value from REG_DWORD to REG_BINARY at 8 bytes, a
+//     kCurrentColVersion 6 migration (with the v4 and v5 precedents to follow),
+//     the IDM_COL range in resource.h, and ColumnTitle / GetColumnText /
+//     CompareRows / JsonKeyFor / GroupedDefaultColumns, plus the
+//     `help list --columns` prose and its golden asserts.
+//   - Every one of those is a place a persisted user layout can change
+//     silently, which is the failure mode nobody would think to test for.
+//
+// So a feature that needs a column reuses an existing one rather than growing
+// the mask as a side effect. ASN (9.5.1) is the live case: it reuses Country.
+// A 33rd column is a deliberate act - widen the mask and migrate first, in its
+// own commit - not something that arrives with a feature.
+//
+// The assert above is the enforcement: it names this at the point of failure,
+// so "add a column" cannot be completed without reading the reason.
+constexpr unsigned kMaxPersistedColumns = 32;
+
 // Mask restricted to the columns that actually exist, with at least one bit
 // set: a mask of 0 would persist a list view with no columns at all and no
 // way back except the Columns menu.
 constexpr UINT32 kAllColMask =
     static_cast<UINT32>((static_cast<UINT64>(1) << COL_COUNT) - 1u);
+
+// The mask is exactly full at 32, so this is a real equality rather than a
+// formality: it fails today if a column is ever removed, which would silently
+// renumber every persisted bit and shift every user's saved layout. Spelled as
+// a named constant so the two halves of the decision cannot disagree.
+static_assert(COL_COUNT == kMaxPersistedColumns,
+              "The 32-column freeze was decided together (9.1.1). Removing a "
+              "column renumbers the persisted mask, so a removal needs the same "
+              "migration a widening would.");
 
 // Default visible-column mask. Everything the user can act on out of the box
 // is shown: identity, the live per-process stats, the combined Traffic

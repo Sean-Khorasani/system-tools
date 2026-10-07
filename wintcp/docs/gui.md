@@ -85,7 +85,7 @@ Five further diagnostic columns are available from **View → Columns** and hidd
 
 Readings that cannot be taken (for example a protected process without elevation) show `—` and sort to the end in **both** directions, rather than sorting to the top as a zero would.
 
-The visible set, order, widths and sort persist between runs. The persisted column mask is versioned (`ColVersion`), so an existing profile gains newly default-visible columns exactly once and is not reset again afterwards.
+The visible set, order, widths and sort persist between runs. The persisted column mask is versioned (`ColVersion`), so an existing profile gains newly default-visible columns exactly once and is not reset again afterwards. The ceiling is 32 columns and that is a deliberate freeze, not a limit that ran into - see architecture.md; the 32nd column leaves no room for another, so a feature that needs one reuses an existing column or raises it deliberately.
 
 ## Filtering and sorting
 

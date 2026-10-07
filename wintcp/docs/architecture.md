@@ -193,6 +193,24 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
 
 **Model** - `Connection.h` (row struct and highlight flags), `Columns.h` and `ColumnsWin.h` (column set and masks), `ConnectionStore.*` (stable-id diff, filter, sort, group, columns), `ViewState.*` (what the user had selected and shown), `Grouping.*`.
 
+**The 32-column ceiling is a decision, not a limit that ran into.** The visible
+set, order, widths and sort all persist, and the visible set is a `UINT32` mask -
+one bit per `ColumnId` - in `Settings.h`, in the registry, and in the Columns menu's
+`IDM_COL_BASE + n` range in `resource.h`. `F5.1`-`F5.3` took `COL_COUNT` from 29 to
+exactly 32, so the mask is now full. `ColumnsWin.h` carries a `static_assert` that
+fails the build at 33, which is the point: the failure is meant to be loud and to
+name what has to widen first. **The decision taken on 2026-10-06 is to freeze at
+32**, not to widen. The reasons are that a 33rd column does not exist today, that
+widening is not one change but eight (`UINT64` mask, `REG_BINARY` at 8 bytes, a
+`kCurrentColVersion` 6 migration with the v4 and v5 precedents to follow, the
+`IDM_COL` range, `ColumnTitle` / `GetColumnText` / `CompareRows` / `JsonKeyFor`,
+`GroupedDefaultColumns`, the `help list --columns` prose and its golden asserts),
+and that a persisted-mask widening which gets one of those wrong shows up as a
+user's saved layout silently changing. A column that is genuinely needed should
+raise this deliberately, not arrive as a side effect of a feature. Where a feature
+wanted a column that would not fit - ASN (9.5.1) is the live case - it reuses the
+Country column rather than growing the mask.
+
 **The shared pipeline** - `Snapshot.*` (the only snapshot producer), `RefreshEngine.*` (background worker and watchdog), `DnsResolver.*` (reverse DNS), `Commands.*` (the abstract command layer both front ends call).
 
 **Enumeration and enrichment** - `TcpTable.*` (IP Helper table, including scope IDs), `ProcessInfo.*` (Toolhelp / OpenProcess / SCM cache), `ProcStats.*` (per-PID CPU, memory and IO), `SysStats.*` (system CPU, memory, disk, net), `GeoIp.*` (MaxMind DB reader), `WinCaps.*` (Windows capability report).
@@ -225,3 +243,5 @@ There is deliberately no hex window. `HexTextWindow.*` was the view behind the G
 | `d2probe.bat`, `d2probe.cpp` | the measurement probe behind `kProbeWorkers` - **not a gate** |
 
 `wintcp-tests.exe` links the *same* product sources as `wintcp.exe`, minus `main.cpp`. That is the point: a test that exercised a copy of the logic would prove nothing. See [Development](development.md#testing).
+
+Country column rather than growing the mask.

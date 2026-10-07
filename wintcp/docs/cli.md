@@ -163,6 +163,13 @@ Some columns and filters need the switch that supplies their data. When it is mi
 | `integrity` column, `integrity:` filter | *(nothing)* | `OpenProcessToken` with `TOKEN_QUERY`, read on the handle the resolver already opens. Reads `—` for a process this shell cannot open. |
 
 ## Column reference
+There are exactly **32 columns and that is a deliberate freeze**, not a limit that
+ran into. The persisted visible-set mask is one bit per column in a `UINT32`, and
+it is already full; `architecture.md` records why widening it is an eight-part
+change with a schema migration, and why a feature that needs a 33rd column should
+reuse an existing one (ASN reuses `country`) rather than grow the mask as a side
+effect. A `static_assert` in `ColumnsWin.h` fails the build at 33 so that a new
+column cannot arrive unnoticed.
 
 Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separated list. The same names are used by `list`, `export` and `--sort`. Run `wintcp.exe help list` for the authoritative list for your build.
 
