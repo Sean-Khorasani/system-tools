@@ -7,6 +7,7 @@ How to build, test, benchmark and document WinTCP. User-facing behaviour is in t
 - [Building](#building)
 - [Testing](#testing)
 - [Benchmarks](#benchmarks)
+- [Integer-boundary assumptions](#integer-boundary-assumptions)
 - [Documentation conventions](#documentation-conventions)
 
 ## Building
@@ -187,6 +188,28 @@ Reading the stages: **[A]** is the whole cost of a refresh (install a new snapsh
 `Mrow/s` figures are throughput, not latency. The two together are what tell you whether a machine with 100k endpoints is usable.
 
 Timings vary by machine and by what else is running - they are the one number in this document set that should **never** be copied between runs as though it were stable.
+
+## Integer-boundary assumptions
+
+Four places where a number crosses a type boundary. Each says what is actually true, so the next reader does not re-derive it — and does not have to trust a comment that turns out to be describing a risk that does not exist.
+
+**`unsigned long` is 32 bits, even in this x64 build.** Confirmed with `dumpbin /headers`: `machine (x64)`, `PE32+`. MSVC keeps `long` at 32 bits on Windows regardless of the target, so any accumulator declared `unsigned long` wraps modulo 2^32. This is the one that caused a real bug and is worth knowing before writing the next parser — see `ParseUint` below.
+
+**`ParseUint` bounds before it multiplies.** Its ceiling is 4,000,000,000, the largest value any numeric switch can hold. It used to apply that cap *after* `acc * 10 + digit`, which on a 32-bit `unsigned long` means the cap saw a wrapped value. Measured on the binary built that way:
+
+| Typed | Reported |
+|---|---|
+| `--limit 4294967296` (2^32, wraps to 0) | accepted |
+| `--limit 99999999999999999999` | accepted |
+| `kill --pid 4294967296 --dry-run` | `refusing PID 0` |
+
+The last row is why it mattered: the user typed one PID and was told about a different one. Harmless in effect, since PID 0 and PID 4 are refused regardless, but a number silently becoming a *different* number is not something a tool that refuses dangerous work should do. The check is now `acc > (kMaxUintArg - digit) / 10` before the multiply, which cannot itself overflow. Ten `cli.bat` checks pin the boundary from both sides, including leading zeros (`0000000001` is 1; `00000040000000001` is refused) and a negative assertion that no oversized `--pid` ever prints `PID 0`.
+
+**`GetTickCount64` does not wrap, so the elapsed-time subtractions cannot go backwards.** It is 64-bit: 2^64 milliseconds is about 584 million years. The familiar 49.7-day wrap belongs to the 32-bit `GetTickCount`, which this codebase never calls. The subtraction forms — `FrozenAgeMs(now, frozenAt)` in `Freeze.cpp`, `DurationSeconds()` in `ConnectionStore.cpp`, and the `now - lastProgress >= N` loop in `SocketTraffic.cpp` — all guard their operands anyway (`if (now <= frozenAt) return 0;`). Those guards are defensive, not load-bearing: they exist so a caller passing arguments in the wrong order gets 0 rather than a huge number, which is worth keeping for a different reason than overflow.
+
+**`int` narrowing is bounded everywhere it happens.** About a dozen `static_cast<int>(x.size())` calls exist. None can overflow: the ledger's line lengths are capped at 4096 bytes (`kLedgerMaxLineBytes`), the change log has its own documented cap, `argc` is bounded by the OS command line, `DrawText*` takes an `int` in the Win32 API itself, and `MainWindow`'s casts are against `COL_COUNT` (32). The one that *would* be dangerous needs more than 2^31 rows, which IP Helper cannot return. Port arguments are range-checked to 1–65535 before any narrowing to `USHORT`.
+
+Gates for these live in `cli.bat` rather than the selftest, because `ParseUint` is file-local to `CliCommands.cpp` and the boundary is a property of the built binary.
 
 ## Documentation conventions
 

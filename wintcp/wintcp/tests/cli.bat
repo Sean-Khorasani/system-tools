@@ -857,6 +857,46 @@ if not errorlevel 1 (
 set "APPDATA=%APPDATA_SAVED%"
 rmdir /s /q "%TEMP%\wn_r3_ledger" >nul 2>&1
 
+REM R6: ParseUint's accumulator is 'unsigned long', which is 32 bits even in
+REM an x64 build, so acc*10 wraps modulo 2^32. The old code applied its 4e9 cap
+REM AFTER the multiply. Measured on the binary before the fix:
+REM   --limit 4294967296      (2^32, wraps to 0)  was ACCEPTED
+REM   --limit 99999999999999999999                 was ACCEPTED
+REM   kill --pid 4294967296 --dry-run              said "refusing PID 0"
+REM These gate the boundary now. 4294967296 is the important one: it is exactly
+REM 2^32, so it wraps to 0 and lands under the cap by construction.
+REM No parentheses in these names: :t echoes the name inside an `if (...)`
+REM block, and a stray ) closes it early - cmd reports "[rc was unexpected at
+REM this time" and aborts the whole run. That is the file's own header rule,
+REM and the first attempt at these rows ignored it.
+call :t "huge --limit refused at 2^32" "list --limit 4294967296" 2 "bad --limit"
+call :t "huge --limit refused at 20 digits" "list --limit 99999999999999999999" 2 "bad --limit"
+call :t "huge --limit refused at 2^64" "list --limit 18446744073709551616" 2 "bad --limit"
+REM The destructive verb, because that is where a wrong number is reported as
+REM if it were the user's. It must now refuse the ARGUMENT, never name a
+REM different PID: 4294967296 previously produced "refusing PID 0".
+call :t "huge --pid refused as an argument" "kill --pid 4294967296 --dry-run" 2 "bad --pid"
+REM ...and it must not print the "refusing PID 0" text. :t, not :tout: the run
+REM must SUCCEED for :tout, and this one exits 2 by design (bad argument).
+call :t "huge --pid never names PID 0" "kill --pid 4294967296 --dry-run" 2 "bad --pid"
+"%BIN%" kill --pid 4294967296 --dry-run > "%OUT%" 2>&1
+set /a CHECKS+=1
+findstr /c:"PID 0" "%OUT%" >nul 2>&1
+if not errorlevel 1 (
+    echo FAIL huge --pid reported a PID the user did not type
+    set /a FAILS+=1
+) else (
+    echo ok - huge --pid reported a PID the user did not type
+)
+REM The last accepted value, so the boundary is pinned on both sides: 4e9 is
+REM in range (limit 0 means no limit) and 4e9+1 is not.
+call :t "largest --limit still accepted" "list --limit 4000000000 --filter tcp:" 0 "."
+call :t "one past the --limit ceiling refused" "list --limit 4000000001" 2 "bad --limit"
+REM Leading zeros are still a number, and are still capped: '0000000001' has
+REM ten digits but the value 1.
+call :t "leading zeros accepted" "list --limit 0000000001 --filter tcp:" 0 "."
+call :t "leading zeros over the ceiling refused" "list --limit 00000040000000001" 2 "bad --limit"
+
 echo.
 echo CLI: %CHECKS% checks, %FAILS% failures.
 if not "%FAILS%"=="0" exit /b 1

@@ -706,11 +706,30 @@ struct Args {
 
 bool ParseUint(const std::wstring& t, unsigned* out) {
     if (t.empty()) return false;
+    // R6. The accumulator is unsigned long and the cap is 4e9, which reads as
+    // if the overflow were impossible - but unsigned long is 32 bits on MSVC
+    // even in an x64 build (verified: machine 8664, PE32+), so acc*10 wraps
+    // modulo 2^32 and the check below runs on the WRAPPED value.
+    //
+    // Measured on the binary before this fix: `--limit 4294967296` (2^32, which
+    // wraps to exactly 0) was accepted, as was a 20-digit value. Worse,
+    // `kill --pid 4294967296 --dry-run` then reported "refusing PID 0" - the
+    // user typed 4294967296 and was told about a different PID. Harmless in
+    // effect (0 and 4 are refused regardless) but a number silently becoming
+    // another number is exactly what this parser must never do.
+    //
+    // The bound is now checked BEFORE the multiply, so acc can never exceed
+    // kMaxUintArg at any step. 4e9 stays the ceiling because --limit and
+    // --count accept values up to it; the largest value any switch can hold.
+    constexpr unsigned long kMaxUintArg = 4000000000ul;
     unsigned long acc = 0;
     for (wchar_t ch : t) {
         if (ch < L'0' || ch > L'9') return false;
-        acc = acc * 10 + static_cast<unsigned long>(ch - L'0');
-        if (acc > 4000000000ul) return false;
+        const unsigned long digit = static_cast<unsigned long>(ch - L'0');
+        // acc <= kMaxUintArg is an invariant here, so this cannot itself
+        // overflow a 32-bit unsigned long: 4e9 * 10 + 9 < 2^32.
+        if (acc > (kMaxUintArg - digit) / 10ul) return false;
+        acc = acc * 10ul + digit;
     }
     *out = static_cast<unsigned>(acc);
     return true;
