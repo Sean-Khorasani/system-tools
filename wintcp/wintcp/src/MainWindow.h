@@ -216,7 +216,33 @@ private:
     void WriteChangeLog();                 // drains store_.TakeChangeEvents()
 
     // Settings: loaded in OnCreate, saved in OnDestroy.
+    //
+    // C8: this used to call Settings::Save() TWICE and discard the bool both
+    // times. The first call was dead work - it ran before the GeoIP path was
+    // written into settings_, so the file it wrote could not have been
+    // complete - and the second overwrote it. Every exit therefore did two full
+    // registry writes, and a write that FAILED left the user with a silently
+    // lost column layout, window position, filter and GeoIP path.
+    //
+    // SaveSettings is private and called only from ~MainWindow, so there is no
+    // surface a user could act on between the failure and the process going
+    // away - a MessageBox here would pop up during teardown. So the counts are
+    // kept instead, readable through the op table, and the duplication is gone.
+    // See the note on the counters: NO gate forces a Save to fail, so the
+    // failure half is unexercised.
     void SaveSettings();
+    // The single write path. See the definition for why every caller uses it.
+    void PersistSettings(const char* why);
+    // Writes attempted and writes that reported failure. Read through the
+    // "settingsSaveAttempts" / "settingsSaveFailures" ops.
+    //
+    // NOT mutable-out-of-const in spirit: SaveSettings is called from
+    // ~MainWindow, which does not need constness, so these need not be mutable
+    // and are not. They are plain unsigned because every increment happens on
+    // the UI thread - the column-reorder path is a control notification and
+    // the shutdown path is the destructor - so there is no race to defend.
+    unsigned settingsSaveAttempts_ = 0;
+    unsigned settingsSaveFailures_ = 0;
 
     // Keyboard UX: handlers for the Edit menu / accelerators.
     void SelectAllRows();

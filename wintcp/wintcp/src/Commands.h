@@ -42,6 +42,27 @@ constexpr int kExitOk = 0;
 constexpr int kExitFail = 1;
 constexpr int kExitArgs = 2;
 constexpr int kExitRefused = 3;   // mutating command without --yes
+//
+// THE CONTRACT ACROSS FRONT ENDS, which used to be unstated and partly
+// colliding. Only the CLI's four are a published interface - they are what a
+// script tests - and the other two front ends reuse their values without
+// sharing the meaning:
+//
+//   CLI    0/1/2/3 exactly as above. RunCli returns these and nothing else.
+//   GUI    0 after the message loop; 1 for each of its three startup
+//          failures (WSAStartup, RegisterClassEx, window Create). So the GUI's
+//          1 means "never got a window", NOT the CLI's "failed" - and no
+//          script can observe it, because the CLI is the only front end a
+//          script runs.
+//   bench  0 all green, 1 any check failed. Again not the CLI's 1.
+//
+// The collision is harmless precisely because it is unobservable, and it is
+// written down here so that "which 1 is this?" is answerable rather than a
+// thing a reader has to infer from wmain. main.cpp returns its own literals
+// rather than these constants, and that is deliberate: naming them kExitFail
+// would assert that "the window did not open" and "the command failed" are the
+// same thing, which is the confusion this comment exists to prevent.
+struct FrontEndExitCodes {};   // documentation only; never instantiated
 
 // CLI validation ranges (A4). One home for the numbers the parser enforces,
 // the executor re-clamps, and the error strings print — owned here (not in
@@ -63,6 +84,28 @@ constexpr unsigned kMinCount = 1;
 
 // One command invocation. Text is UTF-8, ready to print; the CLI writes out
 // and err to stdout/stderr, the GUI renders them into dialogs/status.
+//
+// TWO RULES about these two strings, both previously only followed in practice.
+//
+// 1. LINE ENDINGS ARE PER-CHANNEL, and the split is not arbitrary.
+//    `err` is human prose for a terminal, so every message ends "\r\n". `out`
+//    is a DATA FEED, so it uses whatever the chosen format specifies: JSON,
+//    JSON-lines and CSV all use a bare "\n" separator and terminator, because
+//    that is what those formats are defined to use and a conforming parser
+//    handles either. Measured across Commands.cpp: 134 "\r\n" and 22 bare
+//    "\n", and all 22 are in the JSON/CSV renderers. None is in `err`.
+//
+// 2. `err` IS ASSIGNED, NOT APPENDED, EXCEPT WHERE YOU ARE ADDING A WHOLE
+//    NEW MESSAGE. Assignment owns the whole string, so an `err = ` inside a
+//    conditional silently discards whatever an earlier branch wrote. There is
+//    exactly ONE place in Commands.cpp that appends - the advisory merge in the
+//    list path - and it is guarded on emptiness, which is what keeps the
+//    separator honest. Two messages that both end in a newline need no
+//    separator work at all, which is why `err` messages all end in "\r\n":
+//    that is what makes append safe by construction.
+//
+// A message that does NOT end in a newline breaks both rules at once: appending
+// runs it into the next message, and printing it leaves the cursor mid-line.
 struct CommandResult {
     int exitCode = kExitOk;
     std::string out;

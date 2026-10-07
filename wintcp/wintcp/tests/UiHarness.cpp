@@ -544,6 +544,67 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                       "SMOKE 7.1 column order: the permutation is fully sized (%ld "
                       "entries, expected %d)", o0, static_cast<int>(COL_COUNT));
         Check(o0 == static_cast<long>(COL_COUNT), line, "colOrder_ is not COL_COUNT long");
+
+        // ---- C8: the error-reporting counters the window now exposes --------
+        // Three new read ops, and this checks the only thing checkable about
+        // them: that they answer a number at all, that the pair that must be
+        // ordered actually is, and that they are ZERO for a window that has
+        // done nothing wrong.
+        //
+        // It does NOT check that a settings write is counted. SaveSettings()
+        // runs once, from ~MainWindow, and this harness never destroys the
+        // window; the reorder path needs a synthesised header-drag. So
+        // attempts==0 here is the expected answer, not a gap in coverage -
+        // except that it means no check pins "exactly one write per call",
+        // which is the defect the change fixes. Stated rather than papered
+        // over: see MainWindow::PersistSettings.
+        {
+            const long tmo = Num(w, "trafficTimeouts");
+            const long fail = Num(w, "trafficScanFailures");
+            std::snprintf(line, sizeof(line),
+                          "C8 traffic diagnostics answer: timeouts=%ld "
+                          "scan-failures=%ld", tmo, fail);
+            // Num() answers -1 for an op the window does not implement, so a
+            // non-negative answer is what distinguishes "reports zero" from
+            // "no such op" - the trap this op table has already sprung once.
+            Check(tmo >= 0 && fail >= 0, line,
+                  std::string("an op is missing: timeouts=") +
+                      (tmo < 0 ? "absent" : "present") +
+                      " scanFailures=" + (fail < 0 ? "absent" : "present"));
+            std::snprintf(line, sizeof(line),
+                          "C8 no traffic scan failed during the harness run "
+                          "(timeouts=%ld scan-failures=%ld)", tmo, fail);
+            // Only the SCAN-FAILURE count is asserted zero, and NOT the timeout
+            // count. The first version of this check asserted both and failed
+            // with timeouts=13 - which is correct behaviour, not a defect: a
+            // busy harness run really does abandon passes whose workers stop
+            // making progress, and that counter exists precisely to say so.
+            // Asserting it zero would have been asserting that a real,
+            // documented condition never happens.
+            Check(fail == 0, line,
+                  std::string("scan-failures=") + std::to_string(fail) +
+                      " (timeouts=" + std::to_string(tmo) +
+                      ", which is allowed and reported separately)");
+
+            const long attempts = Num(w, "settingsSaveAttempts");
+            const long badWrites = Num(w, "settingsSaveFailures");
+            std::snprintf(line, sizeof(line),
+                          "C8 settings persistence counters answer: attempts=%ld "
+                          "failures=%ld", attempts, badWrites);
+            Check(attempts >= 0 && badWrites >= 0, line,
+                  std::string("an op is missing: attempts=") +
+                      (attempts < 0 ? "absent" : "present") + " failures=" +
+                      (badWrites < 0 ? "absent" : "present"));
+            std::snprintf(line, sizeof(line),
+                          "C8 failures never exceed attempts (%ld attempts, %ld "
+                          "failures)", attempts, badWrites);
+            Check(badWrites <= attempts, line,
+                  "more failures than writes - the counters are not paired");
+            std::snprintf(line, sizeof(line),
+                          "C8 no settings write has failed in this session "
+                          "(%ld of %ld)", badWrites, attempts);
+            Check(badWrites == 0, line, "a settings write failed");
+        }
     }
 
     // ---- 5.4 change-log window (SMOKE: open/close only) --------------------

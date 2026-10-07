@@ -432,6 +432,13 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
     } catch (...) {
         tableOk = false;
     }
+    // A whole-pass failure used to end here: `tableOk` stayed false, the merge
+    // below was skipped on both branches, and the caller saw an empty table with
+    // nothing to indicate why. The consequence is real - merging a partial pass
+    // would retire live sockets, so skipping is CORRECT - but correct-and-
+    // silent is what makes a bug survive a year. Counted, and the count is
+    // read by ScanFailureCount() so a consumer can name the cause.
+    if (!tableOk) scanFailures_.fetch_add(1, std::memory_order_relaxed);
 
     // Wait for the WORKERS - but on PROGRESS, not on a deadline.
     //
@@ -583,6 +590,10 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
 
 unsigned SocketTrafficSampler::TimeoutCount() const {
     return timeouts_.load(std::memory_order_relaxed);
+}
+
+unsigned SocketTrafficSampler::ScanFailureCount() const {
+    return scanFailures_.load(std::memory_order_relaxed);
 }
 
 bool SocketTrafficSampler::ShutdownScanForExit() {

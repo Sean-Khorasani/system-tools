@@ -253,6 +253,27 @@ public:
     // traffic columns are falling back to last-known totals for those PIDs.
     unsigned TimeoutCount() const;
 
+    // How many passes could not read the handle table at all.
+    //
+    // DISTINCT from TimeoutCount(), and the distinction is the whole point. A
+    // timeout drops one pass's readings and keeps the previous totals; a
+    // whole-pass failure merges NOTHING, so every traffic cell for that pass is
+    // blank rather than stale. Both look like "no traffic" in a table, and
+    // before this counter there was no way to tell them apart from outside.
+    //
+    // It also existed as a bare `catch (...) { tableOk = false; }` with no
+    // counter and no report - a swallowed failure whose only symptom was an
+    // empty table. Counting it is what lets a consumer say "the scan failed"
+    // instead of leaving the reader to guess.
+    //
+    // HONESTLY: nothing in the gates exercises the increment. ScanHandles can
+    // only throw std::bad_alloc from the queue's push_back, so on any machine
+    // with memory this stays 0. It is bookkeeping for a path that is supposed
+    // to be unreachable, and the counters around it only assert that it starts
+    // at zero and never decreases - NOT that a failure is counted. Do not read
+    // those checks as coverage of the increment.
+    unsigned ScanFailureCount() const;
+
     // ---- D2: what the scan could not measure, and said so ----
 
     // How many DISTINCT sockets this process has given up on because
@@ -471,6 +492,9 @@ private:
     // so a machine where this fires is visible rather than quietly showing
     // stale traffic.
     mutable std::atomic<unsigned> timeouts_{0};
+    // Passes whose handle-table read threw. See ScanFailureCount() for why this
+    // is separate from timeouts_ and what it does and does not prove.
+    mutable std::atomic<unsigned> scanFailures_{0};
 };
 
 }  // namespace wintcp

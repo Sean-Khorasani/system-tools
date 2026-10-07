@@ -480,6 +480,25 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         ::swprintf_s(buf, L"%u", socketTraffic_->TimeoutCount());
         return buf;
     }
+    // C8: a pass that could not read the handle table at all. Kept beside
+    // trafficTimeouts because the two look identical in a table - blank traffic
+    // - and a reader who cannot name the cause cannot act on it.
+    if (::wcscmp(op, L"trafficScanFailures") == 0) {
+        if (socketTraffic_ == nullptr) return L"0";
+        ::swprintf_s(buf, L"%u", socketTraffic_->ScanFailureCount());
+        return buf;
+    }
+    // C8: settings writes attempted, and writes that failed. The gap between
+    // them is the loss. Both read zero for the whole life of a healthy window -
+    // SaveSettings runs once, from ~MainWindow - so these are diagnostic only.
+    if (::wcscmp(op, L"settingsSaveAttempts") == 0) {
+        ::swprintf_s(buf, L"%u", settingsSaveAttempts_);
+        return buf;
+    }
+    if (::wcscmp(op, L"settingsSaveFailures") == 0) {
+        ::swprintf_s(buf, L"%u", settingsSaveFailures_);
+        return buf;
+    }
     if (::wcscmp(op, L"selectionCount") == 0) {
         std::vector<int> idx;
         const bool any = SelectedRowIndices(idx);
@@ -2339,7 +2358,7 @@ void MainWindow::SyncColumnOrderFromHeader() {
     settings_.colOrderValid = true;
     for (size_t i = 0; i < colOrder_.size() && i < COL_COUNT; ++i)
         settings_.colOrder[i] = colOrder_[i];
-    settings_.Save();
+    PersistSettings("column reorder");
     RebuildColumns();
     ApplyView();
 }
@@ -3903,7 +3922,13 @@ void MainWindow::LoadGeoIpDatabase() {
     // Only reached on a successful load: a cancelled picker returned above,
     // and a load that failed returned with the parser's reason.
     ::wcsncpy_s(settings_.geoIpPath, file, _TRUNCATE);
-    settings_.Save();
+    // Routed through PersistSettings like the other two, and this is the one
+    // where the discarded bool hurt most: the user has just clicked a file in a
+    // dialog, so a write that fails loses exactly the thing they chose to do,
+    // and they find out at the next launch with no message in between. This was
+    // the third discarding call site; the two the change names were not the
+    // only ones.
+    PersistSettings("geoip path picked");
 
     // Fill immediately rather than waiting for the next tick, so the Country
     // column appears at once. The user chose a file precisely to see results.
@@ -3938,13 +3963,38 @@ void MainWindow::SaveSettings() {
     settings_.trafficEnabled = etw_.Running();
     const std::wstring filter = CurrentSearchText();
     ::wcsncpy_s(settings_.filter, filter.c_str(), _TRUNCATE);
-    settings_.Save();                      // best effort
     // 9.1.5: the GeoIP path is part of the view, not just the data - it has
     // to leave here with everything else the user chose.
+    //
+    // Set BEFORE the single write below. It used to be set BETWEEN two calls to
+    // settings_.Save(), so the first write could never have carried it and was
+    // pure waste: two full registry writes on every exit, and the second
+    // overwrote the first regardless.
     ::wcsncpy_s(settings_.geoIpPath,
                 geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
                 _TRUNCATE);
-    settings_.Save();
+    PersistSettings("shutdown");
+}
+
+// The one place this class writes settings. Every caller goes through here, and
+// the reason is not tidiness: the two sites this replaced each called
+// Settings::Save() directly and each DISCARDED the bool, so a write that failed
+// was indistinguishable from one that succeeded and the user's column layout,
+// window position, filter and GeoIP path were simply gone on the next launch.
+//
+// `why` names the caller. It costs one argument and buys the ability to answer
+// "which of these lost my settings?" from a counter instead of a memory.
+void MainWindow::PersistSettings(const char* why) {
+    ++settingsSaveAttempts_;
+    if (!settings_.Save()) {
+        ++settingsSaveFailures_;
+        // Deliberately NOT a MessageBox. One of the two callers runs from
+        // ~MainWindow, where popping a dialog up during teardown is worse than
+        // saying nothing; the other runs on a live window, where a box on every
+        // drag would be intolerable. So the count is recorded and read through
+        // the op table, and no attempt is made to interrupt the user for it.
+        (void)why;
+    }
 }
 
 // ---- change log -------------------------------------------------

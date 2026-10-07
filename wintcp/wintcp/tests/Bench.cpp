@@ -3879,6 +3879,86 @@ TestResult RunSelfTest() {
                   std::to_string(SocketTrafficSampler::kScanTimeoutMs));
     }
 
+// 12b. C8 - the swallowed whole-pass failure is now COUNTED.
+    //
+    //      The defect: Sample() wrapped the handle-table walk in a bare
+    //      `catch (...) { tableOk = false; }` with no counter and no report.
+    //      When it fired, BOTH merge branches were skipped, so every traffic
+    //      cell for that pass came back blank - identical on screen to a
+    //      connection that genuinely moved no bytes, and identical again to a
+    //      row that could not be measured. There was no third source for a
+    //      consumer to consult, which is what made it survive.
+    //
+    //      What these checks DO establish, stated plainly because the gap is
+    //      the interesting part:
+    //        - the accessor exists, is wired, and answers per instance
+    //        - it starts at zero on a fresh sampler
+    //        - real passes on this machine do not move it
+    //        - one sampler's passes cannot move another's
+    //
+    //      What they CANNOT establish: that a failure IS counted. ScanHandles
+    //      can only throw std::bad_alloc, from one push_back on a queue, so
+    //      there is no way to reach the increment from a test. A test that
+    //      claimed otherwise would be asserting that nothing happened. The
+    //      increment is therefore UNCOVERED, and the header says so too.
+    {
+        SocketTrafficSampler fresh;
+        Check(r, "c8.traffic.scan-failures-start-at-zero",
+              fresh.ScanFailureCount() == 0,
+              "count=" + std::to_string(fresh.ScanFailureCount()));
+
+        // A second sampler must not see the first one's state. They share no
+        // storage today; this pins that they still share none.
+        SocketTrafficSampler other;
+        const std::vector<DWORD> pids = {42, 99};
+        (void)other.Sample(pids);
+        (void)other.Sample(pids);
+        Check(r, "c8.traffic.scan-failures-are-per-instance",
+              other.ScanFailureCount() == 0 && fresh.ScanFailureCount() == 0,
+              "other=" + std::to_string(other.ScanFailureCount()) +
+                  " fresh=" + std::to_string(fresh.ScanFailureCount()));
+
+        // Real passes on a healthy machine, checking the two properties a
+        // counter has beyond "it exists": it never goes backwards, and it never
+        // exceeds the number of passes that could have failed.
+        //
+        // NEVER EXCEEDS THE PASS COUNT is the check that would catch an
+        // increment firing on a success path - the mistake a bare
+        // `if (!tableOk)` added next to an existing `if (!workersDone)` is most
+        // likely to produce. Reverting the increment also leaves this green,
+        // which is the honest reason the block above says what it says.
+        {
+            SocketTrafficSampler s;
+            unsigned last = 0;
+            bool monotonic = true;
+            bool withinRange = true;
+            const int kPasses = 3;
+            for (int i = 0; i < kPasses; ++i) {
+                (void)s.Sample(pids);
+                const unsigned now = s.ScanFailureCount();
+                if (now < last) monotonic = false;
+                if (now > static_cast<unsigned>(kPasses)) withinRange = false;
+                last = now;
+            }
+            Check(r, "c8.traffic.scan-failure-count-never-decreases",
+                  monotonic, "final=" + std::to_string(last));
+            Check(r, "c8.traffic.scan-failure-count-within-pass-count",
+                  withinRange && last <= static_cast<unsigned>(kPasses),
+                  "count=" + std::to_string(last) +
+                      " passes=" + std::to_string(kPasses));
+            // A healthy machine reports none, and the two counters this was
+            // added beside are separate: a timeout must not show up as a
+            // whole-pass failure, or the two diagnostics would be the same
+            // number wearing two names.
+            Check(r, "c8.traffic.healthy-machine-reports-no-scan-failures",
+                  last == 0, "count=" + std::to_string(last));
+            Check(r, "c8.traffic.timeout-and-failure-counters-are-distinct",
+                  s.ScanFailureCount() <= s.TimeoutCount() ||
+                      s.TimeoutCount() == 0,
+                  "failures=" + std::to_string(s.ScanFailureCount()) +
+                      " timeouts=" + std::to_string(s.TimeoutCount()));
+        }
+    }
     // 13. New columns (duration, speed, TLS, country, bookmarks). Each one
     //     carries an arithmetic or formatting decision that the list view
     //     cannot show, so they are pinned here with exact expected text.

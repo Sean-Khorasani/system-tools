@@ -869,8 +869,43 @@ bool JoinGeoAddrs(ConnectionStore& store, GeoIpDatabase& db,
     return true;
 }
 
-void JoinTrafficPids(ConnectionStore& store, const std::vector<DWORD>& pids) {
-    if (pids.empty()) return;
+// One sentence for the traffic columns of this run, for both front ends.
+//
+// C8, and this is the whole point of it: a blank traffic cell has three
+// different causes that look identical on screen - the connection really moved
+// nothing, the row could not be measured, or THE SCAN FAILED - and nothing in
+// the output said which. Naming the third is the only one a reader can act on.
+//
+// Deliberately NOT phrased as an error. The run did print its rows and its
+// exit code still means what it always meant, so prefixing this with "error"
+// would overstate it; and it is deliberately not folded into the existing
+// unenrichable-window note, which claims the opposite - that the ROWS are
+// unmeasurable - and would be actively misleading here.
+//
+// ENDS IN "\r\n", which is not decoration. The list path appends this to the
+// shared advisory string and every other producer of that string ends in a
+// newline; the first version of this function did not, so it both broke the
+// rule the CommandResult comment states and would have printed without a
+// trailing line break. The rule caught its own first violation.
+std::string TrafficScanFailedNote(unsigned passes) {
+    return "note: " + std::to_string(passes) +
+           " traffic scan" + (passes == 1 ? "" : "s") +
+           " failed to read the process handle table, so every traffic "
+           "column is unmeasured for this run (not zero). Re-run; if it "
+           "persists the handle table is being denied.\r\n";
+}
+
+// Returns how many passes FAILED during this call - see
+// SocketTrafficSampler::ScanFailureCount(). A failed pass merges nothing, so
+// every traffic cell it would have filled stays blank, and without this return
+// the caller cannot tell that blank from "this connection moved no bytes".
+//
+// The early return on an empty PID set reports 0, not 1: there was nothing to
+// scan, so nothing failed. Counting it would fire the diagnostic on every
+// `--select` that matched no process at all.
+unsigned JoinTrafficPids(ConnectionStore& store, const std::vector<DWORD>& pids) {
+    if (pids.empty()) return 0;
+    const unsigned before = TrafficSampler().ScanFailureCount();
     const std::map<DWORD, PidTraffic> totals = TrafficSampler().Sample(pids);
     for (const auto& kv : totals)
         store.SetTraffic(kv.first, kv.second.rx, kv.second.tx);
@@ -902,6 +937,7 @@ void JoinTrafficPids(ConnectionStore& store, const std::vector<DWORD>& pids) {
     // both the per-connection and the per-process rate can be computed. See
     // ConnectionStore::ComputeRates for why this cannot happen earlier.
     (void)store.ComputeRates();
+    return TrafficSampler().ScanFailureCount() - before;
 }
 
 // What the renderers will print for these options (remote addresses, GeoIP
@@ -1339,7 +1375,18 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
         }
         JoinGeoAddrs(store, db, sel.geoTargets);
     }
-    if (opt.traffic) JoinTrafficPids(store, sel.pids);
+    if (opt.traffic) {
+        // A failed pass is named explicitly, and BEFORE the unenrichable-window
+        // note below - that note claims the rows are unmeasurable, which is
+        // exactly the wrong diagnosis when the cause was the scan. The
+        // unenrichable note also declines to fire for traffic columns at all
+        // (see its own comment: per-PID blanks used to be indistinguishable
+        // from no-totals, which is precisely the gap this closes).
+        const unsigned failed = JoinTrafficPids(store, sel.pids);
+        if (failed != 0 && advice != nullptr) {
+            *advice += TrafficScanFailedNote(failed);
+        }
+    }
     if (HasEnrichmentClause(opt.filter)) {
         // A filter with an enrichment clause has had NO view applied yet:
         // SelectedForPrint's pre-join branch works off the flat rows (the
@@ -1956,7 +2003,17 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
         JoinGeoAddrs(store, db, std::vector<GeoTarget>(1, t));
     }
     if (eo.traffic) {
-        JoinTrafficPids(store, std::vector<DWORD>(1, chosen.pid));
+        // Reported here for the same reason as in the list path: a failed pass
+        // leaves every traffic field in the detail block at its unmeasured
+        // value, and the reader would otherwise see a connection that simply
+        // moved no bytes.
+        const unsigned failed =
+            JoinTrafficPids(store, std::vector<DWORD>(1, chosen.pid));
+        if (failed != 0) {
+            // Assigned, not appended: r.err is empty at this point, and the
+            // note already carries its own terminator.
+            r.err = TrafficScanFailedNote(failed);
+        }
     }
     // A one-shot command pays the ~48 ms thread snapshot inline, because the
     // alternative is to exit before the background worker ever answers - which
