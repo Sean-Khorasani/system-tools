@@ -171,25 +171,49 @@ bool QueryTcpInfo(HANDLE h, ULONGLONG* in, ULONGLONG* out,
     return true;
 }
 
+// Capacity of the address text buffer below, in wchar_t (NOT bytes).
+//
+// WHY THIS EXISTS, because the four call sites used to say `sizeof(buf) / 2`
+// and that is the "reconstruct a buffer size from far away" problem C7 names:
+// the /2 is only correct because sizeof(wchar_t) == 2, which is a platform
+// assumption stated nowhere, and a reader has to work it out to check the
+// bound. InetNtopW counts wchar_t, not bytes, so the argument must be a
+// character count and the arithmetic must not hide inside a division.
+//
+// The number itself, derived rather than guessed:
+//   INET6_ADDRSTRLEN (46) is the longest IPv6 text form INCLUDING the NUL, so
+//   that is what InetNtopW needs for AF_INET6. kScopeSuffixMaxChars (8) is the
+//   longest scope suffix Ipv6ScopeSuffix can append: "%" plus a uint32, which
+//   is at most 10 digits, so 11 - and 8 is not enough for that. See the
+//   static_assert below; it fails to compile if either assumption stops holding.
+constexpr size_t kScopeSuffixMaxChars = 12;   // '%' + up to 10 digits + slack
+constexpr size_t kAddrTextChars = INET6_ADDRSTRLEN + kScopeSuffixMaxChars;
+static_assert(kScopeSuffixMaxChars >= 11,
+              "a scope id is a uint32: '%' plus ten digits plus the NUL");
+static_assert(kAddrTextChars >= INET6_ADDRSTRLEN,
+              "InetNtopW needs INET6_ADDRSTRLEN for AF_INET6");
+
 // The socket's 4-tuple in the printable form the store keys on, so a sampled
 // age can be matched to the row that owns it. Best effort: a listening socket
 // has no peer and reports 0, which simply yields no entry.
 void QuerySocketEndpoints(HANDLE h, std::wstring* local, UINT* localPort,
                           std::wstring* remote, UINT* remotePort) {
     SOCKET s = static_cast<SOCKET>(reinterpret_cast<ULONG_PTR>(h));
-    wchar_t buf[INET6_ADDRSTRLEN + 16] = {0};
+    wchar_t buf[kAddrTextChars] = {0};
     sockaddr_storage ss = {};
     int len = sizeof(ss);
     const int gsn = ::getsockname(s, reinterpret_cast<sockaddr*>(&ss), &len);
     if (gsn == 0 && len >= static_cast<int>(sizeof(sockaddr))) {
         if (ss.ss_family == AF_INET) {
             const auto* a = reinterpret_cast<const sockaddr_in*>(&ss);
-            if (::InetNtopW(AF_INET, &a->sin_addr, buf, sizeof(buf) / 2) != nullptr)
+            if (::InetNtopW(AF_INET, &a->sin_addr, buf,
+                            static_cast<DWORD>(kAddrTextChars)) != nullptr)
                 *local = buf;
             *localPort = ::ntohs(a->sin_port);
         } else if (ss.ss_family == AF_INET6) {
             const auto* a = reinterpret_cast<const sockaddr_in6*>(&ss);
-            if (::InetNtopW(AF_INET6, &a->sin6_addr, buf, sizeof(buf) / 2) != nullptr) {
+            if (::InetNtopW(AF_INET6, &a->sin6_addr, buf,
+                            static_cast<DWORD>(kAddrTextChars)) != nullptr) {
                 *local = buf;
                 // The scope suffix follows the store's rule (Ipv6ScopeSuffix),
                 // because this string is matched against the store's own
@@ -214,12 +238,14 @@ void QuerySocketEndpoints(HANDLE h, std::wstring* local, UINT* localPort,
         len >= static_cast<int>(sizeof(sockaddr))) {
         if (ss.ss_family == AF_INET) {
             const auto* a = reinterpret_cast<const sockaddr_in*>(&ss);
-            if (::InetNtopW(AF_INET, &a->sin_addr, buf, sizeof(buf) / 2) != nullptr)
+            if (::InetNtopW(AF_INET, &a->sin_addr, buf,
+                            static_cast<DWORD>(kAddrTextChars)) != nullptr)
                 *remote = buf;
             *remotePort = ::ntohs(a->sin_port);
         } else if (ss.ss_family == AF_INET6) {
             const auto* a = reinterpret_cast<const sockaddr_in6*>(&ss);
-            if (::InetNtopW(AF_INET6, &a->sin6_addr, buf, sizeof(buf) / 2) != nullptr) {
+            if (::InetNtopW(AF_INET6, &a->sin6_addr, buf,
+                            static_cast<DWORD>(kAddrTextChars)) != nullptr) {
                 *remote = buf;
                 // Same rule as the local half above; see the comment there.
                 *remote += Ipv6ScopeSuffix(a->sin6_addr.s6_addr,

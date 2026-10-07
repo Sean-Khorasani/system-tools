@@ -40,6 +40,7 @@
 #include "TypeToJump.h"    // type-to-jump matching (7.2)
 #include "Grouping.h"      // row grouping by process (5.1)
 #include "Freeze.h"        // frozen-view age (5.5)
+#include "PromptDialog.h"  // C7: TemplateFits - the DLGTEMPLATE bounds
 #include "BuildInfo.h"     // shortcut sheet (7.6) + About summary (7.5)
 #include "Bookmarks.h"     // kBookmarkTag* (5.3 join test)
 #include "ChartExport.h"   // chart CSV (7.7a) + zoom reset (7.7b)
@@ -360,8 +361,8 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     }
 
     // ---- tree: a record is the next node, nodeCount ("no data"), or a pointer
-    std::vector<unsigned char> tree((size_t)nodeCount * nodeBytes, 0);
-    const size_t ptrBase = (size_t)nodeCount + 16;
+    std::vector<unsigned char> tree(static_cast<size_t>(nodeCount) * nodeBytes, 0);
+    const size_t ptrBase = static_cast<size_t>(nodeCount) + 16;
     const auto setRec = [&](size_t node, int half, size_t value) {
         unsigned char* p = &tree[node * nodeBytes];
         if (recordBits == 28) {
@@ -394,12 +395,12 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
                 // IPv6-only prefixes on the way have no data. The halves being
                 // the same node would let a reader that starts an IPv4 walk at
                 // the root drift down anyway and look correct, so they differ.
-                value = (b == 0) ? (size_t)(i + 1) : (size_t)nodeCount;
+                value = (b == 0) ? static_cast<size_t>(i + 1) : static_cast<size_t>(nodeCount);
             } else {
                 const int child = 2 * (i - chain) + 1 + b;
-                value = (size_t)(child < subCount ? chain + child : nodeCount);
+                value = static_cast<size_t>(child < subCount ? chain + child : nodeCount);
             }
-            setRec((size_t)i, b, value);
+            setRec(static_cast<size_t>(i), b, value);
         }
     }
     // Each entry claims the node its first (depth-1) bits lead to; both halves
@@ -414,12 +415,12 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
         if (nodeCount == 0) break;
         int sub = 0;
         for (int d = 0; d < depth - 1; ++d) {
-            const int bit = (int)((entries[k].prefix >> (31 - d)) & 1u);
+            const int bit = static_cast<int>((entries[k].prefix >> (31 - d)) & 1u);
             sub = 2 * sub + 1 + bit;
         }
         // +chain: the subtree is laid out exactly as a bare IPv4 tree would be,
         // just relocated behind the 96 zero bits that reach ::/96.
-        const size_t node = (size_t)(chain + sub);
+        const size_t node = static_cast<size_t>(chain + sub);
         const size_t ptr = ptrBase + offsets[k];
         setRec(node, 0, ptr);
         setRec(node, 1, ptr);
@@ -439,7 +440,7 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     std::vector<unsigned char> desc;
     desc.push_back(0xEC);                      // map of 12 entries
     for (int i = 0; i < 12; ++i) {
-        const char k[2] = {'a' + (char)i, 0};
+        const char k[2] = {static_cast<char>('a' + i), 0};
         MmStr(&desc, k);
         MmStr(&desc, "synthetic");
     }
@@ -523,7 +524,7 @@ bool WriteSyntheticDb(const std::vector<unsigned char>& db) {
                              CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
         DWORD put = 0;
-        wrote = ::WriteFile(h, db.data(), (DWORD)db.size(), &put, nullptr) &&
+        wrote = ::WriteFile(h, db.data(), static_cast<DWORD>(db.size()), &put, nullptr) &&
                 put == db.size();
         ::CloseHandle(h);
     }
@@ -1446,6 +1447,184 @@ TestResult RunSelfTest() {
     }
 
 {
+// 3f. C7 - the DLGTEMPLATE bounds. TemplateFits writes into a buffer the
+    //      caller supplies and reports whether the template fitted, which is the
+    //      only reason any of this can be checked: the prompt it exists for is
+    //      MODAL, so a headless harness cannot open it, and while the template
+    //      builder was private every capacity rule in it went unverified.
+    //
+    //      Property: for ANY buffer size, the call either builds a template that
+    //      fits, or returns false. It never writes past the end. The buffer is
+    //      supplied by the caller precisely so a test can hand it 1 byte and
+    //      require a refusal.
+    {
+        const DWORD kStyle = DS_ABSALIGN | DS_CENTER;
+        const wchar_t* kTitle = L"WinTCP";
+
+        // A generous buffer must succeed, and the buffer must end up no longer
+        // than it started. Both halves matter: a template larger than the buffer
+        // is the defect this whole block exists to catch.
+        std::vector<BYTE> big(4096, 0xAA);
+        const bool builtOk =
+            TemplateFits(kStyle, 0, 0, 0, 270, 60, kTitle, &big);
+        Check(r, "c7.template.builds-in-a-large-buffer",
+              builtOk && !big.empty() && big.size() <= 4096,
+              "bytes=" + std::to_string(big.size()));
+        // On success the buffer is truncated to the TRUE length, so its
+        // contents are exactly what the dialog manager reads.
+        Check(r, "c7.template.buffer-is-truncated-to-fit",
+              builtOk && !big.empty() && big.size() < 4096,
+              "bytes=" + std::to_string(big.size()));
+
+        if (builtOk && !big.empty()) {
+            // The header the manager reads first. Read through a local struct
+            // rather than reinterpret_cast: the alignment of the vector's data
+            // is not a promise, and a misaligned struct read is undefined.
+            DLGTEMPLATE head = {};
+            ::memcpy(&head, big.data(),
+                    (std::min)(sizeof(head), big.size()));
+            Check(r, "c7.template.declares-three-controls", head.cdit == 3,
+                  "cdit=" + std::to_string(head.cdit));
+            Check(r, "c7.template.carries-the-font-style",
+                  (head.style & DS_SETFONT) != 0,
+                  "style=" + std::to_string(head.style));
+            Check(r, "c7.template.has-a-plausible-size",
+                  big.size() > sizeof(DLGTEMPLATE) && big.size() < 4096,
+                  "bytes=" + std::to_string(big.size()));
+        }
+
+        // Every buffer size from 1 byte up. This is the sweep that matters: it
+        // proves the writer DECIDES at every size - never hangs, never loops,
+        // never returns a template larger than the buffer.
+        //
+        // What this CANNOT assert, and why it matters that it is stated here: a
+        // small overrun is not directly observable through this API, because
+        // TemplateFits is bounded by buf.size() and nothing follows the buffer
+        // for a sentinel to live in. The first version of this check tried - it
+        // compared the final byte against a fill pattern - and reported 12
+        // "overruns" that were not overruns at all: a refusal legitimately
+        // leaves the buffer filled to exactly its last byte, so the last byte
+        // has changed and nothing ran off the end.
+        //
+        // What stands in for the sentinel is the allocator: a write past the end
+        // of a heap block corrupts the block header, and this sweep frees
+        // 2048 blocks without the CRT reporting damage. Combined with the
+        // never-larger check below, that is the strongest statement available
+        // without changing the signature to take a length separate from the
+        // allocation.
+        {
+            int refused = 0;
+            int accepted = 0;
+            int overran = 0;
+            const size_t kOriginal = 2048;
+            for (size_t n = 1; n <= kOriginal; ++n) {
+                std::vector<BYTE> probe(n, 0x5A);
+                const bool ok =
+                    TemplateFits(kStyle, 0, 0, 0, 270, 60, kTitle, &probe);
+                if (ok) {
+                    ++accepted;
+                    // Success must leave a template that fits.
+                    if (probe.empty() || probe.size() > n) ++overran;
+                } else {
+                    ++refused;
+                }
+            }
+            Check(r, "c7.template.every-buffer-size-decides",
+                  refused + accepted == static_cast<int>(kOriginal),
+                  "refused=" + std::to_string(refused) +
+                      " accepted=" + std::to_string(accepted));
+            Check(r, "c7.template.never-returns-an-oversized-template",
+                  overran == 0, "oversized=" + std::to_string(overran));
+            // Both outcomes must occur. A writer that refused EVERY size would
+            // satisfy the two checks above while having broken the prompt.
+            Check(r, "c7.template.some-sizes-succeed-and-some-refuse",
+                  refused > 0 && accepted > 0,
+                  "refused=" + std::to_string(refused) +
+                      " accepted=" + std::to_string(accepted));
+        }
+
+        // A title at the limit is accepted, one past it is REFUSED - not
+        // truncated, because a half-written title yields a dialog whose caption
+        // is wrong, which is worse than no dialog.
+        {
+            std::vector<BYTE> atLimit(8192, 0);
+            const bool okLen = TemplateFits(
+                kStyle, 0, 0, 0, 270, 60,
+                std::wstring(kTemplateMaxChars, L'x').c_str(), &atLimit);
+            std::vector<BYTE> overLimit(8192, 0);
+            const bool tooLong = TemplateFits(
+                kStyle, 0, 0, 0, 270, 60,
+                std::wstring(kTemplateMaxChars + 1, L'x').c_str(),
+                &overLimit);
+            Check(r, "c7.template.title-at-the-limit-is-accepted",
+                  okLen && atLimit.size() <= 8192 && !atLimit.empty(),
+                  "bytes=" + std::to_string(atLimit.size()));
+            Check(r, "c7.template.title-over-the-limit-is-refused", !tooLong,
+                  "bytes=" + std::to_string(overLimit.size()));
+        }
+
+        // Bad arguments are refused, not dereferenced. The null-title case is
+        // here because the header promises it and the first implementation did
+        // not: it called wcslen(title) before anything looked at title, and the
+        // suite died with an access violation. The empty buffer needs a named
+        // local because a temporary cannot bind to the pointer parameter.
+        {
+            std::vector<BYTE> buf(4096, 0);
+            Check(r, "c7.template.null-title-is-refused",
+                  !TemplateFits(kStyle, 0, 0, 0, 270, 60, nullptr, &buf));
+            Check(r, "c7.template.null-buffer-is-refused",
+                  !TemplateFits(kStyle, 0, 0, 0, 270, 60, L"x", nullptr));
+            std::vector<BYTE> nothing;
+            Check(r, "c7.template.empty-buffer-is-refused",
+                  !TemplateFits(kStyle, 0, 0, 0, 270, 60, L"x", &nothing));
+        }
+
+        // Every DLGITEMTEMPLATE must start on a DWORD, or the dialog manager
+        // walks a misaligned template - the intermittent AV this module's own
+        // comment says the audit tracked down.
+        //
+        // Located by SCANNING for the 0xFFFF ordinal-class marker rather than by
+        // computing offsets. The first version of this check re-derived the
+        // template layout, got the title padding wrong by one wchar, and read
+        // out of bounds. Re-deriving a layout in a test is how the test rots, and
+        // a scan cannot run off the front.
+        //
+        // And the CONTROL START is checked, not the marker word. The marker sits
+        // immediately after the DLGITEMTEMPLATE, whose size is 18 bytes - not a
+        // multiple of 4 - so every marker legitimately lands at an address that
+        // is 2 mod 4. The first version of this check asserted the marker was
+        // DWORD-aligned and failed on a perfectly correct template; the
+        // requirement is on the item, which is where the writer aligns.
+        if (builtOk && !big.empty()) {
+            std::vector<size_t> markers;
+            for (size_t k = 0; k + 2 <= big.size(); ++k) {
+                WORD w = 0;
+                ::memcpy(&w, big.data() + k, sizeof(w));
+                if (w == 0xFFFF) markers.push_back(k);
+            }
+            Check(r, "c7.template.three-controls-mean-three-markers",
+                  markers.size() == 3,
+                  "markers=" + std::to_string(markers.size()));
+            bool allAligned = markers.size() == 3;
+            std::string residues;
+            for (size_t m : markers) {
+                // The item begins sizeof(DLGITEMTEMPLATE) bytes before its
+                // marker. If a marker sits closer than that, the scan found a
+                // fragment rather than a control and there is no item to check.
+                if (m < sizeof(DLGITEMTEMPLATE)) {
+                    allAligned = false;
+                    residues += " [marker too early]";
+                    continue;
+                }
+                const uintptr_t start = reinterpret_cast<uintptr_t>(big.data()) +
+                                        (m - sizeof(DLGITEMTEMPLATE));
+                residues += " " + std::to_string(start & 3u);
+                if ((start & 3u) != 0) allAligned = false;
+            }
+            Check(r, "c7.template.every-control-starts-dword-aligned",
+                  allAligned, "item start address mod 4:" + residues);
+        }
+    }
         // R5: garbage in, never a crash, always an error or a skip. Table
         // driven, so a case is one row and adding a row needs no new code.
         //

@@ -198,7 +198,7 @@ void Mark(const char* what) {
     const DWORD n = ++g_tick;
     g_lastTick = static_cast<LONG>(n);
     char b[256];
-    std::snprintf(b, sizeof(b), "-- section %lu: %s\n", (unsigned long)n, what);
+    std::snprintf(b, sizeof(b), "-- section %lu: %s\n", static_cast<unsigned long>(n), what);
     Say(b);
 }
 
@@ -210,7 +210,7 @@ void Watchdog() {
         if (g_done) return;
     }
     Sayf("!! WATCHDOG: still inside section %ld after 180s - HANG\n",
-         (long)g_lastTick);
+         static_cast<long>(g_lastTick));
     // Hard exit: the window's message loop is stuck, so returning from here
     // would never happen. ExitProcess unwinds nothing, which is what we want.
     ::ExitProcess(3);
@@ -396,7 +396,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         int procSlot = -1;
         for (int v = 0; v < 23; ++v) {
             const std::string arg = std::to_string(v);
-            if ((int)Num(w, "visibleCol", arg.c_str()) == COL_PROCESS) {
+            if (static_cast<int>(Num(w, "visibleCol", arg.c_str())) == COL_PROCESS) {
                 procSlot = v;
                 break;
             }
@@ -465,7 +465,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                 std::snprintf(line, sizeof(line),
                               "SMOKE 7.2 type-to-jump: the selected row really starts "
                               "with '%lc' (label '%s', first char 0x%02X)",
-                              pick, firstLabel.c_str(), (unsigned)c0);
+                              pick, firstLabel.c_str(), static_cast<unsigned>(c0));
                 Check(LabelStartsWith(firstLabel, pick), line,
                       "the selection landed on a row that does not match the key");
             }
@@ -493,8 +493,8 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // Hiding a VISIBLE column must shrink the list's column set; showing
         // it again must put it back. This is the observable consequence of
         // the column machinery that 7.1 reorders.
-        const int v0 = (int)Num(w, "visibleCol", "0");
-        const int v1 = (int)Num(w, "visibleCol", "1");
+        const int v0 = static_cast<int>(Num(w, "visibleCol", "0"));
+        const int v1 = static_cast<int>(Num(w, "visibleCol", "1"));
         Check(v0 >= 0 && v1 >= 0, "SMOKE column machinery: visible columns resolve",
               "VisibleToCol returned -1 for a shown column");
 
@@ -506,7 +506,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         int shownSlot = -1;
         for (int v = 2; v < 23; ++v) {
             const std::string arg = std::to_string(v);
-            const int col = (int)Num(w, "visibleCol", arg.c_str());
+            const int col = static_cast<int>(Num(w, "visibleCol", arg.c_str()));
             if (col >= 0 && Num(w, "columnWidth", arg.c_str()) > 0) {
                 shownCol = col;
                 shownSlot = v;
@@ -521,8 +521,8 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // The command id for a ColumnId is IDM_COL_BASE + that id.
         Cmd(hwnd, static_cast<WORD>(IDM_COL_BASE + shownCol));
         Pump(500);
-        const int hidden = (int)Num(w, "visibleCol",
-                                    std::to_string(shownSlot).c_str());
+        const int hidden = static_cast<int>(Num(w, "visibleCol",
+                                    std::to_string(shownSlot).c_str()));
         std::snprintf(line, sizeof(line),
                       "SMOKE 16 columns: hiding ColumnId %d removes it from the "
                       "visible mapping (slot %d now -> %d)",
@@ -532,8 +532,8 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
 
         Cmd(hwnd, static_cast<WORD>(IDM_COL_BASE + shownCol));
         Pump(500);
-        const int back = (int)Num(w, "visibleCol",
-                                  std::to_string(shownSlot).c_str());
+        const int back = static_cast<int>(Num(w, "visibleCol",
+                                  std::to_string(shownSlot).c_str()));
         std::snprintf(line, sizeof(line),
                       "SMOKE 16 columns: showing it again restores the mapping "
                       "(slot %d -> %d)", shownSlot, back);
@@ -542,8 +542,8 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         const long o0 = Num(w, "colOrderSize");
         std::snprintf(line, sizeof(line),
                       "SMOKE 7.1 column order: the permutation is fully sized (%ld "
-                      "entries, expected %d)", o0, (int)COL_COUNT);
-        Check(o0 == (long)COL_COUNT, line, "colOrder_ is not COL_COUNT long");
+                      "entries, expected %d)", o0, static_cast<int>(COL_COUNT));
+        Check(o0 == static_cast<long>(COL_COUNT), line, "colOrder_ is not COL_COUNT long");
     }
 
     // ---- 5.4 change-log window (SMOKE: open/close only) --------------------
@@ -800,7 +800,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         int remoteSlot = -1;
         for (int v = 0; v < 23; ++v) {
             const std::string arg = std::to_string(v);
-            if ((int)Num(w, "visibleCol", arg.c_str()) == COL_REMOTE) {
+            if (static_cast<int>(Num(w, "visibleCol", arg.c_str())) == COL_REMOTE) {
                 remoteSlot = v;
                 break;
             }
