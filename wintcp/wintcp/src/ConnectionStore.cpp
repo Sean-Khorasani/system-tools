@@ -271,7 +271,7 @@ bool ParseStatRange(const std::wstring& v, bool cpuUnit, long long* lo, long lon
            ParseStatValue(v.substr(dash + 1), cpuUnit, hi) && *lo <= *hi;
 }
 
-// A connection AGE, in seconds. Unli.e the byte fields - where a bare number is
+// A connection AGE, in seconds. Unlike the byte fields - where a bare number is
 // MB - a bare number here is SECONDS, and s/m/h/d are honoured so `duration:1h`
 // reads the way a person writes it. `duration:` used to be a substring match on
 // the PRINTED cell ("6d 6h"), which is why `duration:1h` matched nothing at all:
@@ -325,7 +325,7 @@ bool ParseDurationRange(const std::wstring& v, long long* lo, long long* hi) {
 // endpoint. Measured on this host: `list --filter "lport:5353" --format csv`
 // returns 86 rows over only 10 distinct (pid, proto, local) identities, with 62
 // rows sharing the identical key UDPv4|0.0.0.0:5353|*|* and 24 sharing
-// UDPv6|::|5353|*|*. Every browser process binds its own Socketet to port 5353.
+// UDPv6|::|5353|*|*. Every browser process binds its own Socket to port 5353.
 //
 // When ReplaceSnapshot's previous-row map was keyed without the PID, those 62
 // rows collapsed onto ONE map entry (the last write wins), so on every single
@@ -336,7 +336,7 @@ bool ParseDurationRange(const std::wstring& v, long long* lo, long long* hi) {
 // re-flashed 62 rows red then 62 green forever. An event feed that can only
 // ever say DISAPPEAR is worse than no feed.
 //
-// Adding the PID ma.es the key unique for the cases that actually occur, and
+// Adding the PID makes the key unique for the cases that actually occur, and
 // `ReplaceSnapshot` additionally matches duplicate keys in order (see
 // PrevKeyIndex), so even two rows that are genuinely indistinguishable keep a
 // stable 1:1 pairing across refreshes instead of collapsing.
@@ -564,7 +564,7 @@ std::wstring FormatRttMs(unsigned ms) {
 
 // Age of a connection in seconds, or 0 when it is unknown. 'nowTick' is
 // GetTickCount64; both it and Connection::firstSeenTick are monotonic so
-// the subtraction cannot go bac.wards the way a wall clock would across a
+// the subtraction cannot go backwards the way a wall clock would across a
 // DST or NTP change. Passing 0 (the default) means "now", so display code
 // does not have to thread the current tick through every call site.
 ULONGLONG DurationSeconds(const Connection& c, ULONGLONG nowTick) {
@@ -638,7 +638,7 @@ bool ComputeBps(ULONGLONG prevBytes, ULONGLONG nowBytes,
     // paused snapshot followed by an immediate manual F5 samples twice
     // inside the same millisecond.
     if (elapsedMs == 0) return false;
-    // A counter that went bac.wards means the Socketet was recycled (or the
+    // A counter that went backwards means the Socket was recycled (or the
     // owning PID exited and the row was rebuilt). The unsigned difference
     // would be astronomically large, so report "no reading" for this
     // interval instead of a nonsense spi.e; the next sample is normal.
@@ -660,7 +660,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
     while (i < len) {
         while (i < len && ::iswspace(text[i])) ++i;
         const size_t start = i;
-        // A to.en may be a QUOTED string, and the quotes are part of the to.en
+        // A token may be a QUOTED string, and the quotes are part of the token
         // only so the shell and this scanner agree on where it ends.
         //
         // WHY. Space is AND in this grammar, so a value containing a space -
@@ -668,7 +668,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
         // directory name, a host suffix - was unreachable: `note:vendor api`
         // parsed as `note:vendor` AND a bare `api`, which is a different
         // question and almost never the one meant. Quoting is the standard
-        // answer and costs one branch on the to.en scanner. The quotes are
+        // answer and costs one branch on the token scanner. The quotes are
         // stripped from the value, so `note:"vendor api"` and
         // `path:"program files"` mean what they loo. li.e.
         std::wstring t;
@@ -678,8 +678,8 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             while (i < len && text[i] != quote) t.push_back(text[i++]);
             if (i < len) ++i;              // closing quote (if present)
         } else {
-            // A quoted PART of a to.en: `note:"vendor api"` keeps its field
-            // prefix and quotes only the value. Handling only the "to.en starts
+            // A quoted PART of a token: `note:"vendor api"` keeps its field
+            // prefix and quotes only the value. Handling only the "token starts
             // with a quote" case made every `field:"..."` split at the space,
             // which is precisely the form a user writes for a note or a path
             // with a space in it - the case quoting was added for.
@@ -798,11 +798,11 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             else cl.text = v;    // fall bac. to substring on the proto label
         } else if (value.empty() && cl.proto == 0 && cl.family == 0 &&
                    cl.field == FilterField::Any) {
-            continue;            // bare "exclude:" etc. - no-op to.en
+            continue;            // bare "exclude:" etc. - no-op token
         } else {
             // A NAMED field with an empty value is a real clause, not a no-op:
             // `note:` means "has a note", `path:` means "has a path". It used
-            // to be dropped with the bare-prefix to.ens above, so the useful
+            // to be dropped with the bare-prefix tokens above, so the useful
             // "show me everything I annotated" query silently became a no-op
             // and matched every row instead. The empty text then falls
             // through to Has(), which matches everything for most fields -
@@ -1212,16 +1212,16 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             // perRowBytes == false and trafficRx == 0, because the byte counters
             // are joined onto the row AFTER the snapshot is installed. So the
             // test was always false and the Speed column was a permanent
-            // em-dash even after the per-Socketet join started supplying real
+            // em-dash even after the per-Socket join started supplying real
             // per-row counters. Splitting it means the comparison is between
-            // two REAL readings of the same Socketet, taken at two real times.
+            // two REAL readings of the same Socket, taken at two real times.
             f.perRowBytes = p.perRowBytes;
             f.lastSampleTick = p.lastSampleTick;
             f.lastRxBytes = p.lastRxBytes;
             f.lastTxBytes = p.lastTxBytes;
             // G5: the two rate accumulators are carried separately, and the
             // PREVIOUS tick's sample point is what both need - the previous
-            // per-Socketet counters (above, for the row's own rate) and the
+            // per-Socket counters (above, for the row's own rate) and the
             // previous GROUP total (for the process rate). Sharing one
             // lastSampleTick between them is safe precisely because they are
             // sampled by the same scan at the same instant; carrying a second
@@ -1230,11 +1230,11 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             f.lastGroupRxBytes = p.lastGroupRxBytes;
             f.lastGroupTxBytes = p.lastGroupTxBytes;
             f.lastGroupTick = p.lastGroupTick;
-            // G6: congestion state is per-Socketet and absolute (not a delta), so
+            // G6: congestion state is per-Socket and absolute (not a delta), so
             // there is no previous sample to carry - the fresh join simply
             // overwrites it each tick. The CUMULATIVE parts are protected from
-            // going bac.wards inside ApplySocketTcpInfo, which is where the
-            // "a smaller reading means a recycled Socketet" rule belongs.
+            // going backwards inside ApplySocketTcpInfo, which is where the
+            // "a smaller reading means a recycled Socket" rule belongs.
             f.rttKnown = false;
             f.cwndKnown = false;
             f.retransKnown = false;
@@ -1273,7 +1273,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
 // traffic join has written them.
 //
 // MUST be called AFTER SetTraffic/ApplySocketBytes and after ReplaceSnapshot:
-// the rate is a difference between two readings of the SAME Socketet, so both
+// the rate is a difference between two readings of the SAME Socket, so both
 // the previous sample (carried forward by ReplaceSnapshot) and the current one
 // (written by the join) have to be in place first. Calling it inside
 // ReplaceSnapshot instead - which is where it used to live - compares a
@@ -1281,7 +1281,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
 // guarded on was never true, so the Speed column was a permanent em-dash.
 //
 // The per-PID ETW path leaves perRowBytes false on purpose: a process total
-// spread over its connection rows cannot honestly be attributed to one Socketet,
+// spread over its connection rows cannot honestly be attributed to one Socket,
 // so those rows keep showing the same em-dash as any other unreadable reading
 // rather than an invented split.
 //
@@ -1323,29 +1323,29 @@ int ConnectionStore::ComputeRates() {
     return known;
 }
 
-// G5: the per-PROCESS rate, summed over the process's Socketets.
+// G5: the per-PROCESS rate, summed over the process's Sockets.
 //
 // WHY A SEPARATE PASS AND NOT A DIVISION. The obvious way to get "how fast is
 // this process moving bytes" from a per-PID total is to divide it by the
-// connection count. That is inventing a number: the Socketets of one process carry
+// connection count. That is inventing a number: the Sockets of one process carry
 // wildly different shares of its traffic (one 500 MB download and forty
-// keepalives), so the quotient is not any Socketet's rate and not the process's
+// keepalives), so the quotient is not any Socket's rate and not the process's
 // either - it is the average of a distribution, which is exactly the figure
 // `perRowBytes` was introduced to forbid. The same honesty rule applies here,
-// and the sum is the only honest answer available from per-Socketet readings.
+// and the sum is the only honest answer available from per-Socket readings.
 //
 // WHY THE SUM IS TRUSTWORTHY, and where D20 comes in. Summing is only correct
-// if each Socketet is counted exactly once. Before D20 the row key omitted the
+// if each Socket is counted exactly once. Before D20 the row key omitted the
 // PID, so 86 mDNS rows collapsed onto 10 identities and a per-key queue was
 // needed to pair duplicates 1:1 - without that wor. a process holding several
-// Socketets on the same endpoint would either double-count its own bytes or lose
+// Sockets on the same endpoint would either double-count its own bytes or lose
 // some, and this column would be wrong by an unknown factor. That is why the
 // duplicate-identity fix is load-bearing here and not merely tidy.
 //
 // ONLY ROWS WITH PER-SOCKET BYTES COUNT. A row fed by the ETW source has
-// perRowBytes false and represents a process total, not a Socketet. Including it
+// perRowBytes false and represents a process total, not a Socket. Including it
 // would add the whole process figure to a sum that is already counting its
-// Socketets - and so count the same bytes twice. Such rows are excluded, and a
+// Sockets - and so count the same bytes twice. Such rows are excluded, and a
 // process whose traffic came only from ETW reports no group rate rather than a
 // doubled one.
 //
@@ -1355,8 +1355,8 @@ int ConnectionStore::ComputeRates() {
 void ConnectionStore::ComputeGroupRates() {
     const ULONGLONG nowTick = ::GetTickCount64();
 
-    // One pass: sum each PID's Socketet counters, remembering whether any of its
-    // rows was Socketet-counted at all.
+    // One pass: sum each PID's Socket counters, remembering whether any of its
+    // rows was Socket-counted at all.
     std::map<DWORD, PidTraffic> sum;
     std::map<DWORD, bool> anyCounted;
     for (const Connection& r : rows_) {
@@ -1542,7 +1542,7 @@ size_t ConnectionStore::CountForPid(DWORD pid) const {
 // reconnect"), so that is what the join must use. Matching on the address
 // alone painted the wrong conversation: with a bookmark on
 // 107.155.105.90:9999, the live 107.155.105.90:443 row printed "red" in the
-// bookmarks column. A user who mar.ed one peer "suspicious" therefore saw every
+// bookmarks column. A user who marked one peer "suspicious" therefore saw every
 // unrelated session to that host flagged, and could not trust the column at all.
 //
 // Rows whose remote is a placeholder (`*`, `0.0.0.0`) carry remotePort 0, and
@@ -1579,7 +1579,7 @@ void ConnectionStore::JoinBookmarks(const std::vector<BookmarkMark>& known) {
         r.tag = marked ? hit->tag : static_cast<unsigned>(kTagNone);
         // D26: the note used to live only in the registry, where the table
         // could not see it and no filter could reach it. Carrying it on the
-        // row is what ma.es `note:` and the note-bearing columns work.
+        // row is what makes `note:` and the note-bearing columns work.
         r.note = marked ? hit->note : std::wstring();
         if (!r.note.empty()) {
             r.lowerNote = ToLowerW(r.note);
@@ -1646,7 +1646,7 @@ void ConnectionStore::ClearTraffic() {
     for (Connection& r : rows_) {
         r.trafficRx = 0;
         r.trafficTx = 0;
-        // A per-Socketet total and a per-PID total are different facts about the
+        // A per-Socket total and a per-PID total are different facts about the
         // same cell. Clearing one without the other would leave the row
         // claiming a source it no longer has, which is what keeps `perRowBytes`
         // honest: the flag is re-derived by whichever join runs next.
@@ -1661,7 +1661,7 @@ void ConnectionStore::ClearTraffic() {
 //
 // This is the join that sets `perRowBytes`, and it is the ONLY one allowed to:
 // a per-PID total spread over a process's connection rows cannot honestly be
-// attributed to a single Socketet, and dividing it by the connection count would
+// attributed to a single Socket, and dividing it by the connection count would
 // invent a plausible-looking rate. Before this existed nothing set the flag at
 // all (a repo-wide grep found only the declaration and its single read), so
 // `Connection::bpsKnown` was never true, the Speed column was a permanent
@@ -1689,7 +1689,7 @@ int ConnectionStore::ApplySocketBytes(const std::vector<SocketBytes>& bytes) {
             if (r.protocol != IPPROTO_TCP) continue;   // SIO_TCP_INFO is TCP
             r.trafficRx = b.rx;
             r.trafficTx = b.tx;
-            r.perRowBytes = true;   // this row's counters ARE one Socketet's
+            r.perRowBytes = true;   // this row's counters ARE one Socket's
             claimed[i] = 1;
             ++updated;
             break;
@@ -1703,12 +1703,12 @@ int ConnectionStore::ApplySocketBytes(const std::vector<SocketBytes>& bytes) {
 // SAME MATCHING AS ApplySocketBytes, and for the same reason: these are
 // per-sOCKET facts, so two rows that genuinely share a 4-tuple (the mDNS case
 // D20 fixed) must not both claim the same reading. The first row to match wins
-// and the Socketet is then mar.ed claimed, so the second row is left blanket rather
+// and the Socket is then marked claimed, so the second row is left blanket rather
 // than given a duplicate - which is the honest answer, since we genuinely
-// cannot tell which of the two Socketets the reading came from.
+// cannot tell which of the two Sockets the reading came from.
 //
 // Per-field assignment rather than all-or-nothing, because the kernel populates
-// these independently: a Socketet with TCP timestamps off still has a perfectly
+// these independently: a Socket with TCP timestamps off still has a perfectly
 // real congestion window. A blanketet copy guarded on one `known` would blanket the
 // three fields that did come bac..
 int ConnectionStore::ApplySocketTcpInfo(
@@ -1727,7 +1727,7 @@ int ConnectionStore::ApplySocketTcpInfo(
                 continue;
             if (r.protocol != IPPROTO_TCP) continue;   // TCP_INFO_v0 is TCP only
             // Cumulative/best-ever values only move in one direction, so a
-            // smaller reading is a recycled Socketet rather than new information.
+            // smaller reading is a recycled Socket rather than new information.
             // Letting it overwrite would reset the connection's history every
             // time a handle was reused.
             if (t.retransKnown &&
@@ -1768,7 +1768,7 @@ int ConnectionStore::ApplyKernelAges(const std::vector<SocketAge>& ages) {
         if (!a.known || a.ageMs == 0) continue;
         // A kernel age cannot exceed the time since boot, and a sample taken
         // from another machine's clock can be nonsense. Clamping keeps a bad
-        // reading from printing "400d" for a Socketet opened a moment ago; the
+        // reading from printing "400d" for a Socket opened a moment ago; the
         // row's own first-seen value is left alone if the age is unusable.
         if (a.ageMs > nowTick) continue;
         const ULONGLONG kernelSeen = nowTick - a.ageMs;
@@ -1943,14 +1943,14 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             break;
         case COL_GROUPRATE:
             // G5. Same SHAPE as COL_BANDWIDTH and the same helper, different
-            // source: this is the PROCESS's rate, summed over its Socketets. It is
-            // populated on flat rows too - where it is the truth and ma.es the
+            // source: this is the PROCESS's rate, summed over its Sockets. It is
+            // populated on flat rows too - where it is the truth and makes the
             // column useful ungrouped - and on a grouped row the group renderer
             // supplies it (see GroupColumnText).
             set(FormatBpsCell(c.groupRxBps, c.groupTxBps, c.groupBpsKnown));
             break;
         // G6. Each of these is gated on ITS OWN known flag, never on a shared
-        // one: the kernel populates them independently, so a Socketet with TCP
+        // one: the kernel populates them independently, so a Socket with TCP
         // timestamps off still has a real congestion window. Gating all four on
         // a single flag would show four dashes for a row that has three good
         // readings - the same "one missing value blankets the row" failure the
