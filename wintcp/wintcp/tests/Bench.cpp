@@ -1445,6 +1445,371 @@ TestResult RunSelfTest() {
               MissingEnrichmentAdvice(cq));
     }
 
+{
+        // R5: garbage in, never a crash, always an error or a skip. Table
+        // driven, so a case is one row and adding a row needs no new code.
+        //
+        // Property under test, stated once: for any input below the call
+        // RETURNS, it does not read out of bounds, it does not loop forever,
+        // and it never invents a packet. "Never a crash" is not checkable from
+        // inside the process, so it is evidenced structurally - the bounds are
+        // checked BEFORE the reads that would need them (see r5.pcapng notes),
+        // and the gate would show a crashed driver as a non-zero exit.
+        // "Always an error" is pinned by asserting a non-empty error string,
+        // not merely !ok: a refusal that says nothing is what a reader cannot
+        // act on.
+
+        // --- pcapng block lengths -----------------------------------------
+        // The parser reads a 32-bit length at a fixed offset and then trusts
+        // it. These rows are the numbers that must not be believed: zero, the
+        // sub-header minimum, a non-multiple of 4, and 0xFFFFFFFF.
+        {
+            struct Case {
+                const char* name;
+                uint32_t blockLen;
+                // Wide from the start: p.error is a std::wstring, and MSVC
+                // under /permissive- rejects the const wchar_t* -> wstring
+                // implicit conversion that std::wstring(const char*) would
+                // otherwise have to guess at. L"" is the honest spelling.
+                const wchar_t* needle;
+            };
+            const Case cases[] = {
+                {"zero-length", 0, L"sane multiple of 4"},
+                {"below-header-minimum", 4, L"sane multiple of 4"},
+                {"one-byte", 1, L"sane multiple of 4"},
+                {"three-bytes", 3, L"sane multiple of 4"},
+                {"not-a-multiple-of-4", 17, L"sane multiple of 4"},
+                {"off-by-one-from-multiple", 0x00010001u, L"sane multiple of 4"},
+                // 0xFFFFFFFF is NOT caught by the truncation check, and the
+                // order matters: 4294967295 % 4 == 3, so the multiple-of-4
+                // test fires first (Pcapng.cpp:278) and reports that. The row
+                // asserts the refusal and the reason that actually comes back
+                // rather than the one that was expected when the row was
+                // written.
+                {"uint32-max", 0xFFFFFFFFu, L"sane multiple of 4"},
+                // A multiple of 4 that exceeds the file, so the truncation
+                // branch is the one under test. 1 MiB against an 80 KiB
+                // fixture: the earlier 0x00010000 was inside the file, so the
+                // parser consumed it as a real block and the row failed for
+                // an unrelated reason.
+                {"one-megabyte-length", 0x00100000u, L"truncated final block"},
+                // The boundary of the truncation branch: the smallest
+                // multiple-of-4 length that still exceeds the fixture.
+                // Everything at or under the remaining bytes is a REAL block
+                // and must be consumed, so this row is what separates "refuses
+                // nonsense" from "refuses everything".
+                {"just-past-the-end", 0x00020000u, L"truncated final block"},
+            };
+            for (const Case& c : cases) {
+                // WHY THE FILE IS 80 KiB, which is not incidental. ParsePcapng
+                // ends with a size discriminator: a file at or under 64 KiB
+                // that yielded no packet blocks is reported as "the capture
+                // produced no packets" (the pktmon-does-not-capture-loopback
+                // message), and only a LARGER file gets the "blocks but no
+                // packet blocks" wording. A small fixture therefore cannot
+                // observe a block-length refusal at all - the parse refuses
+                // correctly and then the tail overwrites the message. Padding
+                // past 64 KiB is what makes the refusal the visible verdict,
+                // so the check tests the length logic and not the tail.
+                const size_t kPad = 80u * 1024u;
+                std::vector<unsigned char> db(28 + kPad, 0);
+                db[0] = 0x0A; db[1] = 0x0D; db[2] = 0x0D; db[3] = 0x0A;  // SHB
+                db[4] = 28; db[5] = 0; db[6] = 0; db[7] = 0;               // len 28
+                db[8] = 0x4D; db[9] = 0x3C; db[10] = 0x2B; db[11] = 0x1A;  // magic LE
+                db[12] = 1; db[13] = 0; db[14] = 0; db[15] = 0;             // v1.0
+                db[16] = 0xFF; db[17] = 0xFF; db[18] = 0xFF; db[19] = 0xFF;  // -1 len
+                db[20] = 28; db[21] = 0; db[22] = 0; db[23] = 0;             // len 28
+                // Second block carries the length under test.
+                db[28] = 0x06; db[29] = 0; db[30] = 0; db[31] = 0;           // EPB
+                db[32] = (unsigned char)(c.blockLen & 0xFF);
+                db[33] = (unsigned char)((c.blockLen >> 8) & 0xFF);
+                db[34] = (unsigned char)((c.blockLen >> 16) & 0xFF);
+                db[35] = (unsigned char)((c.blockLen >> 24) & 0xFF);
+                const PcapngParse p = ParsePcapng(db.data(), db.size());
+                const std::string label =
+                    std::string("r5.pcapng.blocklen-") + c.name;
+                const bool saidWhy =
+                    p.error.find(c.needle) != std::wstring::npos;
+                Check(r, label.c_str(),
+                      !p.ok && saidWhy,
+                      "ok=" + std::string(p.ok ? "1" : "0") +
+                          " err=" + WideToUtf8(p.error) +
+                          " packets=" + std::to_string(p.packets.size()));
+                // Whatever the verdict, no packet may be invented from a file
+                // whose own block lengths are impossible.
+                Check(r, (std::string("r5.pcapng.blocklen-") + c.name +
+                          "-invents-nothing").c_str(),
+                      p.packets.empty(),
+                      "packets=" + std::to_string(p.packets.size()));
+            }
+        }
+
+        // --- pcapng: a real capture must still parse ------------------------
+        // The counterweight to all the garbage above. Every one of those rows
+        // asserts refusal, so a parser that refused everything - or that lost
+        // the packet loop - would pass the whole section. This builds a file
+        // with the structure pktmon actually emits and requires a packet out
+        // of it. Measured framing for a minimal Ethernet + IPv4 + TCP frame:
+        // 14 + 20 + 20 = 54 bytes, padded to 56 inside a 64-byte EPB.
+        {
+            std::vector<unsigned char> f;
+            auto put32 = [&f](uint32_t v) {
+                f.push_back((unsigned char)(v & 0xFF));
+                f.push_back((unsigned char)((v >> 8) & 0xFF));
+                f.push_back((unsigned char)((v >> 16) & 0xFF));
+                f.push_back((unsigned char)((v >> 24) & 0xFF));
+            };
+            auto put16 = [&f](uint16_t v) {
+                f.push_back((unsigned char)(v & 0xFF));
+                f.push_back((unsigned char)((v >> 8) & 0xFF));
+            };
+            auto put64 = [&f](uint64_t v) {
+                for (int i = 0; i < 8; ++i)
+                    f.push_back((unsigned char)((v >> (i * 8)) & 0xFF));
+            };
+            // SHB: type, length, byte-order magic, version (major+minor), a
+            // 64-BIT section length, trailing length = 4+4+4+4+8+4 = 28.
+            //
+            // The section length is 8 bytes, not 4. The first version of this
+            // fixture wrote it with put32, making the block 24 bytes while
+            // declaring 28 - so the parser resumed 4 bytes into the IDB, read
+            // its snaplen as a block length, and reported "not a sane multiple
+            // of 4". Every other field in the fixture was correct; this one
+            // word was not, and the symptom pointed at the parser.
+            put32(0x0A0D0D0A);
+            put32(28);
+            put32(0x1A2B3C4D);
+            put32(0x00010000);
+            put64(0xFFFFFFFFFFFFFFFFull);   // section length -1
+            put32(28);
+            // IDB, link type 1 (Ethernet)
+            put32(0x00000001);
+            put32(20);
+            put16(1);
+            put16(0);          // reserved
+            put32(0xFFFFFFFF); // snaplen
+            put32(20);
+            // EPB carrying one 54-byte TCP frame
+            // Fixed offsets, not a running count. The first version of this fixture
+            // pushed bytes one at a time and got the IP total length wrong by
+            // 30 (0x54 declared for a 40-byte frame), which makes the packet
+            // look truncated inside ParseIpTcp - a fixture fault that reads as
+            // a parser fault. The field layout below is the same one the
+            // passing pcapng.ethernet-tcp-parses check uses, which is
+            // deliberate: a second, differently-framed fixture would be a
+            // second chance to get the offsets wrong.
+            unsigned char fr[64] = {0};
+            fr[0] = 0x6c; fr[1] = 0x55; fr[5] = 0x08;   // dst MAC (see L5582)
+            fr[6] = 0xc0; fr[7] = 0x00; fr[8] = 0x02; fr[9] = 0x01;
+            fr[12] = 0x08; fr[13] = 0x00;                 // ethertype IPv4
+            fr[14] = 0x45;                               // v4, IHL 5
+            fr[16] = 0x00; fr[17] = 0x28;                // total 40 = 20+20
+            fr[23] = 6;                                  // TCP
+            fr[26] = 0xc0; fr[27] = 0x00;                // src 192.0.2.1
+            fr[30] = 0xc0; fr[31] = 0x02;                // dst 192.0.2.2
+            fr[34] = 0x1f; fr[35] = 0x90;                // sport 8080
+            fr[36] = 0x01; fr[37] = 0xbb;                // dport 443
+            fr[46] = 0x50;                               // data offset 5
+            fr[47] = 0x18;                               // PSH|ACK
+            std::vector<unsigned char> frame(fr, fr + 54);
+            // Block length counts EVERYTHING in the block, type and both length fields
+            // included: 4 (type) + 4 (len) + 20 (iface, ts x2, caplen,
+            // origlen) + 56 (padded frame) + 4 (trailing) = 88. The parser
+            // reads the frame at pos+28 and the trailing length at the end, so
+            // a wrong figure here resumes mid-frame and reports a nonsense
+            // length - indistinguishable from the parser refusing valid input.
+            put32(0x00000006);
+            put32(88);
+            put32(0);        // interface id
+            put32(0); put32(0);  // timestamps
+            put32(56);       // captured length, padded to a 4-byte boundary
+            put32(54);       // original length, the bytes actually captured
+            for (size_t i = 0; i < frame.size(); ++i) f.push_back(frame[i]);
+            f.push_back(0); f.push_back(0);   // pad 54 -> 56
+            put32(88);       // trailing length
+
+            const PcapngParse p = ParsePcapng(f.data(), f.size());
+            Check(r, "r5.pcapng.a-real-file-still-parses",
+                  p.ok && p.packets.size() == 1 && p.error.empty(),
+                  "ok=" + std::string(p.ok ? "1" : "0") +
+                      " packets=" + std::to_string(p.packets.size()) +
+                      " epbSeen=" + std::to_string(p.epbSeen) +
+                      " err=" + WideToUtf8(p.error));
+            // And the refusal rows above are refusing THIS parser, not a
+            // parser that stopped working: the same binary gets a packet here.
+            // The fields are srcPort/dstPort, not localPort/remotePort.
+            Check(r, "r5.pcapng.the-packet-it-kept-is-the-one-it-parsed",
+                  p.packets.size() == 1 && p.packets[0].srcPort == 8080 &&
+                      p.packets[0].dstPort == 443 &&
+                      p.packets[0].ipVersion == 4,
+                  p.packets.empty()
+                      ? std::string("<none>")
+                      : ("srcPort=" + std::to_string(p.packets[0].srcPort) +
+                         " dstPort=" + std::to_string(p.packets[0].dstPort) +
+                         " ipVersion=" + std::to_string(p.packets[0].ipVersion)));
+        }
+
+        // --- pcapng truncation at every prefix -----------------------------
+        // A valid SHB+EPB, truncated at every length from 0 to full. Any prefix
+        // must either parse cleanly or refuse; what must never happen is a
+        // crash, a hang, or a packet read past the end.
+        {
+            std::vector<unsigned char> full;
+            auto put32 = [&full](uint32_t v) {
+                full.push_back((unsigned char)(v & 0xFF));
+                full.push_back((unsigned char)((v >> 8) & 0xFF));
+                full.push_back((unsigned char)((v >> 16) & 0xFF));
+                full.push_back((unsigned char)((v >> 24) & 0xFF));
+            };
+            put32(0x0A0D0D0A);   // SHB
+            put32(28);           // block length
+            put32(0x1A2B3C4D);   // byte-order magic
+            put32(0x00010000);   // version 1.0
+            put32(0xFFFFFFFF);   // section length -1
+            put32(28);           // trailing length
+            put32(0x00000006);   // EPB
+            put32(32);           // block length
+            put32(0);            // interface id
+            put32(0);            // ts high
+            put32(0);            // ts low
+            put32(0);            // captured length (no packet data)
+            put32(0);            // original length
+            put32(32);           // trailing length
+
+            int clean = 0, refused = 0, invented = 0;
+            for (size_t n = 0; n <= full.size(); ++n) {
+                const PcapngParse p = ParsePcapng(full.data(), n);
+                if (p.ok) ++clean;
+                else ++refused;
+                if (!p.packets.empty()) ++invented;
+            }
+            Check(r, "r5.pcapng.every-prefix-decides",
+                  clean + refused == static_cast<int>(full.size() + 1),
+                  "clean=" + std::to_string(clean) +
+                      " refused=" + std::to_string(refused) +
+                      " prefixes=" + std::to_string(full.size() + 1));
+            Check(r, "r5.pcapng.every-prefix-invents-nothing",
+                  invented == 0, "invented=" + std::to_string(invented));
+        }
+
+        // --- pcapng: a huge but plausible block length ---------------------
+        // 0x10000 with a 32-byte file is "truncated final block", NOT an
+        // allocation of 64 KiB per packet. The check is that it refuses.
+        {
+            const size_t kPad = 80u * 1024u;   // past the 64 KiB size discriminator
+            std::vector<unsigned char> db(36 + kPad, 0);
+            db[0] = 0x0A; db[1] = 0x0D; db[2] = 0x0D; db[3] = 0x0A;
+            db[4] = 28; db[8] = 0x4D; db[9] = 0x3C; db[10] = 0x2B; db[11] = 0x1A;
+            db[12] = 1; db[16] = 0xFF; db[17] = 0xFF; db[18] = 0xFF; db[19] = 0xFF;
+            db[20] = 28;
+            db[28] = 0x06;
+            db[32] = 0x00; db[33] = 0x00; db[34] = 0x01; db[35] = 0x00;
+            const PcapngParse p = ParsePcapng(db.data(), db.size());
+            Check(r, "r5.pcapng.huge-length-refused-not-trusted",
+                  !p.ok && p.badBlocks > 0 && p.packets.empty(),
+                  "badBlocks=" + std::to_string(p.badBlocks) +
+                      " err=" + WideToUtf8(p.error));
+        }
+
+        // --- registry values ------------------------------------------------
+        // IsColumnPermutation is the gate between a ColOrder string in HKCU and
+        // the column order the window actually uses, so it is the one place a
+        // garbage registry value reaches an index. Every row must be refused,
+        // and the accepted rows must still be accepted - a validator that
+        // rejects everything would pass a suite full of rejections.
+        {
+            // A row can carry its own pointer, because the null cases need one
+            // that no std::vector::data() call can promise.
+            struct Case {
+                const char* name;
+                std::vector<int> order;
+                size_t count;
+            };
+            const std::vector<int> good = {0, 1, 2, 3, 4, 5};
+            const std::vector<int> dup = {0, 1, 1, 3, 4, 5};
+            const std::vector<int> oob = {0, 1, 2, 3, 4, 99};
+            const std::vector<int> neg = {0, 1, 2, 3, 4, -1};
+            const std::vector<int> shuffled = {5, 4, 3, 2, 1, 0};
+            const std::vector<int> huge = {0, 1, 2, 3, 4, 0x7FFFFFFF};
+            const std::vector<int> intmin = {0, 1, 2, 3, 4, -2147483647 - 1};
+            // A non-null pointer to nothing readable, with count 0: the loop
+            // never dereferences it, so the answer is "valid empty order".
+            // Spelled with a real array so the pointer is unambiguously not
+            // null - an empty std::vector's data() is not guaranteed to be.
+            const std::vector<int> dummy(1, 0);
+            const Case cases[] = {
+                {"accepts-identity", good, 6},
+                {"accepts-reversed", shuffled, 6},
+                {"accepts-zero-count", dummy, 0},
+                {"rejects-duplicate", dup, 6},
+                {"rejects-out-of-range", oob, 6},
+                {"rejects-negative", neg, 6},
+                {"rejects-int-max", huge, 6},
+                {"rejects-int-min", intmin, 6},
+                {"rejects-count-over-col-count", good, COL_COUNT + 1},
+                {"rejects-count-far-over-col-count", good, 100000},
+            };
+            // nullptr is REJECTED whatever the count - checked before the
+            // count bound, so count 0 does not rescue it. Two separate rows
+            // because that ordering is the thing worth pinning.
+            for (const Case& c : cases) {
+                const bool accepted =
+                    IsColumnPermutation(c.order.data(), c.count);
+                const bool wantAccept =
+                    (std::string(c.name).find("accepts-") == 0);
+                const std::string label =
+                    std::string("r5.registry.colorder-") + c.name;
+                Check(r, label.c_str(), accepted == wantAccept,
+                      "accepted=" + std::string(accepted ? "1" : "0") +
+                          " count=" + std::to_string(c.count));
+            }
+            Check(r, "r5.registry.colorder-rejects-null-ptr",
+                  !IsColumnPermutation(nullptr, 6));
+            Check(r, "r5.registry.colorder-null-ptr-zero-count-is-still-rejected",
+                  !IsColumnPermutation(nullptr, 0),
+                  "the null check precedes the count bound");
+            // The validator is a gate, not a filter: a value it accepts must
+            // be a real permutation of the whole id space, or the window
+            // indexes columns that do not exist.
+            {
+                std::vector<int> all(COL_COUNT);
+                for (int i = 0; i < COL_COUNT; ++i) all[i] = i;
+                Check(r, "r5.registry.colorder-accepts-the-full-permutation",
+                      IsColumnPermutation(all.data(), COL_COUNT));
+                std::vector<int> missingOne = all;
+                missingOne.pop_back();
+                Check(r, "r5.registry.colorder-a-short-order-is-still-accepted",
+                      IsColumnPermutation(missingOne.data(), missingOne.size()),
+                      "count=" + std::to_string(missingOne.size()) +
+                          " of " + std::to_string(COL_COUNT) +
+                          "; a partial order is permitted");
+            }
+            }
+
+        // --- FoldVisibleOrder with a mask that hides nothing ----------------
+        // The empty-mask case is the one that historically returned the full
+        // order; pin it so a change cannot quietly alter which columns a
+        // frozen view claims to show.
+        {
+            // mask-zero means NOTHING is visible, so expected == 0 and a
+            // newVisible of {} matches the count. The function then has no
+            // visible slot to fill and returns fullOrder UNCHANGED - it does
+            // not return empty. That is read from Settings.cpp:170-183, and it
+            // is the right answer: an order with every column hidden is still
+            // the order, and returning empty would make the window lose its
+            // layout entirely. Pinned as "unchanged", not as "empty" - the
+            // earlier version of this check asserted the wrong thing and the
+            // test was red for a reason that was not a defect.
+            const std::vector<int> full = {0, 1, 2, 3, 4, 5};
+            Check(r, "r5.fold.empty-visible-returns-full",
+                  FoldVisibleOrder(full, 0x3F, {}) == full);
+            Check(r, "r5.fold.empty-order-is-empty",
+                  FoldVisibleOrder({}, 0x3F, {}).empty());
+            Check(r, "r5.fold.mask-zero-returns-the-order-unchanged",
+                  FoldVisibleOrder(full, 0, {}) == full,
+                  "no visible column means no slot to reorder");
+        }
+    }
     // 3e. R3 - the ledger parser. ParseLedgerBytes is pure, so the hostile
     //      input it exists to reject is driven here directly. Driving the real
     //      file instead would mean pointing %APPDATA% at a scratch directory
