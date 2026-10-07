@@ -39,6 +39,7 @@
 
 #include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <unordered_set>
@@ -495,6 +496,52 @@ private:
     // Passes whose handle-table read threw. See ScanFailureCount() for why this
     // is separate from timeouts_ and what it does and does not prove.
     mutable std::atomic<unsigned> scanFailures_{0};
+
+    // C9. Owns ONE pass's scratch, and frees it only when no worker of that
+    // pass can still be reading it.
+    //
+    // WHY NOT A PLAIN unique_ptr, which is the obvious thing and would be
+    // WRONG here. A plain unique_ptr frees on every exit including a throw, and
+    // a worker wedged inside SIO_TCP_INFO holds this pointer - the same reason
+    // the sampler itself is deliberately never freed (see ShutdownScanForExit).
+    // An exception unwinding while a worker is still live would therefore turn a
+    // leak into exactly the use-after-free the design exists to avoid.
+    //
+    // So the test lives in the destructor, where it is evaluated on the normal
+    // path AND on an unwind alike, which is the property the raw pair did not
+    // have: `new ScanScratch()` ... `delete scratch` leaked unconditionally if
+    // anything in between threw - including the merge, which allocates - and it
+    // leaked even when every worker HAD finished and the delete would have been
+    // safe. Now the leak happens when it is required and nowhere else.
+    class ScratchOwner {
+    public:
+        explicit ScratchOwner(ScanScratch* s) : s_(s) {}
+        ~ScratchOwner() {
+            if (s_ == nullptr) return;
+            if (s_->liveInPass.load(std::memory_order_acquire) == 0) {
+                CloseCachedSources(*s_);
+                delete s_;
+            }
+            // Otherwise a worker is still inside the kernel holding s_. Leaking
+            // is the ONLY safe action and is deliberate. Counted by Sample(),
+            // which is the only place that knows a pass was abandoned.
+        }
+        ScratchOwner(const ScratchOwner&) = delete;
+        ScratchOwner& operator=(const ScratchOwner&) = delete;
+        ScanScratch* operator->() const { return s_; }
+        ScanScratch* get() const { return s_; }
+        // Give up ownership without freeing. Only for the abandon path, where
+        // the free is being skipped DELIBERATELY rather than skipped by an
+        // exception - the one case that is a decision rather than a mistake.
+        ScanScratch* release() {
+            ScanScratch* p = s_;
+            s_ = nullptr;
+            return p;
+        }
+
+    private:
+        ScanScratch* s_;
+    };
 };
 
 }  // namespace wintcp

@@ -411,9 +411,14 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
 
     // The scratch is HEAP allocated and outlives this function whenever a
     // worker does not finish: a worker still inside the kernel holds this
-    // pointer, so a stack local would dangle the moment Sample returns. It is
-    // freed below exactly when every worker has finished.
-    ScanScratch* scratch = new ScanScratch();
+    // pointer, so a stack local would dangle the moment Sample returns.
+//
+// C9: ScratchOwner, not a bare pointer, and not a plain unique_ptr either -
+// see its definition for why the "is a worker still live" test has to live in
+    // a destructor. The short version: it is now freed on an unwind when the
+// // free is safe, which the raw `new`/`delete` pair could not do.
+    ScratchOwner scratchHolder(new ScanScratch());
+    ScanScratch* const scratch = scratchHolder.get();
     scratch->generation = generation_;
     {
         std::lock_guard<std::mutex> lk(stateLock_);
@@ -568,10 +573,11 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
             if (::GetTickCount64() >= joinDeadline) break;
             ::Sleep(kScanPollMs);
         }
-        if (scratch->liveInPass.load(std::memory_order_acquire) == 0) {
-            CloseCachedSources(*scratch);
-            delete scratch;
-        } else {
+        // The healthy case needs no work here at all, which is the point: the owner
+        // frees the scratch on the way out - on the normal path AND if anything
+        // between the allocation and here throws. The old `delete scratch` at
+        // this spot could not do that, because a throw skipped it.
+        if (scratch->liveInPass.load(std::memory_order_acquire) != 0) {
             // Defensive: by the argument above this pass's workers are all
             // within a few instructions of their decrement, so reaching here
             // means something above changed. Give up the teardown - not the
@@ -579,6 +585,11 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
             // is visible rather than silent. No generation bump: a worker
             // cannot still be publishing, because PublishOne runs before the
             // Finish() that made the pass complete.
+            //
+            // release() is what makes this a DELIBERATE leak rather than an
+            // accidental one: the owner would otherwise free the block on the
+            // way out, and a live worker is still reading it.
+            scratchHolder.release();
             timeouts_.fetch_add(1, std::memory_order_relaxed);
         }
     }

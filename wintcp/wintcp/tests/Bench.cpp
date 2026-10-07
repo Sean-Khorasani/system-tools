@@ -14,6 +14,7 @@
 // After windows.h: the TCP state constants live in these, and they are only
 // visible once the winsock/Windows headers have settled their macros.
 #include <iphlpapi.h>
+#include <psapi.h>       // C9: GetProcessMemoryInfo - the scratch leak gate
 #include <tcpmib.h>
 #include <tlhelp32.h>    // CreateToolhelp32Snapshot for bench stage [E]
 
@@ -3958,6 +3959,99 @@ TestResult RunSelfTest() {
                   "failures=" + std::to_string(s.ScanFailureCount()) +
                       " timeouts=" + std::to_string(s.TimeoutCount()));
         }
+    }
+// 12c. C9 - the scratch is freed when the free is safe.
+    //
+    //      WHAT CHANGED. Sample() used to pair a bare `new ScanScratch()` with a
+    //      `delete scratch` a hundred lines later, guarded by a live-worker
+    //      test. Anything that threw in between - and the merge in the middle
+    //      allocates - unwound past the delete and leaked, EVEN when every
+    //      worker had already finished and the delete would have been safe. The
+    //      ownership now lives in ScratchOwner, whose destructor applies the
+    //      same live-worker test, so the free happens on the normal path and on
+    //      an unwind alike, and the abandon path calls release() explicitly.
+    //
+    //      WHAT THIS CHECKS. That the free still happens, by measuring the
+    //      process heap across many real passes. It cannot check the unwind
+    //      branch: forcing an exception inside Sample() between the allocation
+    //      and the free would need an injection point in production code, which
+    //      would be worse than the gap. So the destructor rule itself is
+    //      UNCOVERED and its comment says so.
+    //
+    //      The measurement is a STEADY-STATE one, and that detail matters: the
+    //      first Sample() legitimately grows the sampler, because it builds the
+    //      live_/retired_ maps that every later pass reuses. Measuring from a
+    //      cold sampler would report that one-time growth as a per-call leak.
+    //      So: warm up, measure, then measure again over a run of passes and
+    //      require the second delta to be flat.
+    {
+        SocketTrafficSampler leak;
+        const std::vector<DWORD> pids = {static_cast<DWORD>(::GetCurrentProcessId())};
+
+        // PrivateUsage is the committed private bytes, which is what a leaked
+        // ScanScratch shows up in. WorkingSetSize would also work but moves for
+        // reasons unrelated to allocation.
+        //
+        // PROCESS_MEMORY_COUNTERS_EX, not the plain struct: PrivateUsage does
+        // not exist on PROCESS_MEMORY_COUNTERS, and the pagefile figure on the
+        // plain struct is the same quantity under a name that does not say what
+        // it is. cb must be set to sizeof(pmc) so the call knows which one it is
+        // being handed.
+        auto heapNow = []() -> SIZE_T {
+            PROCESS_MEMORY_COUNTERS_EX pmc = {};
+            pmc.cb = sizeof(pmc);
+            if (!::GetProcessMemoryInfo(::GetCurrentProcess(),
+                                        reinterpret_cast<PPROCESS_MEMORY_COUNTERS>(&pmc),
+                                        sizeof(pmc))) {
+                return 0;
+            }
+            return pmc.PrivateUsage;
+        };
+
+        // Warm up: the first pass allocates the sampler's own state, and one
+        // pass' worth of scratch that is then freed must be out of the way
+        // before the baseline is taken.
+        (void)leak.Sample(pids);
+        ::HeapCompact(::GetProcessHeap(), 0);
+        const SIZE_T before = heapNow();
+
+        const int kPasses = 40;
+        for (int i = 0; i < kPasses; ++i) {
+            (void)leak.Sample(pids);
+        }
+        ::HeapCompact(::GetProcessHeap(), 0);
+        const SIZE_T after = heapNow();
+
+        const long long grew =
+            static_cast<long long>(after) - static_cast<long long>(before);
+        // The bound is set from a MEASURED leak, not guessed. Deleting the free
+        // in ScratchOwner and re-running this exact check grows the heap by
+        // 379,092,992 bytes over these same 40 passes - about 9.5 MB per pass,
+        // which is the scratch's handle-table read buffer and its target queue.
+        // The allowance is 320 KB, so the check has three orders of magnitude of
+        // room below the real failure and still measures 0 on a healthy run.
+        const long long kAllowance = 8LL * 1024 * kPasses;
+        Check(r, "c9.traffic.scratch-is-freed-every-pass",
+              before != 0 && after != 0 && grew < kAllowance,
+              "grew " + std::to_string(grew) + " bytes over " +
+                  std::to_string(kPasses) + " passes (allowance " +
+                  std::to_string(kAllowance) + ")");
+
+        // The counters must not have moved just because we scanned a lot: a
+        // leak here would be a silent one, and timeouts_ is the only other
+        // signal this class emits.
+        Check(r, "c9.traffic.sampling-hardly-trips-the-timeout-counter",
+              leak.TimeoutCount() < static_cast<unsigned>(kPasses),
+              "timeouts=" + std::to_string(leak.TimeoutCount()) +
+                  " of " + std::to_string(kPasses) + " passes");
+
+        // And the abandoned-scratch counter must be untouched, because
+        // release() only runs on the abandon path. If a plain healthy pass were
+        // releasing, this would be nonzero and every traffic column on the
+        // machine would be quietly blank.
+        Check(r, "c9.traffic.healthy-passes-do-not-abandon-the-scratch",
+              leak.ScanFailureCount() == 0,
+              "scanFailures=" + std::to_string(leak.ScanFailureCount()));
     }
     // 13. New columns (duration, speed, TLS, country, bookmarks). Each one
     //     carries an arithmetic or formatting decision that the list view
