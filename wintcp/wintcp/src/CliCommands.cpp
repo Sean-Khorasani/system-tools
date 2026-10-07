@@ -1504,6 +1504,35 @@ int RunCliCommand(int argc, wchar_t** argv) {
             SocketTrafficSampler probe;
             s.trafficFallback = !s.elevated && probe.Supported();
         }
+        // R7: read the OS counters, do not track them ourselves. Both calls take
+        // the current process and are one syscall each - no new infrastructure,
+        // and nothing to keep in sync with reality.
+        //
+        // GetGuiResources RETURNS the count with no out-parameter, and returns 0 both
+        // when it fails AND when the true count is zero - the two are
+        // indistinguishable from the return value. That is not a corner case:
+        // MEASURED, a console-subsystem process with no window holds 0 GDI
+        // objects, and `version` runs before any window exists, so GR_GDIOBJECTS
+        // legitimately answers 0 here. An earlier version of this code treated
+        // 0 as a refusal and the block vanished from `version` entirely - the
+        // counters were never printed by the one verb meant to show them.
+        //
+        // So the GDI and USER counts are printed unconditionally, and only the
+        // handle count - which DOES report success through a BOOL - is gated on
+        // its own answer. A zero that is really a zero is the truth for a
+        // console run and hiding it would be worse than printing it.
+        //
+        // Asking GR_GDIOBJECTS and GR_USEROBJECTS separately matters: they are
+        // independent ceilings, and one combined number would hide which one is
+        // at the limit.
+        {
+            DWORD handles = 0;
+            s.resourceCountsKnown =
+                ::GetProcessHandleCount(::GetCurrentProcess(), &handles) != FALSE;
+            s.handleCount = handles;
+            s.gdiCount = ::GetGuiResources(::GetCurrentProcess(), GR_GDIOBJECTS);
+            s.userCount = ::GetGuiResources(::GetCurrentProcess(), GR_USEROBJECTS);
+        }
         WriteOut(WideToUtf8(AboutText(s)));
         return 0;
     }

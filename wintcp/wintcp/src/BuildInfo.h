@@ -61,6 +61,18 @@ struct BuildSummary {
     int visibleColumnCount = 0;
     int totalColumnCount = 0;
     size_t rowCount = 0;
+    // R7: this process's own handle and GDI counts.
+    //
+    // 'resourceCountsKnown' gates ONLY the handle count, because that is the
+    // only one of the three whose success the API can report - GetProcess-
+    // HandleCount returns a BOOL, while GetGuiResources returns the count with
+    // no way to distinguish a failure from a true zero. A console-subsystem
+    // process really does hold 0 GDI objects, so 0 is printed rather than
+    // treated as a missing answer.
+    DWORD handleCount = 0;
+    DWORD gdiCount = 0;
+    DWORD userCount = 0;
+    bool resourceCountsKnown = true;
     // True when rowCount was actually measured. False means the caller could
     // not take a snapshot, and the line is then omitted rather than printed as
     // a confident "Connections 0" - which is what the CLI used to claim, and

@@ -1186,6 +1186,9 @@ GeoIP database    not loaded (Country column shows —)
 Saved presets     available
 Optional features all available
 Connections       304
+Handles           154
+GDI objects       0
+USER objects      1
 ```
 
 | Line | What it reports |
@@ -1196,8 +1199,20 @@ Connections       304
 | `Saved presets` | The preset store is in-process, so it reads `available` whenever the binary runs. |
 | `Optional features` | Counted from the capabilities probed in this process. `all available` means the count was zero; on a machine that is missing one, each absence prints its own detail line above the summary, naming what is absent and what would provide it. |
 | `Connections` | One real enumeration taken for this call, so it is a measured number rather than a placeholder. The `Columns shown` line is absent for the same reason: a CLI run has no persisted view mask to count, so the line is omitted instead of faked. |
+| `Handles`, `GDI objects`, `USER objects` | This process's own resource budgets, read from the OS (`GetProcessHandleCount`, `GetGuiResources`) rather than tracked by this program. The numbers exist so "it gets slower after a day" can be answered with evidence: run `version` twice, hours apart, and compare. Both drawing budgets have a default ceiling of 10,000 per process, so a count climbing toward that is a leak worth reporting, and `USER` is reported separately from `GDI` because they are separate ceilings. **`GDI objects 0` is the correct answer for a console run** — no window means no GDI objects — and the line is omitted only when the handle count itself could not be read. |
 
 `version` always exits `0` - it is a report, not a test, so a wrapper can call it before deciding whether anything is wrong. The `Optional features` line is the one that separates *the binary cannot do this* from *this machine cannot*, which is the distinction a blank column never makes on its own.
+
+To catch a slow leak, sample rather than guess:
+
+```bat
+wintcp.exe version > "handles-1.txt"
+timeout /t 3600 /nobreak >nul
+wintcp.exe version > "handles-2.txt"
+findstr /c:"Handles" "handles-1.txt" "handles-2.txt"
+```
+
+Two numbers an hour apart are evidence. A feeling is not — and a rising count is also not automatically a bug, since the numbers include whatever the traffic, GeoIP and process-detail work is currently holding.
 
 ### 36. Why does my JSON parser wait for the array to close?
 

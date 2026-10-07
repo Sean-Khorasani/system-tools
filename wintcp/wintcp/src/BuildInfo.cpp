@@ -164,6 +164,25 @@ std::wstring AboutText(const BuildSummary& s) {
     }
     if (s.rowCountKnown)
         out += PadKeys(L"Connections") + std::to_wstring(s.rowCount) + L"\r\n";
+    // R7. Handle and GDI counts, so a user reporting "it gets slow after a
+    // day" can report a number instead. These are the counters that grow when
+    // something leaks, and they are the only evidence that distinguishes a
+    // leak from "this machine is just busy" - so printing them makes the
+    // difference checkable rather than arguable.
+    //
+    // USER objects are reported alongside GDI because they are the same leak
+    // with a different budget: the default per-process GDI limit is 10,000 and
+    // the USER limit is 10,000 too, and a tool that draws icons and cursors
+    // can hit either. Reported separately because they fail differently and a
+    // single combined number would hide which one is at the ceiling.
+    // Each line is gated on its OWN answer, because they are read by different
+    // calls with different failure reporting: the handle count knows whether
+    // it succeeded, the two GDI budgets do not. See BuildSummary in
+    // BuildInfo.h for the measured reason 0 is a real answer here.
+    if (s.resourceCountsKnown)
+        out += PadKeys(L"Handles") + std::to_wstring(s.handleCount) + L"\r\n";
+    out += PadKeys(L"GDI objects") + std::to_wstring(s.gdiCount) + L"\r\n";
+    out += PadKeys(L"USER objects") + std::to_wstring(s.userCount) + L"\r\n";
     return out;
 }
 

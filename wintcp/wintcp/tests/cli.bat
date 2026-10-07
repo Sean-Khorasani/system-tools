@@ -897,6 +897,47 @@ REM ten digits but the value 1.
 call :t "leading zeros accepted" "list --limit 0000000001 --filter tcp:" 0 "."
 call :t "leading zeros over the ceiling refused" "list --limit 00000040000000001" 2 "bad --limit"
 
+REM R7: `version` reports this process's own handle and GDI budgets, so a user
+REM reporting "it gets slow after a day" can report a number. `version` is the
+REM only place both the CLI and the About box can be checked from, and it
+REM takes no switches, so these are plain marker assertions.
+REM
+REM "GDI objects 0" is the important one: a console-subsystem process holds no
+REM GDI objects, and GetGuiResources returns 0 both for a true zero and for a
+REM failure. An earlier version of this work treated 0 as a refusal, and the
+REM block silently vanished from `version` - caught by running the binary.
+call :t "version reports handles" "version" 0 "Handles"
+call :t "version reports GDI objects" "version" 0 "GDI objects"
+call :t "version reports USER objects" "version" 0 "USER objects"
+REM The counts must be numbers, not the label with nothing after it.
+"%BIN%" version > "%OUT%" 2>&1
+findstr /r /c:"Handles  *[0-9][0-9]*" "%OUT%" >nul 2>&1
+set /a CHECKS+=1
+if errorlevel 1 (
+    echo FAIL version handle count is a number
+    set /a FAILS+=1
+) else (
+    echo ok - version handle count is a number
+)
+REM GDI and USER are separate budgets; one combined line would hide which one
+REM is at the ceiling.
+findstr /r /c:"GDI objects  *[0-9][0-9]*" "%OUT%" >nul 2>&1
+set /a CHECKS+=1
+if errorlevel 1 (
+    echo FAIL version GDI count is a number
+    set /a FAILS+=1
+) else (
+    echo ok - version GDI count is a number
+)
+findstr /r /c:"USER objects  *[0-9][0-9]*" "%OUT%" >nul 2>&1
+set /a CHECKS+=1
+if errorlevel 1 (
+    echo FAIL version USER count is a number
+    set /a FAILS+=1
+) else (
+    echo ok - version USER count is a number
+)
+
 echo.
 echo CLI: %CHECKS% checks, %FAILS% failures.
 if not "%FAILS%"=="0" exit /b 1

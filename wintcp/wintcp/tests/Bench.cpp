@@ -4288,6 +4288,72 @@ TestResult RunSelfTest() {
               bare.find(L"Connections") == std::wstring::npos,
               WideToUtf8(bare));
 
+        // R7. Handle and GDI counts. The interesting case is the zero: a
+        // console-subsystem process holds 0 GDI objects, and
+        // GetGuiResources cannot distinguish that from a failure - it
+        // returns the count with no success flag. So "0 GDI objects" must be
+        // PRINTED. An earlier version treated 0 as a refusal and the whole
+        // block vanished from `version`, which is the one verb meant to show
+        // it - found by running the binary, not by reading this code.
+        {
+            BuildSummary r7;
+            r7.elevated = false;
+            r7.presetsAvailable = true;
+            r7.resourceCountsKnown = true;
+            r7.handleCount = 154;
+            r7.gdiCount = 0;      // the measured truth for a console run
+            r7.userCount = 1;
+            const std::wstring t = AboutText(r7);
+            Check(r, "about.handles-shown",
+                  t.find(L"Handles") != std::wstring::npos &&
+                      t.find(L"154") != std::wstring::npos,
+                  WideToUtf8(t));
+            Check(r, "about.gdi-shown",
+                  t.find(L"GDI objects") != std::wstring::npos,
+                  WideToUtf8(t));
+            Check(r, "about.user-shown",
+                  t.find(L"USER objects") != std::wstring::npos,
+                  WideToUtf8(t));
+            // The zero must appear as a VALUE, not be swallowed by an omission.
+            // PadKeys pads the KEY to a fixed column, so the value does not
+            // sit immediately after the label - the first version of this
+            // check assumed it did and failed on its own fixture. The value is
+            // located by skipping the pad, and the line must end right after
+            // it, which is what proves nothing was appended in place of it.
+            const size_t gdiLine = t.find(L"GDI objects");
+            const std::wstring gdiLabel = L"GDI objects";
+            const size_t afterLabel = gdiLine + gdiLabel.size();
+            size_t valueAt = afterLabel;
+            while (valueAt < t.size() && (t[valueAt] == L' ' || t[valueAt] == L'\t'))
+                ++valueAt;
+            Check(r, "about.a-zero-gdi-count-is-printed-as-zero",
+                  gdiLine != std::wstring::npos && valueAt > afterLabel &&
+                      t.compare(valueAt, 1, L"0") == 0 &&
+                      (valueAt + 1 >= t.size() || t[valueAt + 1] == L'\r'),
+                  "label at " + std::to_string(gdiLine) +
+                      ", value at " + std::to_string(valueAt));
+            // GDI and USER are separate budgets; one combined number would hide
+            // which is at the ceiling, so both labels must appear.
+            Check(r, "about.gdi-and-user-are-separate-lines",
+                  gdiLine != std::wstring::npos &&
+                      t.find(L"USER objects") != std::wstring::npos &&
+                      t.find(L"GDI objects") != t.find(L"USER objects"),
+                  WideToUtf8(t));
+
+            // The handle count is the one that CAN report failure, so it is the
+            // one that is gated. An unreadable handle count omits its line and
+            // leaves the other two, which are unconditional.
+            BuildSummary noHandles = r7;
+            noHandles.resourceCountsKnown = false;
+            noHandles.handleCount = 999;
+            const std::wstring nh = AboutText(noHandles);
+            Check(r, "about.unreadable-handle-count-omits-only-that-line",
+                  nh.find(L"Handles") == std::wstring::npos &&
+                      nh.find(L"999") == std::wstring::npos &&
+                      nh.find(L"GDI objects") != std::wstring::npos,
+                  WideToUtf8(nh));
+        }
+
         // ...and a MEASURED count is still printed, so the omission is not
         // just the line being dropped everywhere.
         BuildSummary measured = cli;
