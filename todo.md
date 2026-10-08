@@ -297,10 +297,19 @@ All features below were approved by the user. Each is independently resumable.
   counted alongside the others so it is not silently omitted. Pin, Copy-all and
   Open-file-location kept. Docs: `docs/gui.md` details.
 
-- [ ] **9.4.2 — Empty states.**
-  Traffic em-dash → infobar "TCP only - UDP needs admin" [Run as admin]
-  [Learn more]; 0 rows → "No rows" - [Clear] [Edit]; Country empty →
-  "No database" - [Pick .mmdb]. Docs: `docs/gui.md`.
+- [~] **9.4.2 — Empty states.** PARTLY DONE, and the part that is missing is the
+  part the ticket emphasised. `MainWindow::UpdateEmptyState()` now produces one
+  actionable sentence per case - no rows match this filter / no GeoIP database
+  loaded / traffic not being measured - recomputed from live state by the same
+  `UpdateStatusBar` path the DNS-stall hint uses, so there is no timer to write and
+  nothing to clean up. Order is NO ROWS > DATABASE > TRAFFIC, because with no rows
+  at all the other two answer a question nobody asked. Each names the menu item
+  that fixes it.
+  NOT DONE: the ticket wants **buttons** - [Run as admin], [Clear], [Edit],
+  [Pick .mmdb]. There is no infobar control in this window at all: no toolbar, no
+  `WM_PAINT`, and the only in-repo precedent for inline buttons is
+  `TaskDialogIndirect` at `MainWindow::ResolveMinimize`. A clickable infobar is new
+  chrome, not a reuse, and it is a separate piece of work from "say the reason".
 
 - [x] **9.4.3 — Quick-filter chips.** CLOSED AS F5.11 - the same work seen from the
   other side. "Status-bar toggles" and "one click builds the filter" describe one
@@ -489,23 +498,22 @@ copy of the item.
 
 ## 7. Suggested order
 
-**Closed on 2026-10-08** (markers reconciled against `git log` + a full gate
-run): all of §1, §5.1 except 9.2.9/9.2.10, all of §5.2, §5.3 except
-9.4.2/9.4.3/9.4.4, §5.6, plus F5.7/F5.8/F5.9 in §4.
+**Closed 2026-10-08:** F5.4 ASN, F5.11/9.4.3 quick filters, 9.4.4 column profiles,
+F5.15 FontCache, 9.6.3 SPDX, 9.2.8, all of Â§5.2, Â§5.6, and most of Â§1 - plus five
+wrong-answer bugs (bare `country:`, `geoip lookup` on an ASN file, `doctor
+--asn-db`, the ASN-only advice, "0 records") and one real range bug (ULA v6).
 
-Remaining, roughly in the order they pay off:
+Remaining, in dependency order:
 
-1. **§4 Features** — F5.5 ETW DNS, F5.6 alerts, F5.11 quick filters, F5.15
-   FontCache; each gated before the next starts. F5.4 ASN shipped 2026-10-08.
-   F5.6 is blocked on 9.2.11; F5.11 is the same work 9.4.3 describes from the
-   other side, so doing one closes both.
-2. **§5.1 Correctness** — 9.2.9 firewall viewer, then 9.2.10 portable+sync.
-3. **§5.3 UI/UX** — 9.4.2 empty states, 9.4.4 column profiles, 9.4.3 chips
-   (blocked on F5.11).
-4. **§5.5 Structural** — 9.2.11 alerts (unblocks F5.6), 9.5.5 firewall manager,
-   9.5.6 process tree, 9.5.7 hash/sync/portable, then 9.6.2/9.6.3; 9.6.1 and
-   W4.1 are **deferred by user decision** — do not start without reading §8.4 of
-   the old tracker.
-5. **§2 Code perfection** (P1, P2, C12) — mechanical, per-file.
-6. **§3 Architecture** (W4.2, W4.3) — after features land.
-7. **§5.7 Testing** (V3 coverage) — final phase by explicit decision.
+1. **9.2.11 alerts** â†’ unblocks **F5.6**. `Alerts.h:42` has hardcoded thresholds and
+   no persist/CLI/editor; wire the verb and the tray balloon, or hide the feature.
+2. **9.2.9 firewall viewer** â†’ unblocks **9.5.5**.
+3. **9.2.10 portable + sync** â†’ unblocks **9.5.7**.
+4. **F5.5 ETW DNS** - elevated only, and the last untouched feature in Â§4.
+5. **9.4.2 buttons** - the remainder above; new chrome, not a reuse.
+6. **9.5.6 process tree** - independent.
+7. **P1 / P2 literals, C12 Bench split** - mechanical, per-file, tests only.
+8. **W4.3 Result<T>**, then **W4.2 wstring_view** - after the features land.
+9. **9.6.2 todo.md split** - documentation only, safe at any time.
+10. **W4.1 / 9.6.1 MainWindow split** - DEFERRED by your decision. Do not start.
+11. **V3 coverage** - final phase by decision.
