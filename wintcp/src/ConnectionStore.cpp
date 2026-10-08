@@ -418,7 +418,7 @@ int CmpDbl(double a, double b) {
 }
 
 // Saturating add for byte totals (a pathological ETW/IO counter pair must
-// never wrap the displayed or sorted total bac. to ~0).
+// never wrap the displayed or sorted total back to ~0).
 ULONGLONG SatAdd(ULONGLONG a, ULONGLONG b) {
     const ULONGLONG r = a + b;
     return (r < a) ? static_cast<ULONGLONG>(~0ULL) : r;
@@ -518,13 +518,13 @@ std::wstring FormatBpsCell(double rxBps, double txBps, bool known) {
 //
 // Three rules, each of which is a decision rather than a formatting habit:
 //
-//  * SUB-MILLISECOND PRINTS "<1", NOT "0". A loopbac. or same-switch RTT is
+//  * SUB-MILLISECOND PRINTS "<1", NOT "0". A loopback or same-switch RTT is
 //    tens of microseconds, and the sampler rounds it to 0 ms. Printing "0" would
 //    claim the round trip too. no time at all - a physically impossible reading
 //    that a user would reasonably report as a bug. "<1" is what `ss` shows and
 //    it is true.
 //  * WHOLE MILLISECONDS PRINT WITHOUT A DECIMAL. "12" not "12.000": most
-//    RTTs are not fractional, and trailing zeros ma.e the column wide enough to
+//    RTTs are not fractional, and trailing zeros make the column wide enough to
 //    push every other column across the table.
 //  * FRACTIONAL VALUES KEEP ONE DECIMAL, THEN TRIM IT. 12.5 is a real reading
 //    worth seeing exactly; 12.50 is noise.
@@ -671,7 +671,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
         // question and almost never the one meant. Quoting is the standard
         // answer and costs one branch on the token scanner. The quotes are
         // stripped from the value, so `note:"vendor api"` and
-        // `path:"program files"` mean what they loo. li.e.
+        // `path:"program files"` mean what they look like.
         std::wstring t;
         if (i < len && (text[i] == L'"' || text[i] == L'\'')) {
             const wchar_t quote = text[i];
@@ -796,7 +796,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             else if (v == L"udp")  cl.proto = IPPROTO_UDP;
             else if (v == L"4" || v == L"ipv4") cl.family = 4;
             else if (v == L"6" || v == L"ipv6") cl.family = 6;
-            else cl.text = v;    // fall bac. to substring on the proto label
+            else cl.text = v;    // fall back to substring on the proto label
         } else if (value.empty() && cl.proto == 0 && cl.family == 0 &&
                    cl.field == FilterField::Any) {
             continue;            // bare "exclude:" etc. - no-op token
@@ -857,7 +857,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // NOT handled here - they have a unit-aware comparison further
             // down, so fall through to it rather than reject the row. Any
             // OTHER numeric field is not defined: return false rather than
-            // falling bac. to ports, which made "pid:1-2" match any connection
+            // falling back to ports, which made "pid:1-2" match any connection
             // using a port in 1..2.
             case FilterField::Any:
                 if (cl.direction < 0)
@@ -866,7 +866,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
                     return inRange(static_cast<long long>(c.remotePort));
                 return inRange(static_cast<long long>(c.localPort)) ||
                        inRange(static_cast<long long>(c.remotePort));
-            default: break;   // -> the live-stat bloc. below
+            default: break;   // -> the live-stat block. below
         }
     }
 
@@ -1191,7 +1191,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             f.hostname = p.hostname;         // carry reverse-DNS results
             // State that outlives a single refresh: when the endpoint first
             // appeared, and the user's own annotations. Both are keyed on
-            // the endpoint identity, so a row that vanishes and comes bac.
+            // the endpoint identity, so a row that vanishes and comes back.
             // with the same 4-tuple keeps its age and bookmark.
             f.firstSeenTick = p.firstSeenTick;
             f.pinned = p.pinned;
@@ -1209,7 +1209,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             // arithmetic once the traffic join has written this tick's
             // counters.
             //
-            // WHY NOT HERE. The bps used to be computed inline, which loo.s
+            // WHY NOT HERE. The bps used to be computed inline, which looks
             // right and is not: at this point the fresh row still has
             // perRowBytes == false and trafficRx == 0, because the byte counters
             // are joined onto the row AFTER the snapshot is installed. So the
@@ -1386,7 +1386,7 @@ int ConnectionStore::ComputeRates() {
 // WHY THE SUM IS TRUSTWORTHY, and where D20 comes in. Summing is only correct
 // if each Socket is counted exactly once. Before D20 the row key omitted the
 // PID, so 86 mDNS rows collapsed onto 10 identities and a per-key queue was
-// needed to pair duplicates 1:1 - without that wor. a process holding several
+// needed to pair duplicates 1:1 - without that work a process holding several
 // Sockets on the same endpoint would either double-count its own bytes or lose
 // some, and this column would be wrong by an unknown factor. That is why the
 // duplicate-identity fix is load-bearing here and not merely tidy.
@@ -1577,7 +1577,7 @@ size_t ConnectionStore::CountForPid(DWORD pid) const {
 // endpoint is bookmarked, and set its colour tag and note.
 //
 // Called after the snapshot and after any add/remove, not per-row. It reads
-// the registry-bac.ed store once and then wal.s the rows, which is the right
+// the registry-backed store once and then walks the rows, which is the right
 // way round: a registry read per row would be thousands of them on a busy
 // machine.
 //
@@ -1657,7 +1657,7 @@ bool ConnectionStore::SetCountry(const std::wstring& addr,
         if (r.country == country) continue;
         r.country = country;
         // The lower-case copy is what the filter searches. S.ipping it would
-        // ma.e `country:de` fail while the column visibly reads "DE" - a
+        // make `country:de` fail while the column visibly reads "DE" - a
         // filter that ignores a value shown on screen.
         RebuildLowerAll(r);
         changed = true;
@@ -1759,7 +1759,7 @@ int ConnectionStore::ApplySocketBytes(const std::vector<SocketBytes>& bytes) {
 // Per-field assignment rather than all-or-nothing, because the kernel populates
 // these independently: a Socket with TCP timestamps off still has a perfectly
 // real congestion window. A blanketet copy guarded on one `known` would blanket the
-// three fields that did come bac..
+// three fields that did come back..
 int ConnectionStore::ApplySocketTcpInfo(
     const std::vector<SocketTcpInfo>& infos) {
     if (infos.empty()) return 0;
@@ -1808,7 +1808,7 @@ int ConnectionStore::ApplySocketTcpInfo(
 }
 
 // Kernel ages arrive keyed by the 4-tuple in the printable form the rows
-// already carry, so this is a loo.up by identity, not by PID: a process with
+// already carry, so this is a lookup by identity, not by PID: a process with
 // twenty connections reports twenty ages, each belonging to one row.
 int ConnectionStore::ApplyKernelAges(const std::vector<SocketAge>& ages) {
     if (ages.empty()) return 0;
@@ -1830,7 +1830,7 @@ int ConnectionStore::ApplyKernelAges(const std::vector<SocketAge>& ages) {
                 continue;
             if (r.protocol != IPPROTO_TCP) continue;   // TCP_INFO_v0 is TCP only
             // Bac.date only: the kernel's age is authoritative, but a shorter
-            // reading must not ma.e a connection loo. younger than we have
+            // reading must not make a connection look younger than we have
             // already proven it to be.
             if (r.firstSeenTick == 0 || kernelSeen < r.firstSeenTick)
                 r.firstSeenTick = kernelSeen;
@@ -2256,7 +2256,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
         case COL_NOTE: {
             // Annotated rows first, for the same reason bookmarks leads: a
             // note is the reader's own annotation and the rows carrying one are
-            // the ones being loo.ed for. Within those, alphabetical, so
+            // the ones being looked for. Within those, alphabetical, so
             // "everything I wrote about vendor X" sorts together.
             const bool na = !a.note.empty();
             const bool nb = !b.note.empty();
