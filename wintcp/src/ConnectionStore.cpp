@@ -1130,6 +1130,7 @@ void ConnectionStore::FinalizeRow(Connection& c) {
 void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
     changes_.clear();
     const ULONGLONG nowTick = ::GetTickCount64();
+    lastSnapshotTick_ = nowTick;
 
     // Map previous (non-ghost) rows by identity key, keeping a QUEUE per key
     // rather than one entry.
@@ -1252,13 +1253,28 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
         merged.push_back(std::move(f));
     }
 
-    // Previous rows that vanished become one-cycle ghosts (red), and only
-    // if they were not already ghosts (ghosts never persist past one cycle).
+    // F5.7: retain vanished sockets instead of dropping them after one cycle.
+    // A socket that vanishes THIS refresh emits exactly one DISAPPEAR event and
+    // becomes a grey ghost; on later refreshes it is carried forward silently (no
+    // event), so a stable snapshot neither re-fires DISAPPEAR nor recreates the
+    // row. The retained set is bounded by TrimRetainedGhosts below.
     for (size_t i = 0; i < rows_.size(); ++i) {
         if (matched[i]) continue;
-        if (rows_[i].flags & kRowRemoved) continue;
-        Connection ghost = rows_[i];
+        Connection& prev = rows_[i];
+        if (prev.flags & kRowRemoved) {
+            // Already a retained ghost: carry it forward unchanged.
+            merged.push_back(std::move(prev));
+            continue;
+        }
+        // Freshly vanished -> one DISAPPEAR, then a ghost carrying the last
+        // sample's counters as its final metrics.
+        Connection ghost = prev;
+        ghost.flags &= ~kRowNew;
+        ghost.flags &= ~kRowChanged;
         ghost.flags |= kRowRemoved;
+        ghost.deathTick = nowTick;
+        ghost.finalRx = prev.trafficRx;
+        ghost.finalTx = prev.trafficTx;
         RowChange ch;
         ch.kind = kChangeDisappear;
         ch.row = ghost;
@@ -1266,8 +1282,40 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
         merged.push_back(std::move(ghost));
     }
 
+    TrimRetainedGhosts(merged);
+
     rows_ = std::move(merged);
     RebuildIndexes();
+}
+
+// F5.7: keep at most kMaxRetainedGhosts grey ghosts, evicting the oldest. The
+// order is by deathTick (earliest-vanished leaves first); id breaks ties for
+// sockets that vanished in the same snapshot, so the eviction is stable.
+void ConnectionStore::TrimRetainedGhosts(std::vector<Connection>& rows) {
+    size_t ghostCount = 0;
+    for (const Connection& r : rows)
+        if (r.flags & kRowRemoved) ++ghostCount;
+    if (ghostCount <= kMaxRetainedGhosts) return;
+
+    struct GhostPos { ULONGLONG deathTick; std::uint64_t id; size_t idx; };
+    std::vector<GhostPos> gp;
+    gp.reserve(ghostCount);
+    for (size_t i = 0; i < rows.size(); ++i)
+        if (rows[i].flags & kRowRemoved)
+            gp.push_back({ rows[i].deathTick, rows[i].id, i });
+    std::sort(gp.begin(), gp.end(),
+              [](const GhostPos& a, const GhostPos& b) {
+                  if (a.deathTick != b.deathTick) return a.deathTick < b.deathTick;
+                  return a.id < b.id;
+              });
+    const size_t drop = ghostCount - kMaxRetainedGhosts;
+    std::vector<bool> kill(rows.size(), false);
+    for (size_t k = 0; k < drop; ++k) kill[gp[k].idx] = true;
+    std::vector<Connection> kept;
+    kept.reserve(rows.size() - drop);
+    for (size_t i = 0; i < rows.size(); ++i)
+        if (!kill[i]) kept.push_back(std::move(rows[i]));
+    rows = std::move(kept);
 }
 
 // Turn this tick's byte counters into a per-connection RATE, now that the
