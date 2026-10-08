@@ -295,6 +295,14 @@ public:
     size_t CountForPid(DWORD pid) const;
     const RowStats& Stats() const { return stats_; }
 
+    // F5.7: cap on how long a vanished socket is kept as a retained (grey)
+    // ghost, so the table does not grow without bound on a busy host.
+    static constexpr size_t kMaxRetainedGhosts = 500;
+    // The snapshot tick most recently installed by ReplaceSnapshot. The view
+    // uses it to flash a just-vanished socket red for one refresh and keep older
+    // ones as grey ghosts (F5.7).
+    ULONGLONG SnapshotTick() const { return lastSnapshotTick_; }
+
     // 5.1: group the view by process. Rebuilds the view so each entry is one
     // process rather than one connection; the underlying rows are untouched,
     // so SetGrouped(false) restores the flat view exactly.
@@ -458,6 +466,9 @@ private:
     // scanned all rows, which is O(pids x rows) per refresh on the UI
     // thread - ~35M iterations for 700 PIDs and 50k rows.
     void RebuildIndexes();
+    // F5.7: bound the retained-ghost history; evict the oldest beyond
+    // kMaxRetainedGhosts. Operates on the merged vector in place.
+    void TrimRetainedGhosts(std::vector<Connection>& rows);
 
     std::vector<Connection> rows_;          // includes last cycle's ghosts
     std::vector<size_t> viewIndex_;
@@ -475,6 +486,7 @@ private:
     int sortColumn_ = COL_PID;
     bool sortAsc_ = true;
     std::uint64_t nextId_ = 1;
+    ULONGLONG lastSnapshotTick_ = 0;     // F5.7: for SnapshotTick()
 };
 
 }  // namespace wintcp
