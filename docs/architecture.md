@@ -140,7 +140,7 @@ The alternative was measured rather than assumed. A single-index lookup turned e
 
 ### Ghosts
 
-A row that disappeared is kept for **one cycle** as a ghost, giving the user a visual last chance to see what closed, then dropped.
+A row that disappeared flashes red for one refresh, then lingers as a **grey retained ghost** (F5.7) so the table keeps a short history of recently closed sockets. Ghosts are bounded at `ConnectionStore::kMaxRetainedGhosts` (500); the oldest are aged out first, their final byte counters frozen at the moment of death. `DISAPPEAR` still fires exactly once, so the change feed is unchanged.
 
 ## Model and view are separate
 
