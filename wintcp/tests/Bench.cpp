@@ -2246,14 +2246,24 @@ TestResult RunSelfTest() {
         const ULONGLONG freshTick = s2.Rows()[0].firstSeenTick;
         Check(r, "kernel-age.baseline-is-fresh", freshTick != 0);
 
+        // ApplyKernelAges refuses any age larger than the time since boot - a
+        // connection cannot be older than the machine has been up - so a
+        // hardcoded 1h sample tests nothing on a host that rebooted within
+        // the hour: n comes back 0 and BOTH checks below fail. Derive the
+        // sample from uptime instead. One hour where that is honest, a
+        // quarter of the elapsed time otherwise; a backdate of a few minutes
+        // proves exactly the same rule.
+        const ULONGLONG upNow = ::GetTickCount64();
         const ULONGLONG oneHour = 60ull * 60ull * 1000ull;
+        const ULONGLONG ageMs =
+            (upNow > 4ull * oneHour) ? oneHour : upNow / 4ull;
         std::vector<SocketAge> ages;
         SocketAge a;
         a.localAddress = L"192.168.1.10";
         a.localPort = 51752;
         a.remoteAddress = L"203.0.113.9";
         a.remotePort = 443;
-        a.ageMs = oneHour;
+        a.ageMs = ageMs;
         a.known = true;
         ages.push_back(a);
         const int n = s2.ApplyKernelAges(ages);
@@ -2268,7 +2278,7 @@ TestResult RunSelfTest() {
         ages.push_back(shorter);
         s2.ApplyKernelAges(ages);
         Check(r, "kernel-age.never-moves-forward",
-              s2.Rows()[0].firstSeenTick < freshTick - oneHour / 2);
+              s2.Rows()[0].firstSeenTick < freshTick - ageMs / 2);
 
         // Nonsense: an age beyond the uptime, and an unknown sample.
         SocketAge absurd = a;
@@ -4555,7 +4565,20 @@ TestResult RunSelfTest() {
         };
         Connection c = MakeRow(1);
         c.country = L"Germany";
-        c.firstSeenTick = ::GetTickCount64() - 3600000ULL;   // ~1h old
+        // GetTickCount64 counts UPTIME, not wall-clock time, so `now - 1h`
+        // underflows to ~2^64 on a host that booted less than an hour ago.
+        // DurationSeconds then reads the row as first-seen-in-the-future and
+        // returns 0 (unknown), which `duration:` correctly refuses to match -
+        // so this check failed on a freshly rebooted machine for a reason that
+        // had nothing to do with the filter. Age the row by a quarter of the
+        // elapsed uptime, and query a threshold the row can actually satisfy,
+        // since `duration:` is "at least N" and no row can be an hour old on a
+        // machine that has not been up an hour. Both halves stay honest on any
+        // host, and the second clause still proves it is a threshold rather
+        // than a substring of the printed cell.
+        const ULONGLONG upNow = ::GetTickCount64();
+        const ULONGLONG ageSec = ((upNow / 1000ull) / 4ull) + 60ull;
+        c.firstSeenTick = upNow - ageSec * 1000ull;
         c.bpsKnown = true;
         c.rxBps = 4096.0;
         c.txBps = 0.0;
@@ -4576,7 +4599,12 @@ TestResult RunSelfTest() {
         Check(r, "filter.match.speed",
               matches(L"speed:4KB", c) && !matches(L"speed:8KB", c) &&
                   matches(L"speed:", c));
-        Check(r, "filter.match.duration", matches(L"duration:1h", c));
+        const std::wstring ageable =
+            L"duration:" + std::to_wstring(ageSec / 2ull) + L"s";
+        Check(r, "filter.match.duration",
+              matches(ageable, c) &&
+                  !matches(L"duration:" + std::to_wstring(ageSec * 4ull) + L"s",
+                           c));
 
         // A row with no reading must not match a filter on that field.
         Connection blank = MakeRow(2);
