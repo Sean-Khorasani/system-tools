@@ -137,7 +137,7 @@ CaptureTarget MakeCaptureTarget(const Connection& c);
 // unchanged. A non-zero mask narrows the recorded events, which is a
 // deliberate, caller-chosen trade-off.
 bool StartCapture(const CaptureTarget& target, unsigned eventFlags,
-                  std::wstring* error);
+                  const std::wstring& extraAddr, std::wstring* error);
 
 // Stop, convert, parse, reassemble, and clean up. Safe to call even if
 // StartCapture failed. Always clears any pktmon filter it installed.

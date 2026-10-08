@@ -12,6 +12,7 @@
 
 #include "BlockConn.h"
 #include "Bookmarks.h"
+#include "BuildInfo.h"
 #include "ColumnsWin.h"
 #include "DnsResolver.h"
 #include "Elevate.h"
@@ -705,6 +706,133 @@ const char* JsonKeyFor(int column) {
         case COL_SIGNATURE: return "signature";
         default: return nullptr;
     }
+}
+
+// ---- help reference: columns / filters (9.3.2) -----------------------------
+// `help columns` and `help filters` print the vocabulary from the SAME tables
+// the parser uses (JsonKeyFor above, ColumnTitle, ColumnIsPerConnectionOnly,
+// kColumnSet*), so the reference can never drift from the spellings the rest of
+// the binary accepts. Generated rather than hand-written: a column that the
+// parser knows but this list forgot would be an undocumentable column, and a
+// spelling the parser rejects but this list shows would be a documentation lie.
+
+static const char* ColumnSource(int col) {
+    switch (col) {
+        case COL_HOST:      return "dns (--dns)";
+        case COL_COUNTRY:   return "geoip (--db)";
+        case COL_TLS:       return "etw";
+        case COL_NOTE:
+        case COL_PINNED:    return "bookmarks";
+        case COL_RX:
+        case COL_TX:
+        case COL_NETTOTAL:
+        case COL_TRAFFIC:
+        case COL_BANDWIDTH:
+        case COL_RTT:
+        case COL_MINRTT:
+        case COL_CWND:
+        case COL_RETRANS:
+        case COL_GROUPRATE: return "traffic";
+        default:            return "snapshot";
+    }
+}
+
+static const char* FilterFieldLabel(FilterField f) {
+    switch (f) {
+        case FilterField::Any:       return "any";
+        case FilterField::Local:     return "local";
+        case FilterField::Remote:    return "remote";
+        case FilterField::LPort:     return "lport";
+        case FilterField::RPort:     return "rport";
+        case FilterField::Port:      return "port";
+        case FilterField::Pid:       return "pid";
+        case FilterField::Process:   return "process";
+        case FilterField::Path:      return "path";
+        case FilterField::State:     return "state";
+        case FilterField::Proto:     return "proto";
+        case FilterField::Host:      return "host";
+        case FilterField::Service:   return "service";
+        case FilterField::Cpu:       return "cpu";
+        case FilterField::Mem:       return "mem";
+        case FilterField::Disk:      return "disk";
+        case FilterField::Rx:        return "rx";
+        case FilterField::Tx:        return "tx";
+        case FilterField::Net:       return "net";
+        case FilterField::Duration:  return "duration";
+        case FilterField::Speed:     return "speed";
+        case FilterField::Tls:       return "tls";
+        case FilterField::Country:   return "country";
+        case FilterField::Note:      return "note";
+        case FilterField::Rtt:       return "rtt";
+        case FilterField::MinRtt:    return "minrtt";
+        case FilterField::Cwnd:      return "cwnd";
+        case FilterField::Retrans:   return "retrans";
+        case FilterField::Ppid:      return "ppid";
+        case FilterField::Parent:    return "parent";
+        case FilterField::Integrity: return "integrity";
+        case FilterField::Signature: return "signature";
+    }
+    return "?";
+}
+
+std::string HelpColumnsText() {
+    std::string out =
+        "columns - every column, its CLI name, its header, the source that "
+        "fills it, and whether it is group-safe. A group is one process, so a "
+        "per-connection column has no honest group answer and is refused by "
+        "`--group`.\r\n"
+        "\r\n"
+        "name | header | source | group-safe\r\n";
+    for (int col = 0; col < COL_COUNT; ++col) {
+        out += JsonKeyFor(col);
+        out += " | ";
+        out += WideToUtf8(ConnectionStore::ColumnTitle(col));
+        out += " | ";
+        out += ColumnSource(col);
+        out += " | ";
+        out += ColumnIsPerConnectionOnly(col) ? "per-connection" : "group-safe";
+        out += "\r\n";
+    }
+    out += "\r\n";
+    out += "Named column sets (--columns SET): default, minimal, full.\r\n";
+    auto dumpSet = [&](const char* setName, const int* cols) {
+        out += "  ";
+        out += setName;
+        out += ": ";
+        const size_t n = CountColumns(cols);
+        for (size_t i = 0; i < n; ++i) {
+            if (i) out += ", ";
+            out += JsonKeyFor(cols[i]);
+        }
+        out += "\r\n";
+    };
+    dumpSet("default", kColsCliDefault);
+    dumpSet("minimal", kColsCliMinimal);
+    dumpSet("full",    kColsCliFull);
+    return out;
+}
+
+std::string HelpFiltersText() {
+    std::string out =
+        "filters - accepted `--select` / `--filter` keywords (case-insensitive "
+        "substrings unless noted). Family prefixes (tcp/udp/ipv4/ipv6) and "
+        "direction (local:/remote:) compose with any keyword.\r\n"
+        "\r\n"
+        "keyword | field | kind\r\n";
+    const FilterKeyword* table = FilterKeywordTable();
+    const size_t n = FilterKeywordCount();
+    for (size_t i = 0; i < n; ++i) {
+        out += WideToUtf8(table[i].spelling);
+        out += " | ";
+        out += FilterFieldLabel(table[i].field);
+        out += " | keyword\r\n";
+    }
+    out += "\r\n";
+    out += "Numeric keywords (pid/lport/rport/port/state/cpu/mem/disk/rx/tx/net/"
+           "duration/speed/rtt/minrtt/cwnd/retrans/ppid) accept ranges: a-b.\r\n";
+    out += "State keywords: estab, time-wait, listen, close-wait, and others.\r\n";
+    out += "Proto keywords: tcp, udp.\r\n";
+    return out;
 }
 
 // 'lines' selects NDJSON over the JSON array - see ListOptions::jsonLines.
@@ -2614,6 +2742,127 @@ CommandResult CmdBlocks() {
     return r;
 }
 
+CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
+                        const std::string& format) {
+    CommandResult r;
+    // doctor reuses the SAME BuildSummary assembly the `version` verb uses
+    // (handles/GDI/USER, traffic fallback) so the two verbs can never disagree
+    // about process state. See BuildSummary/AboutText for why each field is
+    // probed rather than hard-coded - notably the handle count, where 0 is a
+    // real answer and must not be hidden.
+    BuildSummary s;
+    s.elevated = IsElevated();
+    s.presetsAvailable = true;
+    s.totalColumnCount = COL_COUNT;
+    s.visibleColumnCount = 0;
+    s.columnCountKnown = false;
+    {
+        SocketTrafficSampler probe;
+        s.trafficFallback = !s.elevated && probe.Supported();
+        if (const SocketTrafficSampler* live = ActiveTrafficSampler()) {
+            s.trafficScanRan = true;
+            s.trafficTimeouts = live->TimeoutCount();
+            s.trafficScanFailures = live->ScanFailureCount();
+        }
+    }
+    {
+        DWORD handles = 0;
+        s.resourceCountsKnown =
+            ::GetProcessHandleCount(::GetCurrentProcess(), &handles) != FALSE;
+        s.handleCount = handles;
+        s.gdiCount = ::GetGuiResources(::GetCurrentProcess(), GR_GDIOBJECTS);
+        s.userCount = ::GetGuiResources(::GetCurrentProcess(), GR_USEROBJECTS);
+    }
+
+    // GeoIP: an optional one-off --db probe. A fresh Load() here (not the
+    // process-wide store), so a bad path is reported by doctor instead of
+    // surfacing later as an empty Country column.
+    bool geoOk = false;
+    std::wstring geoPath, geoVersion, geoError;
+    uint64_t geoRecords = 0;
+    size_t geoSize = 0;
+    if (geoDbPath.empty()) {
+        geoError = L"no --db given";
+    } else {
+        GeoIpDatabase db;
+        if (db.Load(geoDbPath, &geoError)) {
+            geoOk = true;
+            geoPath = db.SourcePath();
+            geoVersion = db.DatabaseVersion();
+            geoRecords = db.RecordCount();
+            geoSize = db.FileSize();
+        }
+    }
+
+    // Firewall: the WinTCP rule ledger. CountWinTcpRules returns the count with
+    // the reason in fwError when the ledger cannot be read with confidence.
+    std::wstring fwError;
+    const int fwRules = CountWinTcpRules(&fwError);
+
+    // Capture: the same tools + elevation question EvaluateCaptureGate answers,
+    // reported as capability text rather than a go/no-go.
+    std::wstring capWhy;
+    const bool capOk = CaptureAvailable(&capWhy);
+
+    if (format == "json") {
+        std::string out = "{";
+        out += "\n  \"elevation\": " + std::string(s.elevated ? "true" : "false") + ",";
+        out += "\n  \"handles\": " +
+               (s.resourceCountsKnown ? std::to_string(s.handleCount) : "null") + ",";
+        out += "\n  \"gdiObjects\": " + std::to_string(s.gdiCount) + ",";
+        out += "\n  \"userObjects\": " + std::to_string(s.userCount) + ",";
+        out += "\n  \"traffic\": {";
+        out += "\n    \"fallback\": " + std::string(s.trafficFallback ? "true" : "false") + ",";
+        out += "\n    \"scanned\": " + std::to_string(s.trafficScanRan ? 1 : 0) + ",";
+        out += "\n    \"timeouts\": " + std::to_string(s.trafficTimeouts) + ",";
+        out += "\n    \"failures\": " + std::to_string(s.trafficScanFailures);
+        out += "\n  },";
+        out += "\n  \"geoIp\": {";
+        out += "\n    \"loaded\": " + std::string(geoOk ? "true" : "false") + ",";
+        out += "\n    \"path\": \"" + JsonEscapeA(geoPath) + "\",";
+        out += "\n    \"version\": \"" + JsonEscapeA(geoVersion) + "\",";
+        out += "\n    \"records\": " + std::to_string(geoRecords) + ",";
+        out += "\n    \"size\": " + std::to_string(geoSize);
+        if (!geoError.empty())
+            out += ",\n    \"error\": \"" + JsonEscapeA(geoError) + "\"";
+        out += "\n  },";
+        out += "\n  \"firewall\": {";
+        out += "\n    \"rules\": " + std::to_string(fwRules);
+        if (!fwError.empty())
+            out += ",\n    \"error\": \"" + JsonEscapeA(fwError) + "\"";
+        out += "\n  },";
+        out += "\n  \"capture\": {";
+        out += "\n    \"available\": " + std::string(capOk ? "true" : "false") + ",";
+        out += "\n    \"why\": \"" + JsonEscapeA(capWhy) + "\"";
+        out += "\n  }";
+        out += "\n}\n";
+        r.out = out;
+        return r;
+    }
+
+    // Text: the About box (version + capabilities) then a diagnostic section.
+    r.out = WideToUtf8(AboutText(s, verbose));
+    if (!r.out.empty() && r.out.back() != '\n') r.out += "\r\n";
+    r.out += "\r\n--- Environment diagnostics\r\n";
+    if (geoOk) {
+        r.out += "geoip: " + WideToUtf8(geoPath) + " (version " +
+                 WideToUtf8(geoVersion) + ", " + std::to_string(geoRecords) +
+                 " records, " + std::to_string(geoSize) + " bytes)\r\n";
+    } else {
+        r.out += "geoip: not loaded (" + WideToUtf8(geoError) + ")\r\n";
+    }
+    if (fwError.empty()) {
+        r.out += "firewall: " + std::to_string(fwRules) + " WinTCP rules\r\n";
+    } else {
+        r.out += "firewall: " + std::to_string(fwRules) +
+                 " WinTCP rules (ledger unreadable: " +
+                 WideToUtf8(fwError) + ")\r\n";
+    }
+    r.out += "capture: " + std::string(capOk ? "available" :
+             ("unavailable (" + WideToUtf8(capWhy) + ")")) + "\r\n";
+    return r;
+}
+
 CommandResult CmdBookmarkList(const std::string& format) {
     CommandResult r;
     size_t unreadable = 0;
@@ -3365,6 +3614,21 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         r.err = "capture: --select <filter> is required.\r\n";
         return r;
     }
+    // 9.3.7: --filter is an extra pktmon address pin, so it must be a bare IP.
+    // Cheap format check BEFORE the snapshot, so a typo is rc 2 on any box and
+    // not rc 1 "no live row" hiding behind a dead selector.
+    if (!co.filter.empty()) {
+        IN_ADDR a4 = {};
+        IN6_ADDR a6 = {};
+        if (::InetPtonW(AF_INET, co.filter.c_str(), &a4) != 1 &&
+            ::InetPtonW(AF_INET6, co.filter.c_str(), &a6) != 1) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = "capture: --filter '" + WideToUtf8(co.filter) +
+                    "' is not an IPv4 or IPv6 address.\r\n";
+            return r;
+        }
+    }
     ConnectionStore store;
     std::wstring err;
     if (!BuildStoreSnapshot(source, store, /*procStats=*/false,
@@ -3396,6 +3660,24 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
                 " is not a direction. Use both, first (a) or second (b).\r\n";
         return r;
     }
+    // --bin writes raw bytes and has nowhere to go but --out, and concatenating
+    // hex framing onto binary output would be a silent corruption. Checked here
+    // (after dir resolution, before any target work) so the parser and the verb
+    // agree on what a valid --bin invocation looks like.
+    if (co.bin) {
+        if (co.text) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = "capture: --bin and --text are mutually exclusive.\r\n";
+            return r;
+        }
+        if (co.outPath.empty()) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = "capture: --bin writes binary bytes, so it needs --out FILE.\r\n";
+            return r;
+        }
+    }
     // One builder for both front ends (see StreamCapture.h): binary fields,
     // never the display strings that carry the port.
     const CaptureTarget t = MakeCaptureTarget(c);
@@ -3423,11 +3705,16 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
     // --text run's own framing lines arrive looking like payload, and a reader
     // piping it somewhere would capture them too.
     if (co.text) plan += "mode: print the reassembled stream to stdout\r\n";
+    if (co.bin) plan += "mode: write the raw reassembled stream to " +
+                        WideToUtf8(co.outPath) + " (binary, not hex)\r\n";
     if (!co.outPath.empty())
         plan += "saving the capture to " + WideToUtf8(co.outPath) + "\r\n";
     if (co.eventFlags != kCaptureFlagsDefault)
         plan += "pktmon flags: capture events SYN/FIN/RST mask "
                 + std::to_string(co.eventFlags) + "\r\n";
+    if (!co.filter.empty())
+        plan += "pktmon address filter: -i " + WideToUtf8(co.filter) +
+                " (extra address pin)\r\n";
     if (mo.dryRun) {
         CommandResult r;
         r.out = plan;
@@ -3444,7 +3731,7 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         return r;
     }
     std::wstring serr;
-    if (!StartCapture(t, co.eventFlags, &serr)) {
+    if (!StartCapture(t, co.eventFlags, co.filter, &serr)) {
         CommandResult r;
         r.exitCode = kExitFail;
         r.err = "capture start failed: " + WideToUtf8(serr) + "\r\n";
@@ -3551,6 +3838,37 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
             emit(L"to first endpoint", cr.dir1Label, cr.toServer);
         if (dir == CaptureDir::kBoth || dir == CaptureDir::kSecond)
             emit(L"from first endpoint", cr.dir2Label, cr.toClient);
+    }
+    if (co.bin) {
+        // Raw stream bytes, no hex/pcapng framing. kBoth concatenates dir1 then
+        // dir2 with no separator; kFirst -> toServer; kSecond -> toClient.
+        std::string blob;
+        if (dir == CaptureDir::kBoth || dir == CaptureDir::kFirst)
+            blob.append(cr.toServer.bytes);
+        if (dir == CaptureDir::kBoth || dir == CaptureDir::kSecond)
+            blob.append(cr.toClient.bytes);
+        HANDLE h = CreateFileW(co.outPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) {
+            CommandResult r2;
+            r2.exitCode = kExitFail;
+            r2.err = "capture: cannot open " + WideToUtf8(co.outPath) +
+                     " for writing (" + WideToUtf8(FormatSystemError(::GetLastError())) + ").\r\n";
+            return r2;
+        }
+        DWORD written = 0;
+        BOOL ok = WriteFile(h, blob.data(), static_cast<DWORD>(blob.size()), &written, nullptr);
+        CloseHandle(h);
+        if (!ok || written != blob.size()) {
+            CommandResult r2;
+            r2.exitCode = kExitFail;
+            r2.err = "capture: wrote " + std::to_string(written) + " of " +
+                     std::to_string(blob.size()) + " bytes to " +
+                     WideToUtf8(co.outPath) + ".\r\n";
+            return r2;
+        }
+        r.out += "wrote " + std::to_string(blob.size()) + " raw bytes to " +
+                 WideToUtf8(co.outPath) + "\r\n";
     }
     return r;
 }

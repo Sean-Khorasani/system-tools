@@ -46,10 +46,20 @@ call :t "help short flag" "-h" 0 "Usage:"
 call :t "help list" "help list" 0 "--filter F"
 call :t "list --help" "list --help" 0 "Examples:"
 call :t "list help positional" "list help" 0 "Examples:"
+REM 9.3.2: reference listings generated from the parser tables - the markers
+REM come from the column/filter vocabulary itself, so a drift (parser accepts a
+REM name the help omits) is caught by a missing marker.
+call :t "help columns" "help columns" 0 "group-safe"
+call :t "help filters" "help filters" 0 "case-insensitive"
 call :t "help bogus" "help bogus" 2 "unknown command"
 call :t "unknown command" "nonsense" 2 "Try 'wintcp.exe help'"
 call :t "marker ignored" "version --__wintcp-elevated" 0 "WinTCP"
 call :t "version banner" "version" 0 "WinTCP"
+REM 9.3.1: `doctor` is environment diagnostics - always exit 0, and the markers
+REM come from its diagnostic sections (geoip/firewall/capture), which are stable
+REM regardless of what this machine actually has.
+call :t "doctor text" "doctor" 0 "geoip:"
+call :t "doctor json" "doctor --format json" 0 "geoIp"
 call :t "list header" "list --limit 1" 0 "Proto"
 call :t "list json array" "list --format json --limit 1" 0 "["
 call :t "list json columns" "list --format json --columns proto,pid --limit 1" 0 "proto"
@@ -375,6 +385,18 @@ REM --out IS shared with list/export on purpose (same meaning: a file to write),
 REM so it is accepted here rather than refused. Dry run only: a real run starts
 REM pktmon, which the harness must not do unattended.
 call :t "capture accepts out" "capture --select pid:99999999 --out C:\nope.pcapng --dry-run" 1 "no live row"
+REM `capture --bin` (2026-10-08). The allow-list is what the harness can assert:
+REM --bin is capture-only (rejected on `list`), and it is accepted alongside
+REM --out / --dry-run. The --bin-without-out and --bin-with --text refusals
+REM both resolve --select first, so they need a live row and are checked by hand
+REM like the rest of the capture refusals.
+call :t "bin is capture-only" "list --bin" 2 "not a switch of this command"
+call :t "capture accepts bin" "capture --select pid:99999999 --bin --out C:\nope.bin --dry-run" 1 "no live row"
+REM `capture --filter` (9.3.7): an extra pktmon address pin (-i). Accepted as a
+REM switch (an unlisted one would exit 2), validated as an IP BEFORE --select
+REM resolves, so a bad value is exit 2 on any box and a live row is never needed.
+call :t "capture accepts filter" "capture --select pid:99999999 --filter 1.2.3.4 --dry-run" 1 "no live row"
+call :t "capture rejects bad filter" "capture --select pid:99999999 --filter notanip --dry-run" 2 "is not an IPv4 or IPv6"
 call :t "list accepts interval" "list --filter tcp: --interval 1 --count 1 --quiet" 0 "."
 call :t "ps accepts interval" "ps --interval 1 --count 1 --quiet" 0 "."
 call :t "stat accepts interval" "stat --interval 1 --count 1" 0 "."

@@ -53,6 +53,7 @@ Usage: wintcp.exe <command> [switches]
 | | `export` | Write a view to CSV, TSV or JSON. |
 | | `geoip` | Inspect a `.mmdb` database and look up addresses. |
 | Other | `version` | Report what is available on this system, and why anything is not. |
+| | `doctor` | Environment diagnostics for this run: elevation, handle/GDI/USER counts, traffic source, GeoIP, firewall rules and capture availability. Exits `0`; degraded capability is reported as text. `--format json` for scripts. |
 | | `help` | Overview or per-command help. |
 
 The act verbs (`kill`, `close`, `block`, `unblock`, `capture`) require `--yes` and support `--dry-run`. `wintcp.exe help` lists `blocks` alongside them; unlike the others it only reads.
@@ -102,7 +103,8 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
 --filter F    filter grammar: chrome, port:443, pid:1000-2000, state:estab,
               process:svchost, proto:udp, remote:1.2.3.4, note:"vendor api",
               cpu:12, rx:2.0. Space = AND, exclude:X negates, "quoted value"
-              keeps a space inside one value.
+              keeps a space inside one value. Run `wintcp help filters` for the
+              full keyword list, and `wintcp help columns` for every column.
 --sort COL    sort column (default pid). --desc reverses.
 --group       one row per process instead of per connection.
 --format S    table (default) = aligned columns, header printed first, rows
@@ -112,6 +114,8 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
               be consumed as it runs instead of buffered to the closing
               bracket.
 --columns C   default | minimal | full (wide = full), or a comma-separated list.
+               Run `wintcp help columns` for the authoritative name list, header
+               and which enrichment source fills each column.
 --limit N     at most N rows.
 --quiet       print nothing; exit 0 when any row matches, else 1. An
               enrichment filter without its source switch (--dns, --db,
@@ -343,13 +347,15 @@ What appears depends entirely on where the capture window fell relative to the h
 | `--text` | Print the reassembled stream to stdout as a hex dump, one block per direction. This is the command-line equivalent of the GUI's *Follow TCP stream*, which was removed on 2026-10-05. |
 | `--dir both\|first\|second` | Which direction `--text` prints. `first`/`a` and `second`/`b` are accepted, as are the `server`/`client` spellings. Default `both`. An unrecognised value is refused, never treated as `both`. |
 | `--out FILE` | Save the capture as **pcapng**, byte-for-byte, so it opens in Wireshark or `tshark` with no conversion by the reader. An existing file there is refused (exit `2`) unless `--force`. |
+| `--bin` | Instead of the hex dump, write the **raw reassembled stream bytes** to `--out FILE`, with no hex or pcapng framing. Requires `--out`; mutually exclusive with `--text`. With `--dir both` (the default) the two directions are concatenated, `first` writes only to-server bytes, `second` only to-client. An existing file there is refused (exit `2`) unless `--force`. |
 | `--force` | Authorise replacing an existing `--out` file. Checked **before** the capture window opens, so `--dry-run` reports a taken destination. |
 | `--flags none\|syn\|fin\|rst\|all\|N` | Pass a `--flags` bitmask to `pktmon start`, selecting which TCP lifecycle events to record (`syn=1`, `fin=2`, `rst=4`). `all` is `7`. Default `none` emits no flag and records everything — the only mode that fully reassembles a stream. Narrowing the set lightens the capture but can prevent reassembly from completing. |
+| `--filter IP` | Add a second address to the `pktmon filter add` line (`-i`), so the capture records an additional IPv4 or IPv6 address alongside the selected connection's ports. Must be a bare IP address — a non-IP value exits `2` before the snapshot runs. The extra address appears in `--dry-run`'s plan. |
 
 - **Each direction is labelled by the endpoint that sent it**, not by `client`/`server`. `pktmon` does not reliably report which end sent the SYN, so those words would be a claim the capture cannot support. The labels are derived from the same endpoint ordering the reassembler used, so a label cannot disagree with which half of the bytes it is.
 - The offsets in the dump are that direction's **own** stream offsets, so they line up with the TCP sequence base when a SYN was seen.
 - **A hole in the stream is reported before the bytes, not after.** A gap or a truncated direction prints a `NOTE:` line before its dump; a reader who stops at the first block is still told the stream is incomplete. Silence about it would be worse than the gap itself, since every decode after a hole is wrong.
-- `--text` and `--out` compose: one run can print the stream and save the capture.
+- `--text` and `--out` compose: one run can print the stream and save the capture. `--bin` is a **third** output mode: it writes the raw reassembled bytes to `--out` instead of the hex dump, so it requires `--out` and is refused alongside `--text`.
 
 ### `export`
 

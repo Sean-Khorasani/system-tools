@@ -269,7 +269,7 @@ void ClearCaptureFilter() {
 }
 
 bool StartCapture(const CaptureTarget& target, unsigned eventFlags,
-                  std::wstring* error) {
+                  const std::wstring& extraAddr, std::wstring* error) {
     const std::wstring exe = PktmonPath();
     const auto fail = [error](const wchar_t* what) {
         if (error != nullptr) *error = what;
@@ -285,9 +285,17 @@ bool StartCapture(const CaptureTarget& target, unsigned eventFlags,
     ::swprintf_s(ports, L"-t TCP -p %u -p %u -i %s", target.localPort,
                  target.remotePort,
                  FormatAddrForFilter(target.localAddr, target.ipV4).c_str());
-    if (RunTool(exe, std::wstring(L"filter add wintcp ") + ports) != 0)
+    std::wstring filt = std::wstring(L"filter add wintcp ") + ports;
+    // 9.3.7: --filter passthrough. Built on the DYNAMIC string, never the fixed
+    // `ports` buffer above: an IPv6 address can be 45 chars and a second
+    // -i <ip> would push it past kFilterArgChars, silently truncating the
+    // command - the exact failure pktmon's own truncation hides.
+    if (!extraAddr.empty()) {
+        filt += L" -i " + extraAddr;
+    }
+    if (RunTool(exe, filt) != 0)
         return fail(L"Could not start packet capture (pktmon filter). "
-                    L"Another capture tool may be running.");
+                     L"Another capture tool may be running.");
 
     const std::wstring etl = MakeTempPath(L".etl");
     if (etl.empty()) return fail(L"Could not create a temporary file name.");

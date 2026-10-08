@@ -77,8 +77,11 @@ const char* kHelp =
     "\r\n"
     "Usage: wintcp.exe <command> [switches]\r\n"
     "       wintcp.exe help <command>     full help + examples for one command\r\n"
-    "       wintcp.exe <command> --help   same as above\r\n"
-    "       wintcp.exe --help | -h        this overview\r\n"
+      "       wintcp.exe <command> --help   same as above\r\n"
+      "       wintcp.exe help columns      list column names, headers, sources\r\n"
+      "       wintcp.exe help filters      list accepted filter keywords\r\n"
+      "       wintcp.exe help doctor       environment diagnostics\r\n"
+      "       wintcp.exe --help | -h        this overview\r\n"
     "\r\n"
     "Monitoring (ps/top/lsof-like, single snapshot unless --watch/--count):\r\n"
     "  list | conn   connections table (filter, sort, group, choose columns)\r\n"
@@ -93,7 +96,7 @@ const char* kHelp =
     "Library (bookmarks, presets, export, GeoIP):\r\n"
     "  bookmark | preset | export | geoip\r\n"
     "\r\n"
-    "Other: version | help\r\n"
+      "Other: version | doctor | help\r\n"
     "\r\n"
     "Exit codes: 0 ok, 1 failure or empty result, 2 bad arguments,\r\n"
     "            3 refused (mutating command without --yes).\r\n"
@@ -469,8 +472,8 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe capture --select <filter> [--secs N]\r\n"
      "                          [--yes] [--dry-run]\r\n"
-     "                          [--text] [--dir both|first|second]\r\n"
-     "                          [--out FILE] [--force]\r\n"
+       "                          [--text] [--bin] [--dir both|first|second]\r\n"
+       "                          [--filter IP] [--out FILE] [--force]\r\n"
      "\r\n"
      "Installs a pktmon filter for the selected connection, records N\r\n"
      // Keep-in-step: default 5 / 1..60 restate kCaptureSecsDefault/Min/Max
@@ -484,14 +487,21 @@ const CommandHelp kCommandHelps[] = {
      "  --text         print the reassembled stream to stdout as a hex dump,\r\n"
      "                 one block per direction, labelled by the endpoint that\r\n"
      "                 sent it. This is the command-line equivalent of the\r\n"
-     "                 GUI's Follow TCP stream, removed 2026-10-05.\r\n"
+      "                 GUI's Follow TCP stream, removed 2026-10-05.\r\n"
+      "  --bin          instead of the hex dump, write the raw reassembled\r\n"
+      "                 stream to --out FILE as bytes, with no pcapng or hex\r\n"
+      "                 framing. Requires --out; mutually exclusive with --text.\r\n"
       "  --dir LIST     which direction --text prints: both (default), first\r\n"
       "                 (a) or second (b).\r\n"
       "  --flags MASK   packet event filter for pktmon: none, syn, fin, rst,\r\n"
       "                 all, or a bitmask (default none = every event). Narrowing\r\n"
       "                 the set lightens the capture but can prevent the stream\r\n"
-      "                 from reassembling to completion.\r\n"
-     "  --out FILE     save the capture as pcapng, byte-for-byte, so it opens\r\n"
+       "                 from reassembling to completion.\r\n"
+       "  --filter IP    extra address pin added to the pktmon filter add line\r\n"
+       "                 (-i), alongside the selected connection's ports: record\r\n"
+       "                 an additional IPv4 or IPv6 address. Must be a bare IP;\r\n"
+       "                 a non-IP value exits 2 without touching the snapshot.\r\n"
+       "  --out FILE     save the capture as pcapng, byte-for-byte, so it opens\r\n"
      "                 in Wireshark or tshark. An existing path is REFUSED\r\n"
      "                 (exit 2) unless --force is given, because --out replaces\r\n"
      "                 the whole file and this command cannot ask.\r\n"
@@ -503,8 +513,10 @@ const CommandHelp kCommandHelps[] = {
      "Examples:\r\n"
      "  wintcp.exe capture --select \"pid:1234\" --dry-run\r\n"
      "  wintcp.exe capture --select \"pid:1234 remote:port:443\" --secs 10 --yes\r\n"
-     "  wintcp.exe capture --select \"pid:1234\" --secs 20 --text --dir b --yes\r\n"
-     "  wintcp.exe capture --select \"pid:1234\" --secs 20 --out c:\\tmp\\s.pcapng --yes\r\n"},
+      "  wintcp.exe capture --select \"pid:1234\" --secs 20 --text --dir b --yes\r\n"
+       "  wintcp.exe capture --select \"pid:1234\" --secs 20 --bin --out c:\\tmp\\s.bin --force --yes\r\n"
+       "  wintcp.exe capture --select \"pid:1234\" --filter 192.0.2.1 --dry-run\r\n"
+      "  wintcp.exe capture --select \"pid:1234\" --secs 20 --out c:\\tmp\\s.pcapng --yes\r\n"},
     {"stat sys",
      "stat - system CPU / memory / disk / network (one sample, then exit)\r\n"
      "\r\n"
@@ -533,8 +545,24 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Examples:\r\n"
      "  wintcp.exe version\r\n"
-     "  wintcp.exe version --verbose\r\n"},
-    {"help",
+      "  wintcp.exe version --verbose\r\n"},
+     {"doctor",
+      "doctor - environment diagnostics for running this tool here\r\n"
+      "\r\n"
+      "Usage: wintcp.exe doctor [--format table|json] [--verbose] [--db FILE]\r\n"
+      "\r\n"
+      "Prints what THIS run can do and why anything cannot, in one block: process\r\n"
+      "state (elevation, handle/GDI/USER counts, traffic source) via the same\r\n"
+      "summary `version` uses, plus GeoIP (--db), the WinTCP firewall-rule count,\r\n"
+      "and capture availability (pktmon tools + elevation). Always exits 0; a\r\n"
+      "degraded capability is reported as text, not a failure. --format json emits\r\n"
+      "a stable object for scripted checks.\r\n"
+      "\r\n"
+      "Examples:\r\n"
+      "  wintcp.exe doctor\r\n"
+      "  wintcp.exe doctor --format json\r\n"
+      "  wintcp.exe doctor --verbose --db GeoLite2-Country.mmdb\r\n"},
+     {"help",
      "help - this help, or full help for one command\r\n"
      "\r\n"
      "Usage: wintcp.exe help [command]\r\n"
@@ -690,6 +718,7 @@ struct Args {
     // `out` for list/export, means the same thing (a file to write), and giving
     // one switch two homes is how a reader ends up with two different defaults.
     bool captureText = false;
+    bool captureBin = false;
     std::wstring captureDir = L"both";
     unsigned captureFlags = kCaptureFlagsDefault;   // parsed via ParseCaptureFlags
     bool traffic = false; // list/details: per-PID byte totals (bounded scan)
@@ -856,6 +885,11 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             // capture only. No value: the only question is whether to print the
             // stream, and "how much of it" is --dir's job, not this switch's.
             a->captureText = true;
+        } else if (t == L"--bin") {
+            // capture only. Writes the raw reassembled bytes to --out (binary,
+            // no hex/pcapng framing). Mutually exclusive with --text, and --out
+            // is mandatory: there is no stdout form for binary data.
+            a->captureBin = true;
         } else if (t == L"--dir") {
             std::wstring v;
             if (!need(&v)) return "missing value for --dir";
@@ -1076,7 +1110,7 @@ const wchar_t* const kSwitchNames[] = {
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
-    L"--text", L"--dir",
+    L"--text", L"--bin", L"--dir",
      L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
      L"--dns-timeout",
 };
@@ -1198,7 +1232,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"block", L"--select --yes --dry-run"},
     {L"unblock", L"--address --port --yes --dry-run"},
     {L"blocks", L""},     // takes no switches
-     {L"capture", L"--select --secs --yes --dry-run --text --dir --flags --out --force"},
+       {L"capture", L"--select --filter --secs --yes --dry-run --text --bin --dir --flags --out --force"},
     {L"follow", nullptr},  // alias: same as capture
     {L"bookmark", L"--address --port --tag --note --format"},
     {L"preset",
@@ -1215,6 +1249,7 @@ const VerbSwitches kVerbSwitches[] = {
       L"--traffic --dns --dns-timeout --db --quiet --limit --force"},
     {L"geoip", L"--db"},
     {L"version", L"verbose"},  // --verbose adds diagnostic detail
+    {L"doctor", L"--verbose --format --db"},
     {L"help", L""},       // takes no switches
     // Hidden test verb for R1: raises a real access violation so that
     // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
@@ -1442,6 +1477,14 @@ int RunCliCommand(int argc, wchar_t** argv) {
             topic = t;
             break;
         }
+        if (topic == L"columns") {
+            WriteOut(HelpColumnsText());
+            return 0;
+        }
+        if (topic == L"filters") {
+            WriteOut(HelpFiltersText());
+            return 0;
+        }
         if (topic.empty()) {
             WriteOut(kHelp);
             return 0;
@@ -1590,6 +1633,17 @@ int RunCliCommand(int argc, wchar_t** argv) {
         }
         WriteOut(WideToUtf8(AboutText(s, verbose)));
         return 0;
+    }
+    if (cmd == L"doctor") {
+        std::string verr;
+        const std::string fmt = a.format.empty() ? std::string("table") : a.format;
+        if (!CheckFormat(fmt, {"table", "json"}, "doctor", &verr)) {
+            WriteErr(verr + "\r\n");
+            return 2;
+        }
+        const CommandResult r = CmdDoctor(a.verbose, a.db, fmt);
+        Emit(r);
+        return r.exitCode;
     }
     if (cmd == L"crashtest") {
         // R1 fuse box. Not reachable from help, the README or any script
@@ -2062,9 +2116,11 @@ int RunCliCommand(int argc, wchar_t** argv) {
         SnapshotSource src;
         CaptureOptions co;
         co.text = a.captureText;
+        co.bin = a.captureBin;
         co.outPath = a.out;
         co.dir = a.captureDir;
         co.eventFlags = a.captureFlags;
+        co.filter = a.filter;
         co.forceOverwrite = a.force;
         const CommandResult r = CmdCapture(src, a.select, mo, a.secs, co);
         Emit(r);

@@ -439,6 +439,16 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
 CommandResult CmdGeoIpInfo(SnapshotSource& source,
                            const std::wstring& geoIpPath);
 
+// ---- doctor (environment diagnostics) ---------------------------------------
+// `version` shows the build + capability state; `doctor` adds the run-local
+// diagnostics a script or a support call needs to know whether a missing
+// feature is "this build" vs "this machine" vs "this invocation": GeoIP DB, the
+// WinTCP firewall-rule ledger, and capture availability (tools + elevation).
+// Text here reuses AboutText/BuildSummary so `version` and `doctor` can never
+// disagree about process state.
+CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
+                        const std::string& format);
+
 // ---- capture (follow stream) -----------------------------------------------
 //
 // `capture` grew from "print some counters" into the command-line replacement
@@ -459,6 +469,9 @@ struct CaptureOptions {
     // Print the reassembled stream to stdout as a hex dump, one block per
     // direction (or just the one --dir selects).
     bool text = false;
+    // Dump the raw reassembled stream bytes to outPath (binary, no hex/pcapng
+    // framing). Requires outPath; mutually exclusive with text.
+    bool bin = false;
     // Save the capture as pcapng here. Empty = do not keep it.
     std::wstring outPath;
     // R4: the pcapng write is CREATE_ALWAYS, so an existing file at outPath
@@ -472,6 +485,12 @@ struct CaptureOptions {
     // ParseCaptureFlags. Named constant lives in StreamCapture.h; the struct
     // default stays a literal 0 so this header does not need to include it.
     unsigned eventFlags = 0;
+
+    // 9.3.7: an extra `pktmon filter add -i <ip>` address pin, passed through
+    // verbatim. Empty = do not add one, keeping the default single-connection
+    // filter pktmon derives from the selected row. Validated as an IP in
+    // CmdCapture, so the executor never ships a malformed token to pktmon.
+    std::wstring filter;
 };
 
 CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
@@ -490,6 +509,12 @@ bool ResolveColumnSpec(const std::wstring& spec, std::vector<int>& out);
 
 // ColumnId for a single column name, or -1 when unknown.
 int ColumnIdForName(const std::wstring& name);
+
+// 9.3.2: `help columns` / `help filters` text, generated from the same tables
+// (ColumnTitle, JsonKeyFor, ColumnIsPerConnectionOnly, kColumnSet*) the parser
+// uses, so the reference can never drift from accepted spellings.
+std::string HelpColumnsText();
+std::string HelpFiltersText();
 
 // ---- change events ---------------------------------------------------------
 // Format drained RowChange events as text lines or JSON lines. 'prog'

@@ -33,6 +33,8 @@ capture --select "pid:22180" --dry-run
 capture --select "proto:tcp state:estab" --dry-run
 capture --select "pid:22180" --text --dir b --dry-run
 capture --select "pid:22180" --out "c:\tmp\stream.pcapng" --dry-run
+capture --select "pid:22180" --bin --out "c:\tmp\stream.bin" --dry-run
+capture --select "pid:22180" --filter 203.0.113.7 --dry-run
 list --filter "state:listen lport:445" --columns process,path,pid,local,state
 list --filter "state:listen exclude:127." --sort lport --columns pid,process,lport,local --limit 8
 list --filter "proto:udp" --columns process,pid,local,lport,proto --limit 5
