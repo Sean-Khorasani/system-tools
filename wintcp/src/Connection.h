@@ -223,6 +223,16 @@ struct Connection {
     // unknown (e.g. a row that appeared before this field existed).
     ULONGLONG firstSeenTick = 0;
 
+    // --- ghost retention (F5.7) ---------------------------------------------
+    // firstSeenTick is the row's birth; deathTick is the snapshot tick at which
+    // the socket left the table, set once when the row is first marked kRowRemoved.
+    // finalRx/finalTx freeze the last byte counters at the moment of death, so a
+    // retained ghost keeps its final traffic reading instead of being zeroed by the
+    // next rate pass. 0 == deathTick means the row is still live.
+    ULONGLONG deathTick = 0;
+    ULONGLONG finalRx = 0;
+    ULONGLONG finalTx = 0;
+
     // --- user annotations (bookmarks / colour tags) ------------------------
     bool pinned = false;             // survives refreshes and restarts
     unsigned tag = kTagNone;         // RowTag
