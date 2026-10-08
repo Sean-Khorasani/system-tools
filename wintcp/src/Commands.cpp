@@ -1382,9 +1382,20 @@ std::string ColumnEnrichmentAdvice(const ListOptions& opt) {
         out += "column: \"host\" without --dns: reverse DNS never ran, so the "
                "cell stays empty; add --dns (blocking; resolves every "
                "candidate remote).\r\n";
-    if (colGeo && opt.geoIpPath.empty())
+    // F5.4. The country cell half-comes from --db and half from --asn-db, so
+    // "the cell stays empty" is FALSE whenever either is loaded: an ASN database
+    // fills the same cell with "AS15169 Google LLC" and no country code. The
+    // message used to claim the cell stayed empty in that case, which is both
+    // wrong and the opposite of helpful - the user is looking at a populated cell
+    // while being told it is blank. Say precisely which HALF is missing.
+    if (colGeo && opt.geoIpPath.empty() && opt.asnIpPath.empty()) {
         out += "column: \"country\" without --db: GeoIP never ran, so the cell "
                "stays empty; add --db <path to a .mmdb database>.\r\n";
+    } else if (colGeo && opt.geoIpPath.empty()) {
+        out += "column: \"country\" without --db: the ASN half is filled from "
+               "--asn-db, but no country code is, so the cell shows only "
+               "\"AS<n> <org>\"; add --db for the code.\r\n";
+    }
     if (colSig && !opt.signatures)
         out += "column: \"signature\" without --signatures: WinVerifyTrust was "
                "never called, so the cell is \"—\" rather than a verdict; add "
@@ -2824,8 +2835,22 @@ CommandResult CmdBlocks() {
     return r;
 }
 
+// A database's own record_count metadata, phrased honestly.
+//
+// Real files very often OMIT this field - every DBIP edition does - so 0 means
+// "the file does not say", NOT "the file holds no records". Printing a bare "0
+// records" told a user looking at an 8 MB, fully-populated database that it was
+// empty, and sent them off to check for a corrupted download. The JSON form is
+// null for the same reason: an absent fact is not the number zero.
+std::string RecordsText(uint64_t n) {
+    return n == 0 ? "record count not stated" : std::to_string(n) + " records";
+}
+std::string RecordsJson(uint64_t n) {
+    return n == 0 ? "null" : std::to_string(n);
+}
+
 CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
-                        const std::string& format) {
+                         const std::wstring& asnDbPath, const std::string& format) {
     CommandResult r;
     // doctor reuses the SAME BuildSummary assembly the `version` verb uses
     // (handles/GDI/USER, traffic fallback) so the two verbs can never disagree
@@ -2876,6 +2901,29 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
         }
     }
 
+    // F5.4. The same probe for the ASN file, which is a DIFFERENT database and was
+    // previously undiagnosable: --asn-db was not in this verb's switch list, so a
+    // user whose asn: filter matched nothing had no way to ask doctor whether the
+    // file it was given was even an ASN database. Reported as its own block, with
+    // its own "not given"/"not loaded" state, because "which database is wrong" is
+    // the question this is answering.
+    bool asnOk = false;
+    std::wstring asnPath, asnVersion, asnError;
+    uint64_t asnRecords = 0;
+    size_t asnSize = 0;
+    if (asnDbPath.empty()) {
+        asnError = L"no --asn-db given";
+    } else {
+        GeoIpDatabase adb;
+        if (adb.Load(asnDbPath, &asnError)) {
+            asnOk = true;
+            asnPath = adb.SourcePath();
+            asnVersion = adb.DatabaseVersion();
+            asnRecords = adb.RecordCount();
+            asnSize = adb.FileSize();
+        }
+    }
+
     // Firewall: the WinTCP rule ledger. CountWinTcpRules returns the count with
     // the reason in fwError when the ledger cannot be read with confidence.
     std::wstring fwError;
@@ -2903,10 +2951,21 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
         out += "\n    \"loaded\": " + std::string(geoOk ? "true" : "false") + ",";
         out += "\n    \"path\": \"" + JsonEscapeA(geoPath) + "\",";
         out += "\n    \"version\": \"" + JsonEscapeA(geoVersion) + "\",";
-        out += "\n    \"records\": " + std::to_string(geoRecords) + ",";
+        out += "\n    \"records\": " + RecordsJson(geoRecords) + ",";
         out += "\n    \"size\": " + std::to_string(geoSize);
         if (!geoError.empty())
             out += ",\n    \"error\": \"" + JsonEscapeA(geoError) + "\"";
+        out += "\n  },";
+        // F5.4. Same shape as "geoIp", so a consumer parsing doctor's JSON does
+        // not need a special case for the second database.
+        out += "\n  \"asnIp\": {";
+        out += "\n    \"loaded\": " + std::string(asnOk ? "true" : "false") + ",";
+        out += "\n    \"path\": \"" + JsonEscapeA(asnPath) + "\",";
+        out += "\n    \"version\": \"" + JsonEscapeA(asnVersion) + "\",";
+        out += "\n    \"records\": " + RecordsJson(asnRecords) + ",";
+        out += "\n    \"size\": " + std::to_string(asnSize);
+        if (!asnError.empty())
+            out += ",\n    \"error\": \"" + JsonEscapeA(asnError) + "\"";
         out += "\n  },";
         out += "\n  \"firewall\": {";
         out += "\n    \"rules\": " + std::to_string(fwRules);
@@ -2928,10 +2987,20 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
     r.out += "\r\n--- Environment diagnostics\r\n";
     if (geoOk) {
         r.out += "geoip: " + WideToUtf8(geoPath) + " (version " +
-                 WideToUtf8(geoVersion) + ", " + std::to_string(geoRecords) +
-                 " records, " + std::to_string(geoSize) + " bytes)\r\n";
+                 WideToUtf8(geoVersion) + ", " + RecordsText(geoRecords) +
+                 ", " + std::to_string(geoSize) + " bytes)\r\n";
     } else {
         r.out += "geoip: not loaded (" + WideToUtf8(geoError) + ")\r\n";
+    }
+    // F5.4. Its own block, with its own not-given / not-loaded state. Which of the
+    // two databases is wrong is the question a user arrives with, and until now
+    // there was no way to ask it - --asn-db was not even accepted here.
+    if (asnOk) {
+        r.out += "asn:   " + WideToUtf8(asnPath) + " (version " +
+                 WideToUtf8(asnVersion) + ", " + RecordsText(asnRecords) +
+                 ", " + std::to_string(asnSize) + " bytes)\r\n";
+    } else {
+        r.out += "asn:   not loaded (" + WideToUtf8(asnError) + ")\r\n";
     }
     if (fwError.empty()) {
         r.out += "firewall: " + std::to_string(fwRules) + " WinTCP rules\r\n";
@@ -3414,16 +3483,27 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
     IN_ADDR a4 = {};
     IN6_ADDR a6 = {};
     std::wstring code;
+    AsnInfo asn;
     if (::InetPtonW(AF_INET, ip.c_str(), &a4) == 1) {
         code = db.LookupV4(ntohl(a4.S_un.S_addr));
+        asn = db.LookupAsnV4(ntohl(a4.S_un.S_addr));
     } else if (::InetPtonW(AF_INET6, ip.c_str(), &a6) == 1) {
+        char a6s[64] = {0};
+        ::InetNtopA(AF_INET6, &a6, a6s, sizeof(a6s));
         code = db.LookupV6(a6.s6_addr);
+        asn = db.LookupAsnV6(a6.s6_addr);
     } else {
         r.exitCode = kExitArgs;
         r.err = "geoip lookup: '" + WideToUtf8(ip) + "' is not an IP.\r\n";
         return r;
     }
-    r.out = WideToUtf8(code.empty() ? std::wstring(L"—") : code) + "\r\n";
+    // F5.4. A GeoLite2-ASN file has no country records, so before this the verb
+    // answered "-" for every address and gave the reader nothing to go on: the
+    // database had loaded, the address was fine, and nothing was wrong. An answer
+    // is whichever the file actually holds, so an ASN file answers with its ASN
+    // and a country file answers with its code.
+    std::wstring answer = code.empty() ? asn.Display() : code;
+    r.out = WideToUtf8(answer.empty() ? std::wstring(L"-") : answer) + "\r\n";
     return r;
 }
 
@@ -3442,12 +3522,24 @@ CommandResult CmdGeoIpInfo(SnapshotSource& /*source*/,
         r.err = "geoip: cannot load database: " + WideToUtf8(err) + "\r\n";
         return r;
     }
+    // The record count is the database's own metadata, and most real files omit
+    // it (every DBIP edition does), so 0 must read as "not stated" rather than as
+    // an empty database. `swprintf_s` with %llu cannot say that, and the buffer is
+    // sized for the shorter, honest form.
+    const uint64_t recs = db.RecordCount();
     wchar_t buf[256] = {0};
-    ::swprintf_s(buf, L"%ls, %llu records, %llu nodes, %zu bytes",
-                 db.DatabaseVersion().c_str(),
-                 static_cast<unsigned long long>(db.RecordCount()),
-                 static_cast<unsigned long long>(db.NodeCount()),
-                 db.FileSize());
+    if (recs == 0) {
+        ::swprintf_s(buf, L"%ls, record count not stated, %llu nodes, %zu bytes",
+                     db.DatabaseVersion().c_str(),
+                     static_cast<unsigned long long>(db.NodeCount()),
+                     db.FileSize());
+    } else {
+        ::swprintf_s(buf, L"%ls, %llu records, %llu nodes, %zu bytes",
+                     db.DatabaseVersion().c_str(),
+                     static_cast<unsigned long long>(recs),
+                     static_cast<unsigned long long>(db.NodeCount()),
+                     db.FileSize());
+    }
     r.out = WideToUtf8(buf) + "\r\n";
     return r;
 }

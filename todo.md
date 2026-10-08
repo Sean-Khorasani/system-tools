@@ -31,7 +31,7 @@ worth respecting:
 |---|---|
 | `build.bat` (`/W4 /WX /permissive-`, from `clean`) | clean |
 | `fast-build.bat -Test` (15-check smoke + harness self-check + unit driver) | **PASS 15/15** |
-| `wintcp\tests\cli.bat` (CLI) | **PASS / 244 checks, 0 failures** |
+| `wintcp\tests\cli.bat` (CLI) | **PASS / 248 checks, 0 failures** |
 | `wintcp\tests\gui.bat` (GUI) | **PASS / 54 checks, 0 failed** |
 | `wintcp\tests\examples.bat` (README examples) | **PASS / 94 commands, 0 rejected** |
 

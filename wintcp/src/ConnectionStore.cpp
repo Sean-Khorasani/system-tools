@@ -1059,6 +1059,16 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
         case FilterField::Tls:
             return Has(ToLowerW(TlsSummary(c.tls)), cl.text);
         case FilterField::Country:
+            // A bare `country:` means "this row HAS a country" - the useful "show
+            // me everything with a known country" query - and is therefore false for
+            // a row with none.
+            //
+            // This is the empty-needle bug, and it was live: Has() returns TRUE for
+            // an empty needle, so before this guard a bare `country:` matched every
+            // row in the table, including the ones with no country at all. Pinned by
+            // geo.country-unenriched-matches-bare-BUG in the selftest, which failed
+            // until the guard was added. `asn:` never had it.
+            if (cl.text.empty()) return !c.country.empty();
             return Has(ToLowerW(c.country), cl.text);
         case FilterField::Asn: {
             // A bare `asn:` means "this row HAS an autonomous system", and is
@@ -2328,11 +2338,29 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             }
             break;
         }
-        case COL_COUNTRY:
+                case COL_COUNTRY:
             // F5.4. Compare what the column PRINTS, so the sort order matches the
             // screen: country first, then the ASN as a tiebreak. Without the
             // tiebreak, rows sharing a country - which is most of a table once the
             // database is loaded - sort arbitrarily against their own ASN.
+            //
+            // unknownLast: a row with neither answer sorts to the END in both
+            // directions, as docs/cli.md promises for unknown values. Without it an
+            // empty cell - which sorts below every real value - rose to the TOP
+            // under --desc, which is the one direction a reader uses to find "the
+            // rows I have not looked at yet".
+            if (a.country.empty() && a.AsnDisplay().empty() &&
+                !(b.country.empty() && b.AsnDisplay().empty())) {
+                unknownLast = true;
+                cmp = 1;
+                break;
+            }
+            if (b.country.empty() && b.AsnDisplay().empty() &&
+                !(a.country.empty() && a.AsnDisplay().empty())) {
+                unknownLast = true;
+                cmp = -1;
+                break;
+            }
             cmp = CmpStr(a.country, b.country);
             if (cmp == 0) cmp = CmpStr(a.AsnDisplay(), b.AsnDisplay());
             break;

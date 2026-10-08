@@ -457,6 +457,7 @@ const CommandHelp kCommandHelps[] = {
      "geoip - country lookup from a local MaxMind database\r\n"
      "\r\n"
      "Usage: wintcp.exe geoip lookup --db FILE <ip>\r\n"
+       "       (pass a GeoLite2-ASN file for an autonomous-system answer)\r\n"
      "       wintcp.exe geoip info --db FILE\r\n"
      "\r\n"
      "No database ships with WinTCP (MaxMind licensing) and none is ever\r\n"
@@ -549,7 +550,7 @@ const CommandHelp kCommandHelps[] = {
      {"doctor",
       "doctor - environment diagnostics for running this tool here\r\n"
       "\r\n"
-      "Usage: wintcp.exe doctor [--format table|json] [--verbose] [--db FILE]\r\n"
+      "Usage: wintcp.exe doctor [--format table|json] [--verbose] [--db FILE] [--asn-db FILE]\r\n"
       "\r\n"
       "Prints what THIS run can do and why anything cannot, in one block: process\r\n"
       "state (elevation, handle/GDI/USER counts, traffic source) via the same\r\n"
@@ -1254,7 +1255,10 @@ const VerbSwitches kVerbSwitches[] = {
       L"--traffic --dns --dns-timeout --db --asn-db --quiet --limit --force"},
     {L"geoip", L"--db"},
     {L"version", L"verbose"},  // --verbose adds diagnostic detail
-    {L"doctor", L"--verbose --format --db"},
+    // F5.4: --asn-db so `doctor` can diagnose the second database, which until now
+    // it silently refused. An asn: filter that matches nothing had no way to ask
+    // whether the file it was given was even an ASN database.
+    {L"doctor", L"--verbose --format --db --asn-db"},
     {L"help", L""},       // takes no switches
     // Hidden test verb for R1: raises a real access violation so that
     // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
@@ -1646,7 +1650,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
             WriteErr(verr + "\r\n");
             return 2;
         }
-        const CommandResult r = CmdDoctor(a.verbose, a.db, fmt);
+        const CommandResult r = CmdDoctor(a.verbose, a.db, a.asnDb, fmt);
         Emit(r);
         return r.exitCode;
     }

@@ -464,6 +464,22 @@ REM usage error proves the switch was accepted. Asserting "not a switch of this
 REM command" here instead is what caught the verb allow-list being missed.
 call :t "asn db accepted by details" "details --asn-db %JUNKDB%" 2 "--select"
 
+REM doctor. --asn-db was not in this verb's switch list, so `doctor` silently
+REM refused to diagnose the second database - the one `asn:` failures point at, and
+REM the one with no other diagnostic path. doctor DIAGNOSES, which is why these
+REM assert what it says rather than a guessed exit code: like the --db block beside
+REM it, a file it cannot load is reported (exit 0), not turned into a failure,
+REM because answering the question is the point.
+call :t "doctor asn db no value" "doctor --asn-db" 2 "missing value for --asn-db"
+call :t "doctor asn db reports bad file" "doctor --asn-db %JUNKDB%" 0 "not loaded"
+call :t "doctor asn db names the reason" "doctor --asn-db %JUNKDB%" 0 "not a GeoIP database"
+REM geoip lookup answers from whichever kind of database it is handed. An ASN file
+REM has no country records, so before this it answered "-" for every address and
+REM said nothing about why: the file had loaded, the address was valid, and nothing
+REM was wrong. The rejection path is asserted here; the happy path needs a real
+REM .mmdb and is covered by wintcp-tests.exe unit's realdb.* checks.
+call :t "geoip lookup asn db junk" "geoip lookup --db %JUNKDB% 1.1.1.1" 1 "cannot load database"
+
 REM D3: the unenrichable-window hint is ADVISORY and goes to stderr only, so
 REM stdout must stay a clean table that no marker pollutes. Whether the hint
 REM fires depends on the live socket landscape (TIME_WAIT/listener rows come

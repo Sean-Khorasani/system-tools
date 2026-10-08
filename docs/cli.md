@@ -209,7 +209,7 @@ Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separate
 
 Value conventions:
 
-- **Unknown is `—`, never `0`.** "We could not measure this" and "this is zero" are different answers, and unknown values always sort last, in both directions.
+- **Unknown is `-`, never `0`.** "We could not measure this" and "this is zero" are different answers, and unknown values sort last, in both directions. **The Country cell is the exception**, and an empty one for the same reason: it is a joined value rather than a measured one, so an unenriched row shows an empty cell and not a dash. It also honours the sort rule - `unknownLast` is set for it - which was not true until 2026-10-08, when an empty cell rose to the **top** under `--desc` because an empty string compares below every real value and the direction multiplier had nothing to counteract it.
 - `rtt` and `minrtt` are in **milliseconds**. The kernel reports microseconds; the conversion happens once, at the read boundary. A sub-millisecond RTT prints `<1`, never `0`.
 - `retrans` prints `0 B` for a connection that has genuinely never retransmitted. That is a real answer, not a missing one.
 - `ppid` prints `<pid> <parent name>`, or just the number when the parent was not in the snapshot. An **unknown** parent prints `—`: the snapshot not covering a parent is not the same as a process having no parent, and the two are not collapsed.
@@ -427,7 +427,7 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 
 ### `geoip`
 
-`geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
+`geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". The record count is the file's own `record_count` metadata, and most real files **omit it** - every DBIP edition does - in which case the count is reported as *not stated* rather than as `0`, which would otherwise read as "this 8 MB database is empty". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
 
 Both sub-commands want `--db FILE`: without it they exit `2`, and a file that will not load exits `1` carrying the parser's reason. Neither ever fetches anything — obtaining a database, and keeping it current, is covered in [GeoIP database](../README.md#geoip-database).
 

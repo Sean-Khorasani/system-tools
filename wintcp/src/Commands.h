@@ -455,7 +455,7 @@ CommandResult CmdGeoIpInfo(SnapshotSource& source,
 // Text here reuses AboutText/BuildSummary so `version` and `doctor` can never
 // disagree about process state.
 CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
-                        const std::string& format);
+                        const std::wstring& asnDbPath, const std::string& format);
 
 // ---- capture (follow stream) -----------------------------------------------
 //

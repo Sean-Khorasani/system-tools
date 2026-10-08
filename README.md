@@ -149,7 +149,9 @@ The full rule is in [filters.md](docs/filters.md).
 
 The four fields are the file's own `database_type` metadata (for MaxMind's country file, `GeoLite2-Country`), its record count, its search-tree node count and its size on disk. It is the first thing to check when the column is empty, because an empty cell is otherwise ambiguous between "no database attached" and "attached, but no entry for this address".
 
-`geoip lookup --db FILE <ip>` answers a single address with its two-letter code, or `—` when it has none.
+`geoip lookup --db FILE <ip>` answers a single address with its two-letter code, or `-` when it has none.
+
+**Pass a GeoLite2-ASN file and it answers with the autonomous system instead** - `AS13335 Cloudflare, Inc.` - because the verb answers whichever kind of database it was handed rather than only ever looking for a country record. An earlier build printed `-` for every address against an ASN file and gave no hint that the file had loaded perfectly well.
 
 Exit codes are `0` for an answer, `2` for the command being used wrongly (`--db` missing, no address, or an argument that is not an IP), and `1` for a file that was there but would not load — truncated, not an MMDB at all, or declaring a record size this reader refuses. The message says which.
 

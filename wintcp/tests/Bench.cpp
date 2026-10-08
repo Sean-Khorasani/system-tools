@@ -1170,6 +1170,16 @@ void CheckRealGeoIp(TestResult& r) {
               !asnDb.LookupAsnV4(0xC0A80001u).Known() &&
                   !asnDb.LookupAsnV6(linkLocal).Known(),
               "192.168.0.1 / fe80::1");
+        // The invariant `geoip lookup` branches on: an ASN database has NO
+        // country records, so a country lookup against it is empty while the ASN
+        // lookup is not - and that pairing is exactly what makes the verb answer
+        // with the ASN instead of printing "-" and saying nothing about why.
+        // Asserted as a paired check, because a reader that started returning a
+        // bogus country for an ASN file would pass the halves in isolation.
+        Check(r, "realdb.asn-county-lookup-is-empty",
+              asnDb.LookupV4(0x01010101u).empty() &&
+                  asnDb.LookupAsnV4(0x01010101u).Known(),
+              "country empty AND asn known, so lookup falls through");
     }
 
     if (!countryLoaded) {
@@ -5668,6 +5678,25 @@ TestResult RunSelfTest() {
                   st.ViewRow(0)->asnOrg.empty());
         Check(r, "geo.asn-cleared-no-longer-matches",
               !MatchFilter(*st.ViewRow(0), p3));
+
+        // `country:` is the field that got here first and it has the SAME
+        // empty-needle bug this feature had to avoid: MatchClause hands a bare
+        // `country:` to Has(), and Has() returns TRUE for an empty needle. So a
+        // bare `country:` matches every row in the table - including rows with no
+        // country at all, which is the opposite of the question. Reproduced
+        // deterministically rather than argued about from a live table, where
+        // the row set keeps changing under the measurement.
+        std::vector<FilterClause> pBare;
+        // The row needs a country for the first of these two checks to mean
+        // anything; the ASN join above does not set one.
+        Check(r, "geo.country-bare-set", st.SetCountry(L"8.8.8.8", L"US"));
+        Check(r, "geo.country-bare-parses", ParseFilter(L"country:", pBare));
+        Check(r, "geo.country-enriched-matches-bare",
+              enriched != nullptr && MatchFilter(*enriched, pBare),
+              "a row with US does match");
+        Check(r, "geo.country-unenriched-excluded-from-bare",
+              bare != nullptr && !MatchFilter(*bare, pBare),
+              "1.1.1.1 has no country; matched anyway, so this is the bug");
     }
 
     // F5.4. The Country column carries the ASN rather than taking a 33rd one.
@@ -5695,6 +5724,53 @@ TestResult RunSelfTest() {
         Check(r, "asn.col-both", withAsn == L"US \xB7 AS15169 Google LLC",
               WideToUtf8(withAsn));
         Check(r, "asn.col-asn-alone", asnAlone == L"AS64512 Example", WideToUtf8(asnAlone));
+
+        // Sorting the cell. docs/cli.md promises unknown values sort last "in both
+        // directions", and the Country column did not honour it: an empty cell
+        // compares below every real value, so the plain -desc multiplier flipped it
+        // to the TOP under --desc - the one direction a reader uses to find the rows
+        // they have not looked at yet. unknownLast is now set for this column, and
+        // BOTH directions are asserted because only one of them was broken.
+        const auto sortByCountry = [](bool asc) {
+            std::vector<Connection> rows;
+            Connection u;   u.remotePort = 0;              // no country, no ASN
+            Connection full; full.remotePort = 1; full.country = L"US";
+                            full.asnNumber = 15169; full.asnOrg = L"Google LLC";
+            Connection org;  org.remotePort = 2; org.asnOrg = L"No Country";
+            rows.push_back(u);
+            rows.push_back(full);
+            rows.push_back(org);
+            ConnectionStore s3;
+            s3.ReplaceSnapshot(rows);
+            ViewQuery q;
+            s3.SetSort(COL_COUNTRY, asc);
+
+            s3.SetView(q);
+            std::string seen;
+            for (size_t i = 0; i < s3.View().size(); ++i) {
+                // Not 'c': this lambda sits inside a block that already has a Connection
+
+                // named c, and /W4 C4456 refuses the shadow.
+
+                const Connection* row = s3.ViewRow(i);
+                if (row == nullptr) continue;
+                seen += std::to_string(static_cast<uint64_t>(row->remotePort));
+                seen += ",";
+            }
+            return seen;
+        };
+        // remotePort 0 is the unknown row, so it must be LAST in both directions.
+        // The other two are ordered by COUNTRY first, because the column is named
+        // Country: port 2 has an ASN but no country code, so its empty country sorts
+        // below a real one ascending. That is a country-primary sort, not a display
+        // sort, and it is the reading that makes the ASN a tiebreak among same-country
+        // rows rather than a competing primary key. What matters for the documented
+        // promise is only that port 0 - neither half known - is LAST either way.
+        Check(r, "asn.sort-unknown-last-asc", sortByCountry(true) == "2,1,0,",
+              sortByCountry(true));
+        Check(r, "asn.sort-unknown-last-desc", sortByCountry(false) == "1,2,0,",
+              sortByCountry(false));
+
     }
 
     // 29. JoinBookmarks (5.3). The case that matters is the CLEAR: a row

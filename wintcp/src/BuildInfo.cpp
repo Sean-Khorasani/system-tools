@@ -151,10 +151,14 @@ std::wstring AboutText(const BuildSummary& s, bool verbose) {
         }
         out += PadKeys(L"Traffic gaps") + lost + L"\r\n";
     }
+    // "empty", not "—": the cell is filled with an empty string when no database
+    // is loaded, so that is what a user sees. The em-dash here was a documented
+    // lie - it described a rendering the code never produced, and a reader who
+    // went looking for a dash in their table would not find one.
     out += PadKeys(L"GeoIP database") +
            std::wstring(s.geoIpLoaded
                             ? L"loaded"
-                            : L"not loaded (Country column shows —)") +
+                            : L"not loaded (Country column is empty)") +
            L"\r\n";
     out += PadKeys(L"Saved presets") +
            std::wstring(s.presetsAvailable ? L"available" : L"unavailable") +
