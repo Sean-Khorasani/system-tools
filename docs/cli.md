@@ -145,6 +145,7 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
 Notes:
 
 - `--watch` re-prints the table; with `--changes` it prints only deltas. The interval **is** the sensitivity: at 1 s you catch short-lived sockets, at 10 s you miss them.
+- Closed sockets linger as **grey ghost rows** (F5.7): after a `DISAPPEAR` they stay in the table for up to 500 sockets (oldest dropped first) instead of vanishing on the next poll, so a `--watch` stream keeps a short history of what just closed. The change feed is unaffected - `DISAPPEAR` still fires exactly once per socket - only the retained row table holds them.
 - `--count` counts **snapshots, not events**. On a busy machine four snapshots can emit hundreds of lines; pipe through `head` if you need exactly N.
 - `--watch` without `--count` runs until Ctrl+C — right for a terminal, a trap for a redirected script. When stdout is **not** a console, a one-line warning is printed on stderr; pass `--count` in scripts.
 - `--event` takes a comma-separated list. An unrecognised name exits `2`; it is never silently dropped.
