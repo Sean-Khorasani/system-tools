@@ -45,7 +45,12 @@ std::vector<ProcessGroup> GroupByProcess(const std::vector<GroupRow>& rows) {
         ProcessGroup& g = groups[it->second];
 
         g.members.push_back(i);
-        g.rowCount += (r.connectionCount == 0 ? 1 : r.connectionCount);
+        // static_cast: the ternary promotes to uint64_t (the common type of
+        // `1` and connectionCount), and rowCount is size_t. Same width on x64
+        // but nominally distinct, so /W4 C4244 + /WX rejects the implicit
+        // narrowing. The values are row counts, bounded by the store, so the
+        // cast cannot actually lose anything.
+        g.rowCount += static_cast<size_t>(r.connectionCount == 0 ? 1 : r.connectionCount);
         if (r.removed) ++g.ghostCount;
         if (r.tcp) g.hasTcp = true;
         else        g.hasUdp = true;
