@@ -133,6 +133,9 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
               The GUI applies the same budget automatically; this switch is
               the CLI binding of that per-tick ceiling.
 --db FILE     load this .mmdb and join country codes for printed rows.
+--asn-db FILE  load this GeoLite2-ASN .mmdb and join autonomous systems. A
+               SEPARATE file from --db: the two databases have different record
+               shapes, so one --db cannot supply both. Either, both or neither.
 --signatures  verify each distinct process image with WinVerifyTrust so the
               signature column and signed: filter have an answer. SLOW: a
               certificate chain per image, cached per image path for the run.
@@ -163,6 +166,7 @@ Some columns and filters need the switch that supplies their data. When it is mi
 |---|---|---|
 | `host` column, `host:` filter | `--dns` | Reverse DNS runs only on the printed rows. It is slow; bound it with `--limit`. |
 | `country` column, `country:` filter | `--db FILE` | A memory-mapped lookup; no network. |
+| `country` column's ASN half, `asn:` filter | `--asn-db FILE` | A second memory-mapped lookup, against GeoLite2-ASN. Separate from `--db` because the two are different files. |
 | `traffic`, `rx`, `tx`, `nettotal` | `--traffic` | One bounded socket scan, joined per PID. |
 | `duration` | `--traffic` | Ages come from the kernel's `ConnectionTimeMs` in the same scan. Without the scan the column reads `0s`. |
 | `bandwidth` (per-socket rate) | `--traffic` and `--watch N` | A rate is the difference between two samples. The first tick shows `—` by design. |
@@ -177,9 +181,17 @@ There are exactly **32 columns and that is a deliberate freeze**, not a limit th
 ran into. The persisted visible-set mask is one bit per column in a `UINT32`, and
 it is already full; `architecture.md` records why widening it is an eight-part
 change with a schema migration, and why a feature that needs a 33rd column should
-reuse an existing one (ASN reuses `country`) rather than grow the mask as a side
-effect. A `static_assert` in `ColumnsWin.h` fails the build at 33 so that a new
-column cannot arrive unnoticed.
+reuse an existing one rather than grow the mask as a side effect. A
+`static_assert` in `ColumnsWin.h` fails the build at 33 so that a new column
+cannot arrive unnoticed.
+
+**ASN reuses `country`, and now does so.** F5.4 was the live case that decision
+was recorded for. The `country` cell renders the two together - `US \xB7 AS15169
+Google LLC` - with the separator appearing only when both are known, so a
+country-only row reads exactly as it always did. The AS number is placed *before*
+the organisation name so that a narrow window, which ellipsises on overflow, can
+never hide which network a row belongs to; `details` and the machine-readable
+formats always carry both in full. There is no 33rd column and no 33rd bit.
 
 Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separated list. The same names are used by `list`, `export` and `--sort`. Run `wintcp.exe help list` for the authoritative list for your build.
 
@@ -191,7 +203,7 @@ Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separate
 | Live, per process | `traffic`, `rx`, `tx`, `nettotal`, `cpu`, `mem`, `disk`, `procspeed` |
 | Live, per connection | `duration`, `bandwidth` (header *Speed*), `rtt`, `minrtt`, `cwnd`, `retrans` |
 | Present but never populated | `tls` - see the note below |
-| Enrichment | `host` (needs `--dns`), `country` (needs `--db`), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
+| Enrichment | `host` (needs `--dns`), `country` (needs `--db`, and shows the ASN too when `--asn-db` is given), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
 
 > **The `tls` column is inert.** It is accepted, it sorts, it is rendered and it is unit-tested, but **nothing populates it**, so every row shows `-`. Measured on one Windows 11 host: **299 of 299** rows carried the unknown marker, including **62 of 62** established connections, while `host` over those same 62 rows filled **31** - so the enrichment pipeline works and `tls` alone has no producer. There is no cheap way to fill it: Windows has no socket-level TLS ioctl, and `TCP_INFO_v0` - the only socket info a separate process can read - carries no TLS fields at all. The two real sources both need elevation, and the capture-based one can only ever cover the connections you choose to capture, so it cannot fill a column across every row. Treat `tls` as a reserved column rather than a working one. The reasoning is recorded at the top of `Connection.h`.
 

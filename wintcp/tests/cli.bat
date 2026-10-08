@@ -445,6 +445,25 @@ call :t "geoip lookup junk db" "geoip lookup --db %JUNKDB% 1.2.3.4" 1 "cannot lo
 call :t "list junk db" "list --db %JUNKDB% --limit 1" 1 "GeoIP:"
 call :t "list junk db + dns" "list --db %JUNKDB% --dns --limit 1" 1 "GeoIP:"
 
+REM F5.4 ASN. Same rejection-only policy as the country database above, for the
+REM same reason - no GeoLite2-ASN.mmdb ships with WinTCP and none is assumed on a
+REM dev box, so the happy path lives in wintcp-tests.exe unit's asn.* checks,
+REM which build a valid .mmdb in memory. What IS asserted here is the contract a
+REM user hits first: the switch is accepted by the verbs that document it, a bad
+REM file is named as the ASN database rather than as the country one, a missing
+REM value is a usage error, and a filter typed without the switch says which
+REM switch to add.
+call :t "asn db junk" "list --asn-db %JUNKDB% --limit 1" 1 "ASN database:"
+call :t "asn db no value" "list --asn-db" 2 "missing value for --asn-db"
+call :t "asn filter advice" "list --filter asn:15169 --limit 1" 0 "add --asn-db"
+call :t "asn filter advice by name" "list --filter asn:google --limit 1" 0 "add --asn-db"
+call :t "help filters knows asn" "help filters" 0 "asn"
+REM details needs a --select before it does anything, so this asserts only that
+REM --asn-db is RECOGNISED by that verb: reaching the "--select is required"
+REM usage error proves the switch was accepted. Asserting "not a switch of this
+REM command" here instead is what caught the verb allow-list being missed.
+call :t "asn db accepted by details" "details --asn-db %JUNKDB%" 2 "--select"
+
 REM D3: the unenrichable-window hint is ADVISORY and goes to stderr only, so
 REM stdout must stay a clean table that no marker pollutes. Whether the hint
 REM fires depends on the live socket landscape (TIME_WAIT/listener rows come

@@ -174,6 +174,10 @@ struct ListOptions {
     // the count of such stalls is reported on stderr. 0 = DnsResolver default.
     unsigned dnsTimeoutMs = 0;
     std::wstring geoIpPath;
+    // F5.4: the ASN database, which is a SEPARATE file from the country one.
+    // GeoLite2-Country and GeoLite2-ASN are different products with different
+    // record shapes, so one --db cannot supply both; "" = off.
+    std::wstring asnIpPath;
     // F5.3: verify each distinct process image with WinVerifyTrust, so the
     // Signature column and the `signed:` filter have something to report.
     // Opt-in because the trust provider is far too slow to run per pass by
@@ -273,6 +277,10 @@ struct EnrichOptions {
     // 9.2.8: per-lookup budget for --dns (ms). 0 = resolver default.
     unsigned dnsTimeoutMs = 0;
     std::wstring geoIpPath;
+    // F5.4: the ASN database, which is a SEPARATE file from the country one.
+    // GeoLite2-Country and GeoLite2-ASN are different products with different
+    // record shapes, so one --db cannot supply both; "" = off.
+    std::wstring asnIpPath;
     // F5.3, for `details`, which shares this shape with `list`.
     bool signatures = false;
 };

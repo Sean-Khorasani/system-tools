@@ -129,6 +129,12 @@ constexpr FilterKeyword kFilterKeywords[] = {
     {FilterField::Tls,      L"ssl"},
     {FilterField::Country,  L"country"},
     {FilterField::Country,  L"geo"},
+    // F5.4. `asn` is the whole name; the alias is there because "as" and "autonomous"
+    // are what people type, and a filter that silently matches nothing is worse
+    // than one that accepts a second spelling. No "asn:" - the vocabulary policy
+    // rejects a colon, and every other field drops it too.
+    {FilterField::Asn,      L"asn"},
+    {FilterField::Asn,      L"autonomous-system"},
     // D26: the bookmark note is joined onto the row, so it is a real,
     // searchable field. `note:` previously did not exist as a field name at
     // all, so `note:corp` degraded to a substring search for the literal text
@@ -740,6 +746,20 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             cl.numeric = true;
             cl.lo = lo;
             cl.hi = hi;
+        } else if (cl.field == FilterField::Asn && !value.empty() &&
+                   ParseNumberRange(value, lo, hi)) {
+            // F5.4. A bare number is the AS NUMBER as a threshold, so `asn:15169`
+            // and the range `asn:15169-20000` behave like every other numeric
+            // field. Anything else falls through to the text clause below and
+            // matches the "AS<n> <org>" cell as a substring, which is what makes
+            // `asn:cloudflare` find the operator by name.
+            //
+            // ParseNumberRange and not ParseStatRange: an ASN has no K/M/G
+            // suffixes, and accepting `asn:15169K` as a byte count would be a
+            // joke.
+            cl.numeric = true;
+            cl.lo = lo;
+            cl.hi = hi;
         } else if (cl.field == FilterField::Duration && !value.empty() &&
                    ParseDurationRange(value, &lo, &hi)) {
             // `duration:` is a threshold in SECONDS, not a substring of the
@@ -859,6 +879,16 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // OTHER numeric field is not defined: return false rather than
             // falling back to ports, which made "pid:1-2" match any connection
             // using a port in 1..2.
+            // F5.4. A row with no ASN is UNKNOWN, and unknown never matches a
+            // threshold. Without this case the clause would fall through to the
+            // text path below with an empty needle, and Has() returns true for
+            // an empty needle - so `asn:1-4294967295` would select the entire
+            // table, every row in it, including the ones with no ASN at all. That
+            // reads like "everything has an ASN" and answers the opposite of the
+            // question.
+            case FilterField::Asn:
+                if (c.asnNumber == 0) return false;
+                return inRange(static_cast<long long>(c.asnNumber));
             case FilterField::Any:
                 if (cl.direction < 0)
                     return inRange(static_cast<long long>(c.localPort));
@@ -1030,6 +1060,21 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             return Has(ToLowerW(TlsSummary(c.tls)), cl.text);
         case FilterField::Country:
             return Has(ToLowerW(c.country), cl.text);
+        case FilterField::Asn: {
+            // A bare `asn:` means "this row HAS an autonomous system", and is
+            // therefore false for a row with none - an unenriched row, or one
+            // whose address the ASN database does not cover.
+            //
+            // This is handled explicitly rather than left to Has(), which returns
+            // TRUE for an empty needle: an empty `cl.text` would then match every
+            // row in the table, including the ones with no ASN at all. That is
+            // the opposite of the question being asked. `country:` has exactly
+            // that bug today; `asn:` does not inherit it.
+            const bool has = c.asnNumber != 0 || !c.asnOrg.empty();
+            if (cl.text.empty()) return has;
+            if (!has) return false;   // unknown never matches a needle
+            return Has(ToLowerW(c.AsnDisplay()), cl.text);
+        }
         case FilterField::Note:
             // The joined bookmark note. A bare `note:` means "this row HAS a
             // note" - the useful "show me everything I annotated" query -
@@ -1665,6 +1710,31 @@ bool ConnectionStore::SetCountry(const std::wstring& addr,
     return changed;
 }
 
+// F5.4. Joins by remote address exactly as SetCountry does - one ASN belongs to
+// one network, and a process with twenty connections to it gets the same answer
+// on all twenty rows.
+//
+// Both halves are written even when only one is known, and the CLEARING case
+// matters as much as the setting one: an address whose answer disappears (the
+// database was reloaded with different contents) must stop claiming an ASN, so
+// an all-empty answer clears rather than being skipped. A row that kept a stale
+// AS number after the file changed under it would be worse than a blank cell.
+bool ConnectionStore::SetAsn(const std::wstring& addr, uint32_t number,
+                             const std::wstring& org) {
+    if (addr.empty()) return false;
+    const auto it = addrRows_.find(addr);
+    if (it == addrRows_.end()) return false;
+    bool changed = false;
+    for (size_t i : it->second) {
+        Connection& r = rows_[i];
+        if (r.asnNumber == number && r.asnOrg == org) continue;
+        r.asnNumber = number;
+        r.asnOrg = org;
+        changed = true;
+    }
+    return changed;
+}
+
 bool ConnectionStore::SetHostname(const std::wstring& addr,
                                   const std::wstring& host) {
     if (addr.empty()) return false;
@@ -2038,7 +2108,25 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             set(c.retransKnown ? FormatBytes(c.retransBytes) : L"—");
             break;
         case COL_TLS:      set(TlsSummary(c.tls)); break;
-        case COL_COUNTRY:  set(c.country); break;
+        case COL_COUNTRY:
+            // F5.4. The ASN rides in the Country column rather than taking a
+            // 33rd one: 9.1.1 froze the table at 32 columns, and the decision
+            // recorded for a feature in this position was to reuse the slot.
+            //
+            // The two are separated by a middle dot and only when BOTH are known,
+            // so a row with a country alone reads exactly as it did before, and a
+            // row with only an ASN still says something useful. `set` ellipsises
+            // on overflow, so a narrow window truncates the organisation name -
+            // the full value is in `details`, and the AS NUMBER is deliberately
+            // placed before the name so a truncation never hides which network
+            // this is.
+            {
+                const std::wstring asn = c.AsnDisplay();
+                if (c.country.empty())      set(asn);
+                else if (asn.empty())      set(c.country);
+                else                       set(c.country + L" \xB7 " + asn);
+            }
+            break;
         case COL_PINNED:
             // The tag letter only means something next to its colour, which
             // the row itself carries; a pin alone is the default 'P'.
@@ -2240,7 +2328,14 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             }
             break;
         }
-        case COL_COUNTRY: cmp = CmpStr(a.country, b.country); break;
+        case COL_COUNTRY:
+            // F5.4. Compare what the column PRINTS, so the sort order matches the
+            // screen: country first, then the ASN as a tiebreak. Without the
+            // tiebreak, rows sharing a country - which is most of a table once the
+            // database is loaded - sort arbitrarily against their own ASN.
+            cmp = CmpStr(a.country, b.country);
+            if (cmp == 0) cmp = CmpStr(a.AsnDisplay(), b.AsnDisplay());
+            break;
         case COL_PINNED: {
             // Pinned first regardless of direction, then by tag, so a
             // bookmarked row never sinks below unbookmarked noise.

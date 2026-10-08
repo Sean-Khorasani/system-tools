@@ -762,6 +762,7 @@ static const char* FilterFieldLabel(FilterField f) {
         case FilterField::Speed:     return "speed";
         case FilterField::Tls:       return "tls";
         case FilterField::Country:   return "country";
+        case FilterField::Asn:       return "asn";
         case FilterField::Note:      return "note";
         case FilterField::Rtt:       return "rtt";
         case FilterField::MinRtt:    return "minrtt";
@@ -1008,6 +1009,37 @@ bool JoinGeoAddrs(ConnectionStore& store, GeoIpDatabase& db,
     return true;
 }
 
+// F5.4. The ASN join, shaped exactly like JoinGeoAddrs so the two read as a pair.
+//
+// Two differences from the country join, both deliberate:
+//
+// - The answer is written even when it is EMPTY. JoinGeoAddrs skips an empty code,
+//   which is right there (a stale country must not be cleared by a database that
+//   simply lacks this range) but wrong here in one specific case: a row whose ASN
+//   was resolved by an earlier pass and is not covered by the file now loaded
+//   should stop claiming an AS number. A stale AS number is a wrong answer;
+//   a blank cell is not.
+// - The parse failure is still a silent skip. An address the row printed but the
+//   parser rejects is not the join's problem to report, and JoinGeoAddrs sets the
+//   precedent.
+bool JoinAsnAddrs(ConnectionStore& store, GeoIpDatabase& db,
+                  const std::vector<GeoTarget>& targets) {
+    for (const GeoTarget& t : targets) {
+        AsnInfo info;
+        if (t.ipv6) {
+            IN6_ADDR a6 = {};
+            if (::InetPtonW(AF_INET6, t.address.c_str(), &a6) != 1) continue;
+            info = db.LookupAsnV6(a6.s6_addr);
+        } else {
+            IN_ADDR a4 = {};
+            if (::InetPtonW(AF_INET, t.address.c_str(), &a4) != 1) continue;
+            info = db.LookupAsnV4(ntohl(a4.S_un.S_addr));
+        }
+        store.SetAsn(t.address, info.number, info.org);
+    }
+    return true;
+}
+
 // One sentence for the traffic columns of this run, for both front ends.
 //
 // C8, and this is the whole point of it: a blank traffic cell has three
@@ -1161,6 +1193,8 @@ struct PrintSelection {
 bool DependsOnEnrichment(FilterField f) {
     return f == FilterField::Rx || f == FilterField::Tx ||
            f == FilterField::Net || f == FilterField::Country ||
+           f == FilterField::Asn ||
+           f == FilterField::Asn ||
            f == FilterField::Host || f == FilterField::Duration ||
            f == FilterField::Rtt || f == FilterField::MinRtt ||
            f == FilterField::Cwnd || f == FilterField::Retrans ||
@@ -1223,13 +1257,15 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt) {
     if (!opt.filter.empty()) {
         std::vector<FilterClause> all;
         ParseFilter(opt.filter, all);
-        bool needDns = false, needGeo = false, needTraffic = false;
+        bool needDns = false, needGeo = false, needAsn = false, needTraffic = false;
         for (const FilterClause& cl : all) {
             if (!DependsOnEnrichment(cl.field)) continue;
             if (cl.field == FilterField::Host) {
                 if (!opt.dns) needDns = true;
             } else if (cl.field == FilterField::Country) {
                 if (opt.geoIpPath.empty()) needGeo = true;
+            } else if (cl.field == FilterField::Asn) {
+                if (opt.asnIpPath.empty()) needAsn = true;
             } else if (cl.field != FilterField::Duration) {
                 if (!opt.traffic) needTraffic = true;
             }
@@ -1240,6 +1276,9 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt) {
         if (needGeo)
             out += "filter: \"country:\" matches GeoIP codes; add --db "
                    "<path to a .mmdb database>.\r\n";
+        if (needAsn)
+            out += "filter: \"asn:\" matches autonomous systems; add --asn-db "
+                   "<path to a GeoLite2-ASN .mmdb>.\r\n";
         if (needTraffic) {
             // Name the fields the user actually typed where possible. A bare
             // "add --traffic" for `rtt:100` would be true but unhelpful - the
@@ -1532,7 +1571,10 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
     // Missing-switch advice first: it must fire even when NO join runs below
     // (that early return is exactly the case it exists for).
     if (advice != nullptr) *advice = MissingEnrichmentAdvice(opt);
-    if (!opt.dns && !opt.traffic && opt.geoIpPath.empty()) return true;
+    if (!opt.dns && !opt.traffic && opt.geoIpPath.empty() &&
+        opt.asnIpPath.empty()) {
+        return true;
+    }
     const PrintSelection sel = SelectedForPrint(store, opt);
     if (opt.dns) {
         unsigned stuck = 0;
@@ -1562,6 +1604,19 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
             return false;
         }
         JoinGeoAddrs(store, db, sel.geoTargets);
+    }
+    // F5.4. A separate block, not a second Load inside the one above: the two
+    // databases are different files, and a user may legitimately supply either or
+    // both. The error prefix says ASN so a bad path is attributable - the same
+    // message twice with different files behind it is not an error message.
+    if (!opt.asnIpPath.empty()) {
+        GeoIpDatabase asnDb;
+        std::wstring loadErr;
+        if (!asnDb.Load(opt.asnIpPath.c_str(), &loadErr)) {
+            if (err != nullptr) *err = L"ASN database: " + loadErr;
+            return false;
+        }
+        JoinAsnAddrs(store, asnDb, sel.geoTargets);
     }
     if (opt.traffic) {
         // A failed pass is named explicitly, and BEFORE the unenrichable-window
@@ -2127,6 +2182,20 @@ DetailModel BuildDetailModel(const Connection& c,
     add(conn, L"State", c.stateLabel);
     add(conn, L"Hostname", c.hostname);
     if (!c.country.empty()) add(conn, L"Country", c.country);
+    // F5.4. Its own rows rather than being folded into Country: the two answers
+    // come from different database files, and "which country" and "which network"
+    // are two questions. An org with no number still gets a row, because the name
+    // is the part a reader recognises.
+    if (!c.asnOrg.empty()) add(conn, L"AS organisation", c.asnOrg);
+    if (c.asnNumber != 0)
+        add(conn, L"AS number", L"AS" + std::to_wstring(c.asnNumber));
+    // F5.4. Its own row rather than being folded into Country: the two come from
+    // different database files, and "which country and which network" are two
+    // questions. An org with no number still gets a row, because the name is the
+    // part a reader recognises.
+    if (!c.asnOrg.empty()) add(conn, L"AS organisation", c.asnOrg);
+    if (c.asnNumber != 0)
+        add(conn, L"AS number", L"AS" + std::to_wstring(c.asnNumber));
     if (c.firstSeenTick != 0)
         add(conn, L"Duration", FormatDuration(DurationSeconds(c)));
     m.sections.push_back(std::move(conn));
@@ -2262,6 +2331,19 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
         t.address = chosen.remoteAddress;
         t.ipv6 = (chosen.family == AF_INET6);
         JoinGeoAddrs(store, db, std::vector<GeoTarget>(1, t));
+    }
+    if (!eo.asnIpPath.empty()) {
+        GeoIpDatabase asnDb;
+        std::wstring loadErr;
+        if (!asnDb.Load(eo.asnIpPath.c_str(), &loadErr)) {
+            r.exitCode = kExitFail;
+            r.err = "ASN database: " + WideToUtf8(loadErr) + "\r\n";
+            return r;
+        }
+        GeoTarget at;
+        at.address = chosen.remoteAddress;
+        at.ipv6 = (chosen.family == AF_INET6);
+        JoinAsnAddrs(store, asnDb, std::vector<GeoTarget>(1, at));
     }
     if (eo.traffic) {
         // Reported here for the same reason as in the list path: a failed pass
@@ -3108,6 +3190,9 @@ CommandResult CmdPresetApply(SnapshotSource& source, const std::wstring& name,
         opt.traffic = overrides->traffic;
         opt.dns = overrides->dns;
         opt.geoIpPath = overrides->geoIpPath;
+        // F5.4: carried alongside, for the same reason. A preset that pinned the
+        // ASN database must not silently lose it on the view that applies it.
+        opt.asnIpPath = overrides->asnIpPath;
     }
     if (appliedView != nullptr) *appliedView = opt;
     ConnectionStore store;

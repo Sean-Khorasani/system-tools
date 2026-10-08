@@ -69,8 +69,13 @@ struct BookmarkMark {
 //   proto    := "tcp:" | "udp:" | "ipv4:" | "ipv6:"
 //   field    := local|remote|lport|rport|port|pid|process|path|
 //               state|proto|host|service|cpu|mem|disk|rx|tx|net|
-//               duration|speed|tls|country
+//               duration|speed|tls|country|asn
 //   value    := text | number | lo "-" hi   (numeric for port/pid fields)
+// `asn:` is deliberately BOTH: a bare number is a threshold on the AS number
+// (`asn:15169` and the range `asn:15169-20000` work), and anything else is a
+// substring of "AS<n> <org>", so `asn:cloudflare` finds the operator by name. One
+// field, two kinds of value, because "which network is this?" is asked both ways
+// and a user should not have to remember which spelling answers which.
 // The live-stat fields (cpu/mem/disk/rx/tx/net) take a numeric THRESHOLD, not
 // text: a bare number is MB (cpu: %), `K`/`M`/`G` suffixes multiply, a
 // range is "lo-hi", and a bare value is a lower bound. So `mem:100` is "100
@@ -90,7 +95,7 @@ enum class FilterField {
     Any, Local, Remote, LPort, RPort, Port, Pid,
     Process, Path, State, Proto, Host, Service,
     Cpu, Mem, Disk, Rx, Tx, Net,
-    Duration, Speed, Tls, Country, Note,
+    Duration, Speed, Tls, Country, Asn, Note,
     // G6. Rtt/MinRtt/Cwnd/Retrans are thresholds in MILLISECONDS / bytes,
     // matching what the columns show - the microseconds the kernel reports are
     // converted at the sampler boundary (see SocketTcpInfo), so a filter and a
@@ -362,6 +367,11 @@ public:
     // (4.3). Like SetHostname it updates the lower-case key so the text
     // filter can search a value the column is displaying.
     bool SetCountry(const std::wstring& addr, const std::wstring& country);
+    // F5.4: join an autonomous system onto every row sharing this remote address.
+    // number == 0 with an empty org means "no ASN", and CLEARS a previous answer
+    // - unlike SetCountry, which skips an empty code on the CLI path.
+    bool SetAsn(const std::wstring& addr, uint32_t number,
+                const std::wstring& org);
 
     // 5.3: mark rows whose remote endpoint is bookmarked and apply its colour
     // tag and note. The match is on address AND remote port, because that pair

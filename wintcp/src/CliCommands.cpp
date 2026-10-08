@@ -194,7 +194,7 @@ const CommandHelp kCommandHelps[] = {
       "                exceeds it is shown as `host: pending` instead of\r\n"
       "                stalling the run; the count of pending lookups is\r\n"
       "                written to stderr. 1..60000; default 3000.\r\n"
-      "  --db FILE     load this .mmdb and join country codes for printed rows.\r\n"
+      "  --db FILE     load this .mmdb and join country codes for printed rows.\r\n" "  --asn-db FILE  load this GeoLite2-ASN.mmdb and join autonomous systems.\r\n"
      "  --signatures  verify each distinct process image with WinVerifyTrust\r\n"
      "                so the signature column and signed: filter have an\r\n"
      "                answer. SLOW: a certificate chain per image, cached per\r\n"
@@ -281,14 +281,14 @@ const CommandHelp kCommandHelps[] = {
      "details - full report for exactly one connection\r\n"
      "\r\n"
      "Usage: wintcp.exe details --select <filter> [--traffic] [--dns]\r\n"
-     "                          [--db FILE]\r\n"
+     "                          [--db FILE] [--asn-db FILE]\r\n"
      "\r\n"
      "The filter uses the list grammar and must match exactly one LIVE row:\r\n"
      "zero matches and ambiguous matches are errors (exit 1) - the command\r\n"
      "refuses to guess. Prints the same sections as the GUI Details window:\r\n"
      "process identity, live stats, TLS state, the connection, and the other\r\n"
      "connections owned by the same PID. --traffic fills the network totals,\r\n"
-     "--dns the hostname, --db the country (same cost notes as list).\r\n"
+     "--dns the hostname, --db the country, --asn-db the autonomous system.\r\n"
      "\r\n"
      "Examples:\r\n"
      "  wintcp.exe details --select \"pid:1234\"\r\n"
@@ -616,7 +616,7 @@ bool TakesValue(const std::wstring& t) {
            t == L"--count" || t == L"--out" || t == L"--select" ||
            t == L"--pid" || t == L"--address" || t == L"--port" ||
            t == L"--tag" || t == L"--note" || t == L"--name" ||
-           t == L"--db" || t == L"--secs" || t == L"--event" ||
+           t == L"--db" || t == L"--asn-db" || t == L"--secs" || t == L"--event" ||
            t == L"--dir";
 }
 
@@ -709,6 +709,8 @@ struct Args {
     std::wstring note;
     std::wstring name;
     std::wstring db;
+    // F5.4: the ASN database is a different file from the country one.
+    std::wstring asnDb;
     std::wstring ip;
     std::wstring sub;     // bookmark/preset/geoip subverb
     bool quiet = false;   // list/ps: no output, rc answers
@@ -945,6 +947,8 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             if (!need(&a->name)) return "missing value for --name";
         } else if (t == L"--db") {
             if (!need(&a->db)) return "missing value for --db";
+        } else if (t == L"--asn-db") {
+            if (!need(&a->asnDb)) return "missing value for --asn-db";
         } else if (t == L"--traffic") {
             a->traffic = true;
     } else if (t == L"--dns") {
@@ -1039,6 +1043,7 @@ ListOptions ToListOptions(const Args& a) {
     o.dns = a.dns;
     o.dnsTimeoutMs = a.dnsTimeoutMs;
     o.geoIpPath = a.db;
+    o.asnIpPath = a.asnDb;
     o.changes = a.changes;
     // F5.3. Carried on ListOptions rather than applied at the parse site,
     // because the SnapshotSource owns the resolver and is created further down;
@@ -1108,7 +1113,7 @@ const wchar_t* const kSwitchNames[] = {
     L"--filter", L"--sort", L"--asc", L"--desc", L"--group", L"--format",
     L"--columns", L"--limit", L"--quiet", L"--watch", L"--interval", L"--count", L"--out",
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
-    L"--name", L"--db", L"--secs", L"--traffic", L"--dns", L"--changes",
+    L"--name", L"--db", L"--asn-db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
     L"--text", L"--bin", L"--dir",
      L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
@@ -1206,7 +1211,7 @@ const VerbSwitches kVerbSwitches[] = {
      // --out/--force: 9.3.4, the table written to a file instead of stdout;
      // --force only exists because --out refuses an existing path.
      L"--filter --sort --asc --desc --group --format --columns --limit "
-      L"--quiet --watch --interval --count --traffic --dns --dns-timeout --db --changes --event "
+      L"--quiet --watch --interval --count --traffic --dns --dns-timeout --db --asn-db --changes --event "
       L"--signatures --out --force"},
     {L"conn", nullptr},   // alias: same as list
     {L"ps",
@@ -1223,7 +1228,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"top", nullptr},    // alias: same as ps
     {L"stat", L"--format --watch --interval --count"},
     {L"sys", nullptr},    // alias: same as stat
-    {L"details", L"--select --traffic --dns --dns-timeout --db --signatures"},
+    {L"details", L"--select --traffic --dns --dns-timeout --db --asn-db --signatures"},
     {L"kill",
      // 9.3.6: --close (ask only) and --force (terminate at once); the
      // default stays the documented hybrid.
@@ -1237,7 +1242,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"bookmark", L"--address --port --tag --note --format"},
     {L"preset",
      L"--name --filter --sort --asc --desc --force --format --columns "
-     L"--limit --traffic --dns --db --group"},
+     L"--limit --traffic --dns --db --asn-db --group"},
     {L"export",
      // --limit is LISTED even though it is refused further down. That is
      // deliberate: the generic D24 message ("this switch is not one of this
@@ -1246,7 +1251,7 @@ const VerbSwitches kVerbSwitches[] = {
      // cannot hold a subset and misreport its own row count. Listing it lets
      // the export-specific explanation win.
       L"--out --format --filter --sort --asc --desc --columns --group "
-      L"--traffic --dns --dns-timeout --db --quiet --limit --force"},
+      L"--traffic --dns --dns-timeout --db --asn-db --quiet --limit --force"},
     {L"geoip", L"--db"},
     {L"version", L"verbose"},  // --verbose adds diagnostic detail
     {L"doctor", L"--verbose --format --db"},
@@ -1852,6 +1857,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         eo.dns = a.dns;
         eo.dnsTimeoutMs = a.dnsTimeoutMs;
         eo.geoIpPath = a.db;
+    eo.asnIpPath = a.asnDb;
         eo.signatures = a.signatures;
         const CommandResult r = CmdDetails(src, a.select, eo);
         Emit(r);

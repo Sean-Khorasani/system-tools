@@ -5435,6 +5435,117 @@ TestResult RunSelfTest() {
               !st.SetCountry(L"", L"US"));
     }
 
+    // F5.4. The ASN join and the `asn:` filter. `asn:` is deliberately both a
+    // NUMBER threshold and a text substring, and both halves plus the unknown
+    // rules are pinned here - the unknown rules are the ones that would
+    // otherwise select the whole table.
+    {
+        ConnectionStore st;
+        Connection a;
+        a.localAddress = L"192.168.1.10"; a.localPort = 51752;
+        a.remoteAddress = L"8.8.8.8";     a.remotePort = 443;
+        Connection b = a;
+        b.remoteAddress = L"1.1.1.1"; b.localPort = 51753;
+        std::vector<Connection> rows2 = {a, b};
+        st.ReplaceSnapshot(rows2);
+        ViewQuery q;
+        st.SetView(q);
+
+        Check(r, "geo.setasn", st.SetAsn(L"8.8.8.8", 15169u, L"Google LLC"));
+        Check(r, "geo.setasn-again-is-noop",
+              !st.SetAsn(L"8.8.8.8", 15169u, L"Google LLC"));
+        const Connection* got = st.ViewRow(0);
+        Check(r, "geo.asn-visible",
+              got != nullptr && got->asnNumber == 15169u &&
+                  got->asnOrg == L"Google LLC");
+        Check(r, "geo.asn-display",
+              got != nullptr && got->AsnDisplay() == L"AS15169 Google LLC");
+        Check(r, "geo.setasn-unknown-addr",
+              !st.SetAsn(L"9.9.9.9", 1u, L"X"));
+        Check(r, "geo.setasn-empty-addr", !st.SetAsn(L"", 1u, L"X"));
+
+        // The number is a THRESHOLD, so a range works and an exact value works.
+        std::vector<FilterClause> p1, p2, p3, p4, p5, p6, p7;
+        Check(r, "geo.asn-filter-parses",
+              ParseFilter(L"asn:15169", p1) && ParseFilter(L"asn:15169-20000", p2) &&
+                  ParseFilter(L"asn:google", p3) && ParseFilter(L"asn:", p4) &&
+                  ParseFilter(L"asn:1-4294967295", p5) &&
+                  ParseFilter(L"autonomous-system:google", p6) &&
+                  ParseFilter(L"asn:cloudflare", p7));
+        const Connection* enriched = st.ViewRow(0);
+        const Connection* bare = st.ViewRow(1);
+        Check(r, "geo.asn-filter-exact",
+              enriched != nullptr && MatchFilter(*enriched, p1));
+        Check(r, "geo.asn-filter-range",
+              enriched != nullptr && MatchFilter(*enriched, p2));
+        // Text matches the ORGANISATION, and case-insensitively.
+        Check(r, "geo.asn-filter-org-text",
+              enriched != nullptr && MatchFilter(*enriched, p3));
+        // A name that is genuinely absent matches neither row - the negative half
+        // of "text matches the organisation", without which the check above would
+        // also pass if every text needle matched everything.
+        Check(r, "geo.asn-filter-absent-org",
+              enriched != nullptr && !MatchFilter(*enriched, p7) &&
+                  !MatchFilter(*st.ViewRow(1), p7));
+        Check(r, "geo.asn-alias-same-answer",
+              enriched != nullptr && MatchFilter(*enriched, p6));
+        Check(r, "geo.asn-filter-other-number",
+              enriched != nullptr && !MatchFilter(*enriched, p1) == false &&
+                  !MatchFilter(*bare, p1));
+        // The row with no ASN must not match any needle. This is the whole
+        // "unknown matches nothing" rule, and it is the case that fails when the
+        // field is handled by falling through to a substring search.
+        Check(r, "geo.asn-unknown-matches-nothing",
+              bare != nullptr && !MatchFilter(*bare, p1) &&
+                  !MatchFilter(*bare, p3));
+        // A bare `asn:` means "has an ASN". If this were left to the substring
+        // helper it would match EVERY row, which is the opposite of the question.
+        Check(r, "geo.asn-bare-is-has-an-asn",
+              enriched != nullptr && bare != nullptr &&
+                  MatchFilter(*enriched, p4) && !MatchFilter(*bare, p4));
+        // ...and the widest possible range must still exclude the unknown row.
+        // Without an explicit numeric case the clause falls through to an empty
+        // needle, which matches everything.
+        Check(r, "geo.asn-wide-range-excludes-unknown",
+              enriched != nullptr && bare != nullptr &&
+                  MatchFilter(*enriched, p5) && !MatchFilter(*bare, p5));
+        // Clearing removes the answer, unlike a substring search that would keep
+        // matching the text it just cleared.
+        Check(r, "geo.setasn-clear",
+              st.SetAsn(L"8.8.8.8", 0, L"") &&
+                  st.ViewRow(0) != nullptr && st.ViewRow(0)->asnNumber == 0 &&
+                  st.ViewRow(0)->asnOrg.empty());
+        Check(r, "geo.asn-cleared-no-longer-matches",
+              !MatchFilter(*st.ViewRow(0), p3));
+    }
+
+    // F5.4. The Country column carries the ASN rather than taking a 33rd one.
+    {
+        Connection c;
+        wchar_t buf[kMaxColumnText + 1] = {0};
+        ConnectionStore::GetColumnText(c, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring none(buf);
+        c.country = L"US";
+        ConnectionStore::GetColumnText(c, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring onlyCountry(buf);
+        Connection both = c;
+        both.asnNumber = 15169; both.asnOrg = L"Google LLC";
+        ConnectionStore::GetColumnText(both, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring withAsn(buf);
+        Connection asnOnly;
+        asnOnly.asnNumber = 64512; asnOnly.asnOrg = L"Example";
+        ConnectionStore::GetColumnText(asnOnly, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring asnAlone(buf);
+
+        // An unenriched row must render EXACTLY as it did before F5.4 - no
+        // separator, no placeholder.
+        Check(r, "asn.col-unenriched-unchanged", none.empty());
+        Check(r, "asn.col-country-alone-unchanged", onlyCountry == L"US");
+        Check(r, "asn.col-both", withAsn == L"US \xB7 AS15169 Google LLC",
+              WideToUtf8(withAsn));
+        Check(r, "asn.col-asn-alone", asnAlone == L"AS64512 Example", WideToUtf8(asnAlone));
+    }
+
     // 29. JoinBookmarks (5.3). The case that matters is the CLEAR: a row
     //     whose endpoint is not in the supplied set must lose its pin, or
     //     removing a bookmark leaves a pin stuck on the row forever.

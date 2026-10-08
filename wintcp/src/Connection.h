@@ -248,6 +248,28 @@ struct Connection {
     TlsInfo tls;
     std::wstring country;            // GeoIP, empty when no database loaded
 
+    // F5.4 ASN. Two fields rather than one formatted string, because the two
+    // halves are filtered differently: `asn:15169` is a number comparison and
+    // `asn:google` a substring one. Deliberately plain rather than an
+    // AsnInfo - that type belongs to GeoIp.h, and Connection.h must not have to
+    // pull in a database reader to describe a row. asnNumber == 0 means unknown,
+    // which is also what a Country database (no ASN records) produces.
+    uint32_t asnNumber = 0;
+    std::wstring asnOrg;
+
+    // "AS15169 Google LLC", or whichever half is present, or empty. Built here
+    // rather than stored so the two halves cannot disagree with it.
+    std::wstring AsnDisplay() const {
+        if (asnNumber == 0 && asnOrg.empty()) return std::wstring();
+        std::wstring s;
+        if (asnNumber != 0) { s = L"AS"; s += std::to_wstring(asnNumber); }
+        if (!asnOrg.empty()) {
+            if (!s.empty()) s += L' ';
+            s += asnOrg;
+        }
+        return s;
+    }
+
     // --- per-process live stats (sampled on the worker every
     // refresh and joined by PID like the traffic counters above) ---------
     double cpuPct = -1.0;              // process CPU %, < 0 = unknown
