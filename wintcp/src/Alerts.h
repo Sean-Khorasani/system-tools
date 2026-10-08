@@ -1,0 +1,122 @@
+// Alerts.h
+// Threshold alerting and change notifications.
+//
+// DESIGN RULE, and the reason this is a separate file: a network viewer that
+// pops up a balloon every time a connection crosses a line becomes something
+// the user switches off, and then it is useless for the one event that
+// mattered. So:
+//   * Alerting is MUTED BY DEFAULT. Nothing is ever shown until the user
+//     turns it on.
+//   * Each distinct condition fires ONCE and then goes quiet until it
+//     clears. A connection sitting above the threshold does not re-notify
+//     every refresh - that is a notification storm, and it is the single
+//     most common way this kind of feature becomes noise.
+//   * Balloons require the tray icon. If the user has tray disabled, alerts
+//     fall back to the status bar rather than silently doing nothing.
+//
+// The evaluator is a pure function of the current row stats plus the previous
+// state, so it is testable without a window and without a network.
+
+#pragma once
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+
+#include <windows.h>
+#include <shellapi.h>   // NOTIFYICONDATAW, Shell_NotifyIconW, NIF_INFO
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "ConnectionStore.h"
+
+namespace wintcp {
+
+// Thresholds for the alert engine below. Zero disables a given alert.
+//
+// B5 verdict (2026-10-01): "user-configurable" is what these SHOULD be, not
+// what they are — there is no persistence, no CLI, and no editor, and the
+// engine has no production caller (only selftest drives it). Wiring the loop
+// (persist + per-refresh Evaluate + balloon via ShowTrayBalloon + a surface
+// to set thresholds) is a new feature, not errata, so it is NOT done here.
+// What IS done: the evaluation core, latch semantics and suppression counting
+// are implemented, pure and pinned by alert.* selftests, so the future
+// feature starts at the seam, not from zero. Do not delete this as "dead
+// code" — it is an unwired feature with tests, which is a different thing.
+struct AlertSettings {
+    bool enabled = false;                 // master switch, off by default
+    double bpsWarn = 0.0;                 // per-connection bytes/sec
+    double bpsCritical = 0.0;
+    size_t connectionWarn = 0;            // total connection count
+    // "Quiet mode": do not alert on new listening sockets, only on data.
+    // Off by default is wrong here - a new listener is the interesting event
+    // for a network tool - but it is exposed because some users find a
+    // reconnect loop unbearable.
+    bool alertOnNewListener = true;
+    bool alertOnNewConnection = true;
+    bool alertOnRst = true;
+    bool alertOnClosed = false;
+};
+
+// What changed since the last evaluation.
+enum class AlertKind : unsigned {
+    kBpsWarn = 1u << 0,
+    kBpsCritical = 1u << 1,
+    kConnectionCount = 1u << 2,
+    kNewListener = 1u << 3,
+    kNewConnection = 1u << 4,
+    kRst = 1u << 5,
+    kClosed = 1u << 6,
+};
+
+struct Alert {
+    AlertKind kind = AlertKind::kBpsWarn;
+    std::wstring title;
+    std::wstring text;
+    // True if this is the first time the condition has been seen, i.e. the
+    // transition, not the steady state.
+    bool rising = false;
+};
+
+class AlertEngine {
+public:
+    // Evaluate the current snapshot. Returns the alerts that fired on THIS
+    // call. Any condition that was already active last time is suppressed
+    // until it clears, so a caller can relay these directly without
+    // deduplicating.
+    std::vector<Alert> Evaluate(const std::vector<Connection>& rows,
+                                const AlertSettings& s);
+
+    void Reset();
+
+    // Number of alerts currently suppressed because they were already
+    // active. Surfaced in the UI so "nothing appeared" is distinguishable
+    // from "it is all already on fire".
+    size_t SuppressedCount() const { return suppressed_; }
+
+private:
+    // Latched condition bits: set while the condition holds, cleared when it
+    // stops holding.
+    unsigned latched_ = 0;
+    bool sawListener_ = false;
+    bool sawConnection_ = false;
+    size_t lastCount_ = 0;
+    size_t suppressed_ = 0;
+};
+
+// Show a balloon on the tray icon. Returns false if the shell refused it.
+// There is no owner parameter: the nid already carries the window handle, and
+// a second one would be a second thing to get wrong. The caller owns the nid
+// and must keep it alive for the call.
+bool ShowTrayBalloon(NOTIFYICONDATAW* nid, const std::wstring& title,
+                     const std::wstring& text, DWORD iconFlags);
+
+// Human-readable byte-rate, shared with the status bar.
+std::wstring FormatBps(double bytesPerSecond);
+
+}  // namespace wintcp
