@@ -211,6 +211,17 @@ raise this deliberately, not arrive as a side effect of a feature. Where a featu
 wanted a column that would not fit - ASN (9.5.1) is the live case - it reuses the
 Country column rather than growing the mask.
 
+**ASN is that case, and it now reuses `country`** (F5.4). The cell renders both
+answers as `US · AS15169 Google LLC`, with the separator appearing only when both
+are known, so a row that has only a country looks exactly as it always did. The AS
+number is placed *before* the operator name on purpose: the cell ellipsises on
+overflow in a narrow window, and a truncation that hid the number would leave a
+row looking unidentified. `Details` separates the two into their own rows.
+
+The two answers come from two different MaxMind products - GeoLite2-Country and
+GeoLite2-ASN - which is why the CLI has `--db` and `--asn-db` and the window has
+two pickers, and why neither is required for the other.
+
 **The shared pipeline** - `Snapshot.*` (the only snapshot producer), `RefreshEngine.*` (background worker and watchdog), `DnsResolver.*` (reverse DNS), `Commands.*` (the abstract command layer both front ends call).
 
 **Enumeration and enrichment** - `TcpTable.*` (IP Helper table, including scope IDs), `ProcessInfo.*` (Toolhelp / OpenProcess / SCM cache), `ProcStats.*` (per-PID CPU, memory and IO), `SysStats.*` (system CPU, memory, disk, net), `GeoIp.*` (MaxMind DB reader), `WinCaps.*` (Windows capability report).

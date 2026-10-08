@@ -166,6 +166,8 @@ private:
     void OfferDnsForAllRows();
     void OfferGeoIpForAllRows();           // 4.3: fill Country from the MMDB
     void LoadGeoIpDatabase();              // 4.3: pick a .mmdb, load, refresh
+    void OfferAsnForAllRows();             // F5.4: fill the ASN half of Country
+    void LoadAsnDatabase();                // F5.4: pick a GeoLite2-ASN .mmdb
 
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
@@ -428,6 +430,11 @@ private:
     // actually consulted, so the Country column was permanently empty - a
     // 778-line feature wired to nothing.
     GeoIpDatabase geo_;
+    // F5.4. The ASN database is a SEPARATE file (GeoLite2-ASN, different record
+    // shape), so it is a second instance rather than a mode of the first. It is
+    // optional and independent: loading one does not disturb the other, and
+    // neither is required for the other to work.
+    GeoIpDatabase asnGeo_;
 
     wchar_t dispBuf_[kMaxColumnText] = {0};  // LVN_GETDISPINFO scratch buffer
 

@@ -42,6 +42,7 @@ BEGIN
         MENUITEM "Tray &icon (minimize to tray)", IDM_VIEW_TRAY
         MENUITEM "Per-PID &traffic counters (ETW, admin)", IDM_VIEW_TRAFFIC
         MENUITEM "&GeoIP database (.mmdb)...", IDM_VIEW_GEOIP
+    MENUITEM "ASN &database (.mmdb)...", IDM_VIEW_ASNIP
         MENUITEM "Performa&nce graphs...", IDM_VIEW_CHARTS
         MENUITEM SEPARATOR
         MENUITEM "&Preserve selection on refresh", IDM_VIEW_PRESERVE_SEL

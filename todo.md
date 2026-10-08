@@ -31,9 +31,9 @@ worth respecting:
 |---|---|
 | `build.bat` (`/W4 /WX /permissive-`, from `clean`) | clean |
 | `fast-build.bat -Test` (15-check smoke + harness self-check + unit driver) | **PASS 15/15** |
-| `wintcp\tests\cli.bat` (CLI) | **PASS / 238 checks, 0 failures** |
+| `wintcp\tests\cli.bat` (CLI) | **PASS / 244 checks, 0 failures** |
 | `wintcp\tests\gui.bat` (GUI) | **PASS / 54 checks, 0 failed** |
-| `wintcp\tests\examples.bat` (README examples) | **PASS / 89 commands, 0 rejected** |
+| `wintcp\tests\examples.bat` (README examples) | **PASS / 94 commands, 0 rejected** |
 
 Two baseline facts about this tree, both learned the hard way on 2026-10-08:
 
@@ -161,9 +161,21 @@ Two baseline facts about this tree, both learned the hard way on 2026-10-08:
 
 All features below were approved by the user. Each is independently resumable.
 
-- [ ] **F5.4 — ASN lookups (GeoLite2-ASN.mmdb via GeoIp.cpp).**
-  Reuse Country column (9.1.1 decided: freeze at 32 columns, no 33rd).
-  Add `asn:` filter + column. Docs: `docs/cli.md`, `filters.md`, `cookbook.md`.
+- [x] **F5.4 — ASN lookups (GeoLite2-ASN.mmdb via GeoIp.cpp).** DONE.
+  `GeoIpDatabase::LookupAsnV4/V6` return an `AsnInfo {number, org}`; the tree walk
+  is now `ResolveOffset` + a per-record decoder, so country and ASN share one walk
+  rather than each walking up to 128 node reassemblies. Rendering reuses the
+  Country column per 9.1.1 (`US · AS15169 Google LLC`, separator only when both are
+  known, AS number before the org name so a truncation cannot hide the network).
+  New `asn:` filter, deliberately BOTH a numeric threshold and a substring:
+  `asn:15169`, `asn:15169-20000`, `asn:cloudflare` all work. `--asn-db FILE` is a
+  second source because the two MaxMind products are different files; the GUI has a
+  second picker and its own persisted path, and neither is required for the other.
+  Unknown-value rules pinned by tests (a bare `asn:` is "has an ASN", `asn:1-4294967295`
+  still excludes rows with none) — `country:` shares the first of those bugs today
+  and is un-fixed; `asn:` does not inherit it.
+  Docs: `docs/cli.md`, `filters.md`, `cookbook.md`, `gui.md`, `README.md`.
+  Gates: unit all pass, cli 244/0, examples 94/0, gui 54/0, build.bat clean.
 
 - [ ] **F5.5 — ETW DNS snooping (provider `{1C950233-...}`, no PTR queries).**
   Answers `host:` without `--dns` slowness. Elevated only.
@@ -453,9 +465,10 @@ run): all of §1, §5.1 except 9.2.9/9.2.10, all of §5.2, §5.3 except
 
 Remaining, roughly in the order they pay off:
 
-1. **§4 Features** (F5.4 ASN → F5.5 ETW DNS → F5.6 alerts → F5.11 → F5.15) —
-   each gated before the next starts. F5.4 is the largest well-specified one;
-   F5.6 is blocked on 9.2.11.
+1. **§4 Features** — F5.5 ETW DNS, F5.6 alerts, F5.11 quick filters, F5.15
+   FontCache; each gated before the next starts. F5.4 ASN shipped 2026-10-08.
+   F5.6 is blocked on 9.2.11; F5.11 is the same work 9.4.3 describes from the
+   other side, so doing one closes both.
 2. **§5.1 Correctness** — 9.2.9 firewall viewer, then 9.2.10 portable+sync.
 3. **§5.3 UI/UX** — 9.4.2 empty states, 9.4.4 column profiles, 9.4.3 chips
    (blocked on F5.11).

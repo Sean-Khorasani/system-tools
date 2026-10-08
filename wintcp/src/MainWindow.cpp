@@ -898,6 +898,16 @@ void MainWindow::OnCreate() {
             ApplyView();
         }
     }
+    // F5.4. Same best-effort, silent contract for the ASN database - see the
+    // comment above. Loaded independently of the country one, so either, both or
+    // neither survives a relaunch.
+    if (settings_.asnIpPath[0] != L'\0') {
+        std::wstring asnErr;
+        if (asnGeo_.Load(settings_.asnIpPath, &asnErr)) {
+            OfferAsnForAllRows();
+            ApplyView();
+        }
+    }
 
     visibleCols_ = settings_.colVisible;
     if (settings_.colWidthsValid) {
@@ -1201,6 +1211,39 @@ void MainWindow::OfferGeoIpForAllRows() {
         // moves out of a covered range, and SetCountry is a no-op when the
         // value is already right, so this costs nothing.
         store_.SetCountry(r.remoteAddress, code);
+    }
+}
+
+// F5.4. The ASN pass. Separate from OfferGeoIpForAllRows rather than folded into
+// it, because the two databases are independent: either may be loaded without
+// the other, and a row must be able to carry a country with no ASN or an ASN with
+// no country.
+//
+// It also has to run even when the COUNTRY database is absent - which is the
+// case that would otherwise silently do nothing, since the country function
+// returns early when its own database is not loaded.
+void MainWindow::OfferAsnForAllRows() {
+    if (!asnGeo_.Loaded()) return;
+    std::unordered_set<std::wstring> seen;
+    seen.reserve(store_.Rows().size());
+    for (const Connection& r : store_.Rows()) {
+        if (r.remoteAddress.empty()) continue;
+        if (!seen.insert(r.remoteAddress).second) continue;
+        AsnInfo info;
+        if (r.family == AF_INET) {
+            in_addr v4 = {};
+            if (::InetPtonW(AF_INET, r.remoteAddress.c_str(), &v4) != 1)
+                continue;
+            info = asnGeo_.LookupAsnV4(ntohl(v4.S_un.S_addr));
+        } else {
+            IN6_ADDR v6 = {};
+            if (::InetPtonW(AF_INET6, r.remoteAddress.c_str(), &v6) != 1)
+                continue;
+            info = asnGeo_.LookupAsnV6(reinterpret_cast<const unsigned char*>(&v6));
+        }
+        // Written even when empty: that clears a stale AS number when the file is
+        // reloaded with different contents, exactly as the CLI path does.
+        store_.SetAsn(r.remoteAddress, info.number, info.org);
     }
 }
 
@@ -2235,6 +2278,9 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             preserveSelection_ = !preserveSelection_;
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PRESERVE_SEL,
                          preserveSelection_);
+            break;
+        case IDM_VIEW_ASNIP:
+            LoadAsnDatabase();
             break;
         case IDM_VIEW_GEOIP:
             LoadGeoIpDatabase();
@@ -3817,7 +3863,11 @@ PresetView MainWindow::CurrentPresetView() const {
     if (dnsEnabled_) sources |= kPresetSourceHosts;
     if (etw_.Running() || fallbackFlag_->load(std::memory_order_relaxed))
         sources |= kPresetSourceEtw;
-    if (geo_.Loaded()) sources |= kPresetSourceGeoIp;
+    // F5.4: the ASN database shares the GeoIP bit rather than taking a new one.
+    // It is the same enrichment applied from a second file, and kPresetSourceAll
+    // is a four-bit mask - adding a fifth bit would be a schema change to a
+    // persisted value for no distinction a user can act on.
+    if (geo_.Loaded() || asnGeo_.Loaded()) sources |= kPresetSourceGeoIp;
     // Widget reads stay here (search box, column mask, sort); the ViewState
     // assembly lives in the abstract layer so the CLI builds the same type.
     return CurrentPresetViewFor(CurrentSearchText(), visibleCols_,
@@ -4229,6 +4279,45 @@ void MainWindow::LoadGeoIpDatabase() {
     UpdateStatusBar(std::wstring());
 }
 
+// F5.4. The ASN picker. A near-copy of LoadGeoIpDatabase, and deliberately so:
+// the two differ only in which member they load, which settings key they write
+// and the words in the message boxes. Factoring the shared half would mean
+// threading a "which database" enum through the error strings for no gain, and
+// the two will diverge anyway - this one names ASN in every message so a user
+// who picked the wrong file can tell which half is unhappy.
+void MainWindow::LoadAsnDatabase() {
+    wchar_t file[MAX_PATH] = {0};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = L"MaxMind ASN databases (*.mmdb)\0*.mmdb\0"
+                      L"All files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    // Naming the expected product in the title: GeoLite2-Country is the file
+    // most people already have, and picking it here produces an ASN column that
+    // is always empty for a reason no message would otherwise explain.
+    ofn.lpstrTitle = L"Open a GeoLite2-ASN .mmdb database";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!DelayLoadGuard(hwnd_, "comdlg32.dll")) return;
+    if (!::GetOpenFileNameW(&ofn)) return;   // cancelled: not an error
+
+    std::wstring error;
+    if (!asnGeo_.Load(file, &error)) {
+        ::MessageBoxW(hwnd_, error.c_str(),
+                      L"ASN database not loaded (expected GeoLite2-ASN)",
+                      MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    ::wcsncpy_s(settings_.asnIpPath, file, _TRUNCATE);
+    PersistSettings("asn path picked");
+
+    OfferAsnForAllRows();
+    ApplyView();
+    UpdateStatusBar(std::wstring());
+}
+
 // ---- settings ---------------------------------------------------
 
 void MainWindow::SaveSettings() {
@@ -4265,6 +4354,12 @@ void MainWindow::SaveSettings() {
     // overwrote the first regardless.
     ::wcsncpy_s(settings_.geoIpPath,
                 geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
+                _TRUNCATE);
+    // F5.4: the ASN path is remembered on the same terms - whatever is actually
+    // loaded - so a database the user cleared does not come back on the next
+    // launch. Same single PersistSettings call below; do not add another.
+    ::wcsncpy_s(settings_.asnIpPath,
+                asnGeo_.Loaded() ? asnGeo_.SourcePath().c_str() : L"",
                 _TRUNCATE);
     PersistSettings("shutdown");
 }

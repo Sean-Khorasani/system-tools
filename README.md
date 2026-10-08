@@ -124,6 +124,21 @@ The file is refreshed on a schedule, so treat it as something you re-fetch rathe
 | CLI | Pass `--db FILE` to `list`, `geoip info` or `geoip lookup`. It covers that run's printed rows only, so the next run needs it again. |
 | GUI | **View → GeoIP database (.mmdb)...** opens a picker filtered to `*.mmdb`, and the column fills immediately rather than at the next refresh. The [GUI guide](docs/gui.md#geoip-in-the-window) covers what happens to that choice across a restart. |
 
+### Autonomous systems (ASN)
+
+The `Country` column also carries the **autonomous system** - the network an address belongs to - rendered alongside the country code as `US · AS15169 Google LLC`. That is a *second, different* MaxMind file: `GeoLite2-ASN.mmdb` has a different record shape from `GeoLite2-Country.mmdb`, so one `--db` cannot supply both.
+
+| Entry point | What you do |
+|---|---|
+| CLI | Pass `--asn-db FILE` alongside (or instead of) `--db FILE`. The two are completely independent. |
+| GUI | **View → ASN database (.mmdb)...** is a separate picker for the separate file. |
+
+Either, both or neither works: the two are loaded independently and neither is required for the other. An address that no database covers leaves the country code alone rather than inventing one, and non-routable addresses never get an ASN at all.
+
+`asn:` then filters on it, in both directions. A bare number is a threshold on the AS number, so `asn:15169` and the range `asn:15169-20000` work; anything else is a case-insensitive substring of the whole cell, so `asn:cloudflare` finds the operator by name. A bare `asn:` means "has an autonomous system", and a row with none never matches whatever you typed.
+
+The full rule is in [filters.md](docs/filters.md).
+
 ### What the commands report
 
 `geoip info --db FILE` prints one line:
@@ -258,6 +273,7 @@ CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. A
 | `Traffic off — needs admin` | No source can run. This is the case on systems without `SIO_TCP_INFO` (before Windows 10 1703). |
 | `host:` filter or `host` column is empty in the CLI | Reverse DNS only runs with `--dns`. Bound it with `--limit`; it is slow. |
 | `country:` filter or column is empty | Pass `--db FILE`. Non-routable addresses never get a country. |
+| `asn:` filter matches nothing, or the country cell never shows an ASN | Pass `--asn-db FILE` - a GeoLite2-ASN file, which is a *different* product from the country one. A row with no ASN never matches, whatever the value. |
 | `tx:`, `rx:`, `duration:`, `rtt:` filters match nothing | Add `--traffic`. Rows that could not be measured match no threshold. |
 | `duration` reads `0s` everywhere | Without `--traffic` there is no age source. |
 | `bandwidth` or `procspeed` show `—` on the first tick | A rate is the difference of two samples. Use `--watch N --count 2` or more. |

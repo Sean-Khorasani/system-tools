@@ -277,6 +277,16 @@ Reloading works on a live session: picking another file replaces the previous on
 
 The path is the only thing remembered, not the database's contents: a file replaced in place is picked up on the next refresh. From the command line `--db FILE` stays explicit per run, and `list --watch --db FILE` re-reads the file on every tick, so a refreshed database shows up without restarting anything.
 
+### The ASN database is a second file
+
+**View → ASN database (.mmdb)...** is a separate picker, for a separate reason: GeoLite2-Country and GeoLite2-ASN are different MaxMind products with different record shapes, so one database cannot answer both. Supply either, both or neither — the window holds them independently, so picking one never disturbs the other.
+
+Its picker is titled *Open a GeoLite2-ASN .mmdb database* and names the expected product on failure (**ASN database not loaded (expected GeoLite2-ASN)**), because the mistake a new user makes is picking the Country file they already have. That is not an error at all — the file loads, it simply carries no ASN records — so nothing would complain, and the column would just stay empty for a reason no dialog would otherwise explain. The title is where that gets said.
+
+The ASN appears in the same `Country` cell as `US · AS15169 Google LLC`, because the column count is frozen at 32 (see the [CLI column reference](cli.md#column-reference)). The separator only appears when both halves are known, and the AS number is placed *before* the operator name, so a narrow window that ellipsises on overflow never hides which network the row belongs to. **Details** gives the two their own rows when you want them apart.
+
+Its path persists on exactly the same terms as the country one, in its own `HKCU\Software\WinTCP` value: pick it once and it reloads silently, and a file that has moved fails quietly rather than nagging at every launch.
+
 ## Windows integration
 
 - **DPI.** Per-Monitor V2 DPI awareness via the manifest, 9 pt Segoe UI. Widths and fonts are recomputed on `WM_DPICHANGED`.

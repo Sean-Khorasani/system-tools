@@ -125,6 +125,10 @@ struct Settings {
     // a ColVersion bump: the column schema does not change, this is one new
     // REG_SZ that older keys simply lack.
     wchar_t geoIpPath[MAX_PATH] = {0};
+    // F5.4: the GeoLite2-ASN path, persisted on the same terms as geoIpPath and
+    // for the same reason - the window should not have to be told again at every
+    // launch. Also deliberately NOT a ColVersion bump: it is not a column.
+    wchar_t asnIpPath[MAX_PATH] = {0};
 
     // Read from HKCU; never fails hard (defaults stay on missing values).
     bool Load();

@@ -40,6 +40,8 @@ const wchar_t* kValLogPath = L"LogPath";
 const wchar_t* kValLastExportDir = L"LastExportDir";
     // 9.1.5: the picked .mmdb survives a relaunch (gui.md's admitted gap).
     const wchar_t* kValGeoIpPath = L"GeoIpPath";
+// F5.4: the ASN database path.
+const wchar_t* kValAsnIpPath = L"AsnIpPath";
 
 bool GetDword(HKEY root, const wchar_t* path, const wchar_t* name, DWORD& out) {
     DWORD value = 0;
@@ -319,6 +321,11 @@ bool Settings::Load() {
     if (!GetSz(root, kKeyPath, kValGeoIpPath, geoIpPath,
                sizeof(geoIpPath) / sizeof(geoIpPath[0])))
         geoIpPath[0] = L'\0';
+    // F5.4. Same shape, same failure handling: an absent or unreadable value
+    // leaves the path empty, which is the same 'nothing picked yet' state.
+    if (!GetSz(root, kKeyPath, kValAsnIpPath, asnIpPath,
+               sizeof(asnIpPath) / sizeof(asnIpPath[0])))
+        asnIpPath[0] = L'\0';
 
     return true;
 }
@@ -365,6 +372,7 @@ bool Settings::Save() const {
     ok &= SetSz(key, kValLogPath, logPath);
     ok &= SetSz(key, kValLastExportDir, lastExportDir);
     ok &= SetSz(key, kValGeoIpPath, geoIpPath);
+    ok &= SetSz(key, kValAsnIpPath, asnIpPath);
 
     ::RegCloseKey(key);
     return ok;

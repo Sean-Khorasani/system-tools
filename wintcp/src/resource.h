@@ -53,6 +53,7 @@
 // the sheet while the About dialog keeps its own command id.
 #define IDM_HELP_SHORTCUTS      40021
 #define IDM_VIEW_GEOIP          40022
+#define IDM_VIEW_ASNIP          40040
 
 // 5.2 preset commands and 5.3 bookmark commands, wired into the GUI.
 #define IDM_FILE_PRESET_SAVE    40023
