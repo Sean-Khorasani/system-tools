@@ -3254,13 +3254,76 @@ TestResult RunSelfTest() {
         Check(r, "store.diff.ghost-row", store.Rows().size() == 3,
               "rows=" + std::to_string(store.Rows().size()));
 
-        // Same snapshot again: ghost drops out, no events.
+        // Same snapshot again: the ghost is RETAINED (F5.7), no events fire.
         store.ReplaceSnapshot(b2);
         ev = store.TakeChangeEvents();
         Check(r, "store.diff.stable-second-cycle",
-              ev.empty() && store.Rows().size() == 2,
+              ev.empty() && store.Rows().size() == 3,
               "events=" + std::to_string(ev.size()) +
                   " rows=" + std::to_string(store.Rows().size()));
+    }
+
+    // 4b. F5.7: closed sockets are retained as grey ghosts (not dropped after one
+    // cycle), fire DISAPPEAR exactly once, freeze their final metrics, and are
+    // capped at kMaxRetainedGhosts (oldest evicted first).
+    {
+        ConnectionStore store;
+        Connection live = MakeReferenceTcpRow();
+        live.trafficRx = 12345; live.trafficTx = 678;
+        store.ReplaceSnapshot({live});
+        store.TakeChangeEvents();  // APPEAR, drained
+
+        // Vanish the single live socket -> one DISAPPEAR and a retained ghost.
+        int totalD = 0;
+        {
+            store.ReplaceSnapshot({});
+            const std::vector<RowChange> ev = store.TakeChangeEvents();
+            for (const RowChange& e : ev) if (e.kind == kChangeDisappear) ++totalD;
+        }
+        Check(r, "f5.7.disappear-once", totalD == 1, "d=" + std::to_string(totalD));
+
+        const Connection* g = nullptr;
+        for (const Connection& c : store.Rows())
+            if (c.flags & kRowRemoved) { g = &c; break; }
+        Check(r, "f5.7.ghost-retained", g != nullptr);
+        Check(r, "f5.7.ghost-death-tick", g != nullptr && g->deathTick > 0);
+        Check(r, "f5.7.ghost-final-metrics",
+              g != nullptr && g->finalRx == 12345 && g->finalTx == 678);
+
+        // Stable empty snapshots keep the ghost and never re-fire DISAPPEAR.
+        for (int i = 0; i < 3; ++i) {
+            store.ReplaceSnapshot({});
+            const std::vector<RowChange> ev = store.TakeChangeEvents();
+            for (const RowChange& e : ev) if (e.kind == kChangeDisappear) ++totalD;
+        }
+        Check(r, "f5.7.retain-past-one-cycle",
+              store.Rows().size() == 1 && totalD == 1,
+              "rows=" + std::to_string(store.Rows().size()) +
+                  " d=" + std::to_string(totalD));
+    }
+
+    // F5.7 cap: more than kMaxRetainedGhosts vanished sockets are trimmed to it,
+    // the oldest (earliest deathTick) evicted first.
+    {
+        ConnectionStore store;
+        std::vector<Connection> snap;
+        snap.reserve(ConnectionStore::kMaxRetainedGhosts + 20);
+        for (size_t i = 0; i < ConnectionStore::kMaxRetainedGhosts + 20; ++i) {
+            Connection c = MakeReferenceTcpRow();
+            c.localPort = static_cast<UINT>(40000 + i);
+            snap.push_back(c);
+        }
+        store.ReplaceSnapshot(snap);
+        store.TakeChangeEvents();  // kMaxRetainedGhosts+20 APPEARs
+        store.ReplaceSnapshot({});  // all vanish -> trimmed to the cap
+        size_t ghosts = 0;
+        for (const Connection& c : store.Rows())
+            if (c.flags & kRowRemoved) ++ghosts;
+        Check(r, "f5.7.cap-trims-to-500",
+              store.Rows().size() == ConnectionStore::kMaxRetainedGhosts &&
+                  ghosts == ConnectionStore::kMaxRetainedGhosts,
+              "rows=" + std::to_string(store.Rows().size()) +
+                  " ghosts=" + std::to_string(ghosts));
     }
 
     // 5. UDP column text (netstat-style placeholders).
