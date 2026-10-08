@@ -1,4 +1,5 @@
 // RefreshEngine.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Worker thread: build one snapshot per pass and hand it to a callback.
 // The snapshot itself comes from SnapshotSource, which is shared with the
 // command line - this file is only the threading.

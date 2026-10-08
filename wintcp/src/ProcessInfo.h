@@ -1,4 +1,5 @@
 // ProcessInfo.h
+// SPDX-License-Identifier: Apache-2.0
 // PID -> process name / path / creation-time resolution with a persistent,
 // creation-time-validated cache, plus service-name and command
 // line queries (tasks 17 / 20).

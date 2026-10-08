@@ -1,4 +1,5 @@
 // TcpReasm.h
+// SPDX-License-Identifier: Apache-2.0
 // Per-4-tuple TCP stream reassembly. Pure: no I/O, no windows.
 //
 // Takes the packet list from Pcapng and produces, for one connection, the

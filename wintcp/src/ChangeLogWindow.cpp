@@ -1,4 +1,5 @@
 // ChangeLogWindow.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See ChangeLogWindow.h. A virtual ListView over a capped ring of
 // pre-formatted entries, a follow-the-tail scroll rule, and a button row.
 // No dialog template, matching the rest of the codebase's zero-dependency

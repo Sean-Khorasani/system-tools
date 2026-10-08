@@ -1,4 +1,5 @@
 // TypeToJump.h
+// SPDX-License-Identifier: Apache-2.0
 // Keyboard "type a few letters, land on the matching row" navigation (7.2).
 //
 // Split out of MainWindow because the interesting part - which row a prefix

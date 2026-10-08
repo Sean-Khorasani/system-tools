@@ -1,4 +1,5 @@
 // BuildInfo.h
+// SPDX-License-Identifier: Apache-2.0
 // Build summary (7.5) and the keyboard-shortcut sheet (7.6).
 //
 // Both are text assembled from live state rather than hard-coded strings,

@@ -1,4 +1,5 @@
 // SocketTraffic.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See SocketTraffic.h. The core mechanism was validated before it was wired
 // in: as a standard user, OpenProcess(PROCESS_DUP_HANDLE) + DuplicateHandle +
 // WSAIoctl(SIO_TCP_INFO) returns the exact per-socket BytesIn/BytesOut of

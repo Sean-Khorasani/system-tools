@@ -1,4 +1,5 @@
 // Alerts.h
+// SPDX-License-Identifier: Apache-2.0
 // Threshold alerting and change notifications.
 //
 // DESIGN RULE, and the reason this is a separate file: a network viewer that

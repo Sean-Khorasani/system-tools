@@ -1,4 +1,5 @@
 // Bookmarks.cpp
+// SPDX-License-Identifier: Apache-2.0
 // HKCU\Software\WinTCP\Bookmarks - one subkey per remote endpoint, holding
 // Tag (REG_DWORD), Note (REG_SZ) and When (REG_QWORD, UTC unix seconds).
 //

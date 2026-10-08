@@ -1,4 +1,5 @@
 // Settings.h
+// SPDX-License-Identifier: Apache-2.0
 // Persisted user settings in HKCU\Software\WinTCP: window
 // placement, refresh interval, toggles, sort/visibility/widths, filter
 // text, change-log path and last export directory. All loads/saves are

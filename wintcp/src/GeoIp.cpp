@@ -1013,6 +1013,7 @@ bool GeoIpDatabase::ResolveOffset(const unsigned char bits[16],
         const unsigned bit = (bits[depth / 8] >> (7 - (depth % 8))) & 1u;
         size_t record = 0;
 
+// SPDX-License-Identifier: Apache-2.0
         if (!NodeRecord(node, bit, &record)) return false;
 
         // Three cases: below the node count it is a node number; equal to it
@@ -1267,7 +1268,12 @@ bool IsGlobalUnicastV4(uint32_t a) {
 
 bool IsGlobalUnicastV6(const unsigned char a[16]) {
     if (a[0] == 0xFF) return false;                           // ff00::/8 multicast
-    if (a[0] == 0xFE && (a[1] & 0xC0) == 0x80) return false;  // fc00::/7 private
+    // fc00::/7 is unique-local - the private range for IPv6. Its first seven bits
+    // are 1111110, so the first byte is fc or fd and that is the whole test.
+    // The line this replaces checked a[0]==0xFE with the SECOND byte in fc..ff,
+    // which is fe80::/10 - a different range - so every ULA address was reported
+    // as globally routable, and got a country and an ASN it should never have had.
+    if (a[0] == 0xFC || a[0] == 0xFD) return false;            // fc00::/7 ULA
     if (a[0] == 0xFE && (a[1] & 0xC0) == 0xC0) return false;  // fe80::/10 link-local
     if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x0D && a[3] == 0xB8) {
         return false;  // 2001:db8::/32 documentation
@@ -1296,6 +1302,14 @@ bool IsGlobalUnicastV6(const unsigned char a[16]) {
         if (tailZero) return false;
     }
     return true;
+}
+
+// F5.11. `local:private` and `remote:private`. Defined as the exact inverse of
+// the GeoIP predicate, so the two can never disagree: an address the Country
+// layer refuses to name is the same address a filter calls private.
+bool IsPrivateAddrV4(uint32_t a) { return !IsGlobalUnicastV4(a); }
+bool IsPrivateAddrV6(const unsigned char a[16]) {
+    return !IsGlobalUnicastV6(a);
 }
 
 }  // namespace wintcp

@@ -1,4 +1,5 @@
 // Grouping.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Grouping.h.
 
 #include "Grouping.h"

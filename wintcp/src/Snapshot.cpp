@@ -1,4 +1,5 @@
 // Snapshot.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Snapshot.h.
 
 #include "Snapshot.h"

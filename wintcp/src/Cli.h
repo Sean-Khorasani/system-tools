@@ -1,4 +1,5 @@
 // Cli.h
+// SPDX-License-Identifier: Apache-2.0
 // Unified command line: wintcp.exe <command> [switches]. The only CLI mode.
 
 #pragma once

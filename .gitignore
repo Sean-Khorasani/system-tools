@@ -31,3 +31,4 @@ build-fast/
 # tests use them when present and skip cleanly when not, so a fresh clone still
 # gates green. See docs/development.md.
 *.mmdb
+.kilo

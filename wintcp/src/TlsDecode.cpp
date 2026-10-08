@@ -1,4 +1,5 @@
 // TlsDecode.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See TlsDecode.h. Every multi-byte field is read big-endian (network byte
 // order) via Be16/Be32, and every length is bounds-checked against the
 // remaining stream before it is used, because the input is attacker-shaped

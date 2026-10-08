@@ -106,6 +106,8 @@ add_executable(wintcp
     wintcp/src/ProcStats.h
     wintcp/src/ChartsWindow.cpp
     wintcp/src/ChartsWindow.h
+    wintcp/src/FontCache.cpp
+    wintcp/src/FontCache.h
     wintcp/src/CrashDump.cpp
     wintcp/src/CrashDump.h
     wintcp/src/WinCaps.cpp

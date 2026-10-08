@@ -1,4 +1,5 @@
 // ChangeLogWindow.h
+// SPDX-License-Identifier: Apache-2.0
 // Live change log window: APPEAR / DISAPPEAR / STATE events
 // shown as they happen, in a virtual ListView over a capped buffer of
 // pre-formatted rows.

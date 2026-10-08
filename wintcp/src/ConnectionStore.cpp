@@ -1,4 +1,5 @@
 // ConnectionStore.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Model implementation: diffing, filtering (expressions), sorting, text.
 
 #include "ConnectionStore.h"
@@ -12,7 +13,8 @@
 
 #include "TcpTable.h"
 #include "Utils.h"
-#include "DnsResolver.h"   // kPendingHost sentinel for COL_HOST cell rendering
+#include "DnsResolver.h"
+#include "GeoIp.h"   // F5.11: IsPrivateAddrV4/V6   // kPendingHost sentinel for COL_HOST cell rendering
 // F5.1/F5.2/F5.3: the column cells below need the integrity and signature
 // LABELS, and those are defined next to the enums they describe rather than in
 // a presentation header - so the labels and the states cannot drift apart.
@@ -845,6 +847,13 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
     return true;
 }
 
+// F5.11: is this endpoint on a non-routable range? One helper for both families,
+// so a v6 row is not answered by the v4 predicate - which would call every
+// IPv4-mapped address public.
+bool AddrIsPrivate(const IN_ADDR& v4, const IN6_ADDR& v6, bool isV6) {
+    return isV6 ? IsPrivateAddrV6(reinterpret_cast<const unsigned char*>(&v6))
+                : IsPrivateAddrV4(ntohl(v4.S_un.S_addr));
+}
 bool MatchClause(const Connection& c, const FilterClause& cl) {
     if (cl.proto != 0 && c.protocol != cl.proto) return false;
     if (cl.family != 0) {
@@ -904,16 +913,49 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
     wchar_t tmp[24] = {0};
     const std::wstring* hay = nullptr;
     switch (f) {
+        // F5.11. `local:private` / `remote:private` and their `global` inverses.
+        //
+        // They live in the Any case because `local:` and `remote:` are consumed as
+        // DIRECTION prefixes before the field is resolved (see the StartsWithCi pair
+        // above), so `local:private` arrives here as field=Any with
+        // direction=-1 - not as field=Local. Putting the check in the Local case
+        // instead compiles, passes every type check, and silently never fires.
+        //
+        // The predicate is the same one GeoIP uses to refuse a country, declared in
+        // GeoIp.h so there is one table of ranges rather than two that could drift.
         case FilterField::Any:
-            // A bare direction restricts a text value to that endpoint;
-            // without one it searches the aggregated key.
+            if ((cl.text == L"private" || cl.text == L"global") &&
+                cl.direction != 0) {
+                const bool v6 = c.family == AF_INET6;
+                const bool priv =
+                    cl.direction < 0
+                        ? AddrIsPrivate(c.local4, c.local6, v6)
+                        : AddrIsPrivate(c.remote4, c.remote6, v6);
+                // Folded into the exclude flag rather than returning early, so
+                // `!local:private` works from the same code.
+                return (priv == (cl.text == L"private")) != cl.exclude;
+            }
             if (cl.direction != 0)
                 hay = (cl.direction < 0) ? &c.lowerLocal : &c.lowerRemote;
             else
                 hay = &c.lowerAll;
             break;
-        case FilterField::Local:   hay = &c.lowerLocal;  break;
-        case FilterField::Remote:  hay = &c.lowerRemote; break;
+        case FilterField::Local:
+            if (cl.text == L"private" || cl.text == L"global") {
+                const bool priv = AddrIsPrivate(c.local4, c.local6,
+                                                c.family == AF_INET6);
+                return (priv == (cl.text == L"private")) != cl.exclude;
+            }
+            hay = &c.lowerLocal;
+            break;
+        case FilterField::Remote:
+            if (cl.text == L"private" || cl.text == L"global") {
+                const bool priv = AddrIsPrivate(c.remote4, c.remote6,
+                                                c.family == AF_INET6);
+                return (priv == (cl.text == L"private")) != cl.exclude;
+            }
+            hay = &c.lowerRemote;
+            break;
         case FilterField::Process: hay = &c.lowerProcess; break;
         case FilterField::Path:    hay = &c.lowerPath;   break;
         case FilterField::Service: hay = &c.lowerService; break;

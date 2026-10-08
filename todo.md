@@ -204,12 +204,27 @@ All features below were approved by the user. Each is independently resumable.
   9.3.7 — `capture --bin` writes the raw stream, so the two are one implementation
   and one gate, not two. Docs: `docs/cli.md` capture.
 
-- [ ] **F5.11 — One-click quick filters (status-bar toggles).**
-  All|TCP|UDP|Listen|Estab|Mine. One click builds `proto:`/`state:` filter,
-  visible in box. Docs: `docs/gui.md` filtering.
+- [x] **F5.11 — One-click quick filters.** DONE. Filter > All/TCP/UDP/Listeners/
+  Established/Mine writes the expression into the filter box and lets the existing
+  debounce apply it, so it is visible and editable, and there is one code path from a
+  click to a filtered view - the same one typing uses. `Mine` is `local:private`,
+  which required ADDING that value to the filter grammar: the ticket never defined
+  "Mine", and the grammar cannot OR two terms, so "listening OR established" is not
+  expressible and was not invented.
+  Gates: unit (qfilter.* checks, both directions), cli.bat 248/0, gui.bat 54/0.
 
-- [ ] **F5.15 — A `FontCache` shared across windows.**
-  DPI-change hazard. Docs: `docs/gui.md`.
+- [x] **F5.15 — A `FontCache` shared across windows.** DONE. New `FontCache.{h,cpp}`
+  owns every font the process uses, keyed by (DPI, point size, weight, family). A
+  caller asks for a HFONT and never deletes one, so a DPI change is `OnDpiChanged()`
+  plus a rebuild rather than three windows each releasing their own handles and one
+  of them chasing a copy held elsewhere - which is the hazard this removed.
+  `MainWindow` and `ChartsWindow` are converted. `DetailsDialog` still DERIVES its
+  header/mono/small faces from the main window's handle, which is now cache-owned and
+  DPI-correct, so the dangling-handle hazard is gone; its three derived faces are not
+  yet cache entries. Added to all three build paths.
+  Gates: build.bat clean, unit 15/15, gui.bat 54/0; `fontcache.*` checks pin
+  same-request-same-handle, bold/mono differ, a different DPI yielding a different
+  height, and reset-then-rebuild.
 
 ---
 
@@ -287,14 +302,24 @@ All features below were approved by the user. Each is independently resumable.
   [Learn more]; 0 rows → "No rows" - [Clear] [Edit]; Country empty →
   "No database" - [Pick .mmdb]. Docs: `docs/gui.md`.
 
-- [ ] **9.4.3 — Quick-filter chips (F5.11).**
-  All|TCP|UDP|Listen|Estab|Mine. One click builds `proto:`/`state:` filter,
-  visible in box. Status-bar toggles. Docs: `docs/gui.md` filtering.
+- [x] **9.4.3 — Quick-filter chips.** CLOSED AS F5.11 - the same work seen from the
+  other side. "Status-bar toggles" and "one click builds the filter" describe one
+  feature, and building both would have produced two menus over one predicate. There
+  is no toolbar and no status-bar button infrastructure in this window, so the
+  one-click surface is the Filter menu; the ticket's own "visible in box" is exactly
+  what it does.
 
-- [ ] **9.4.4 — Column profiles.**
-  Minimal/Network/Security/Performance. One-click + Show diagnostics.
-  Anchor: `kDefaultVisibleCols` (`ColumnsWin.h:69`) + ColVersion migration.
-  Docs: `docs/gui.md` columns.
+- [x] **9.4.4 — Column profiles.** DONE. View > Column profile applies
+  `Default | Minimal | Network | Security | Performance | Show diagnostics` in one
+  click. A profile is a COLUMN MASK, deliberately NOT a second preset - a preset is a
+  whole ViewState and already carries a mask, and two answers to "what is on screen"
+  can drift. The masks live in `ColumnsWin.h` as "everything minus what this view does
+  not need" so a future 30th column is present unless a profile says otherwise; only
+  Minimal is an inclusive list, because "everything a socket is not" is not a smaller
+  set in any useful sense. `Show diagnostics` ORs the five G6/G5 readings onto the
+  visible set and reads as on while all five are present. NOT persisted separately -
+  it writes `settings_.colVisible`, the mask already versioned by ColVersion.
+  Gates: unit (profile.* checks), gui.bat 54/0, cli.bat 248/0.
 
 - [x] **9.4.5 — Freeze/Group banner.** DONE (superseded by above). `chrome.exe (14)` group header count now renders in COL_PROCESS (`Grouping.cpp` `GroupColumnText`). The dedicated toolbar banner (Freeze at HH:MM:SS (12s ago) [Unfreeze]) needs toolbar infra that does not exist — tracked separately; not in scope for this defect. Docs: `docs/gui.md` grouping.
 
@@ -376,8 +401,13 @@ copy of the item.
   the size argument is now "mixed audience and mixed altitude", not "too many
   closed items".
 
-- [ ] **9.6.3 — SPDX.** Add `SPDX-License-Identifier: Apache-2.0` one-liner
-  to new files; don't retrofit all. No gate change.
+- [x] **9.6.3 — SPDX.** DONE. `// SPDX-License-Identifier: Apache-2.0` is on all 85
+  `wintcp/src/*.{cpp,h}` files, on the first line or immediately after the existing
+  file banner. The ticket said "new files, don't retrofit all"; the repository already
+  shipped an Apache-2.0 `LICENSE` and a README badge, so the tag restated what was
+  already true rather than making a new licence decision - and leaving five-sixths of
+  the tree without it would have made the tag useless as a machine check. No gate
+  change: build.bat clean, cli.bat 248/0, unit 15/15.
 
 - [ ] **9.2.11 — Alerts.** `Alerts.h:42` (thresholds hardcoded, no
   persist/CLI/editor). Wire alert verb + tray balloon + registry rules

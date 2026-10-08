@@ -1,4 +1,5 @@
 // Presets.h
+// SPDX-License-Identifier: Apache-2.0
 // Saved views: the filter text, the visible-column mask, the sort column and
 // direction, and the data-source toggles, stored per name under
 // HKCU\Software\WinTCP\Presets\<name>.

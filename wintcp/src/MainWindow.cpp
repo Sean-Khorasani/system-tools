@@ -1,4 +1,5 @@
 // MainWindow.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Main window implementation: controls, virtual ListView (LVS_OWNERDATA),
 // worker-thread refresh plumbing, filter (debounced, expression-aware),
 // sort (with header indicators), selection preservation, export.
@@ -27,6 +28,7 @@
 #include "Freeze.h"        // FrozenAgeMs (5.5)
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
+#include "FontCache.h"     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
 
 namespace wintcp {
@@ -1600,6 +1602,176 @@ void MainWindow::SyncColumnMenuChecks() {
     }
 }
 
+// ---- 9.4.2 empty states -----------------------------------------------------
+// A blank cell answers the wrong question. "No rows", "no country database
+// loaded" and "traffic never ran" are three DIFFERENT reasons a column is empty,
+// and on screen they are identical - so each gets one sentence that says what to
+// do about it.
+//
+// Three deliberate choices:
+//
+// - It is recomputed, never stored. Nothing here is remembered between calls, so
+//   no code path can leave a stale hint on screen. OnTimer already re-runs
+//   UpdateStatusBar every second and ApplyViewWith calls this on every view
+//   change, which is every path that can change any of the predicates.
+// - Order is NO ROWS > DATABASE > TRAFFIC. With no rows at all the other two are
+//   noise: telling someone their Country column is empty while the table is empty
+//   is answering a question they did not ask.
+// - Each message names the menu item that fixes it, because "add --db" is not
+//   something a GUI user can act on and "pick one in View > GeoIP database" is.
+void MainWindow::UpdateEmptyState() {
+    emptyStateHint_.clear();
+
+    if (store_.View().empty() && !store_.Rows().empty()) {
+        // The table has traffic but the FILTER matches nothing - the case a user
+        // reads as "the tool is broken". An empty table with no traffic at all is
+        // normal and needs no banner.
+        emptyStateHint_ = L"no rows match this filter - clear it to see everything";
+        return;
+    }
+
+    // A country-bearing column with no database behind it. Both databases count,
+    // because either fills the cell.
+    const bool countryShown = (visibleCols_ & (1u << COL_COUNTRY)) != 0;
+    if (countryShown && !geo_.Loaded() && !asnGeo_.Loaded()) {
+        emptyStateHint_ = L"no GeoIP database loaded - pick one in View > GeoIP "
+                          L"database to fill Country";
+        return;
+    }
+
+    // A traffic column with nothing measuring it. AnyTrafficColVisible already
+    // answers "does the user care", and the two sources are exactly the two
+    // states UpdateStatusBar distinguishes - so this adds no new predicate.
+    if (AnyTrafficColVisible() && !etw_.Running() && !fallbackFlag_->load()) {
+        emptyStateHint_ = L"traffic not being measured - View > Per-PID traffic "
+                          L"counters (needs admin)";
+        return;
+    }
+}
+// ---- 9.4.4 column profiles -------------------------------------------------
+// A profile is a named COLUMN MASK, nothing else. That is a deliberate narrowing:
+// a preset (File > Save view as preset) is a full ViewState - filter, sort,
+// grouping, sources and mask - and these must not become a second, weaker preset
+// that drifts from the real one. They also must not be persisted as preset
+// entries; the visible mask is already persisted in settings_.colVisible.
+//
+// The masks are computed from the live ColumnId bits rather than hard-coded, so a
+// future 33rd column cannot be silently missing from every profile.
+UINT32 MainWindow::ColumnProfileMask(int profileId) const {
+    switch (profileId) {
+        case IDM_PROFILE_MINIMAL:
+            return kMinimalProfileCols;
+        case IDM_PROFILE_NETWORK:
+            return kNetworkProfileCols;
+        case IDM_PROFILE_SECURITY:
+            return kSecurityProfileCols;
+        case IDM_PROFILE_PERFORMANCE:
+            return kPerformanceProfileCols;
+        case IDM_PROFILE_DIAGNOSTICS:
+            // Show diagnostics ORs the five G6/G5 readings onto whatever is
+            // visible now, rather than replacing it: "show me the diagnostics
+            // TOO" is the question, and a user who has hidden CPU would not
+            // expect clicking this to bring it back.
+            {
+                const UINT32 diagnostics =
+                    (1u << COL_RTT) | (1u << COL_MINRTT) | (1u << COL_CWND) |
+                    (1u << COL_RETRANS) | (1u << COL_GROUPRATE);
+                return visibleCols_ | diagnostics;
+            }
+        case IDM_PROFILE_DEFAULT:
+        default:
+            return kDefaultVisibleCols;
+    }
+}
+
+void MainWindow::ApplyColumnProfile(int profileId) {
+    RebuildColumns();                        // harvest widths before the swap
+    visibleCols_ = ClampVisibleCols(ColumnProfileMask(profileId));
+    settings_.colVisible = visibleCols_;
+    RebuildColumns();
+    SyncColumnMenuChecks();
+    SyncColumnProfileChecks();
+    ApplyView();
+}
+
+void MainWindow::SyncColumnProfileChecks() {
+    const HMENU view = ::GetSubMenu(::GetMenu(hwnd_), 1);   // View popup
+    if (view == nullptr) return;
+    for (int id = IDM_PROFILE_DEFAULT; id <= IDM_PROFILE_DIAGNOSTICS; ++id) {
+        // A profile is checked when the mask equals it EXACTLY. "Show diagnostics"
+        // is the exception: it ors onto the current set, so it is checked when all
+        // five of its bits are present, which survives the user hiding a column
+        // afterwards without lying about what is on screen.
+        const UINT32 mask = ColumnProfileMask(id);
+        const bool on = (id == IDM_PROFILE_DIAGNOSTICS)
+                            ? (visibleCols_ & mask) == mask
+                            : visibleCols_ == mask;
+        ::CheckMenuItem(view, id, MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+    }
+}
+
+// ---- F5.11 quick filters ---------------------------------------------------
+// One click writes an expression into the filter box and lets the existing
+// debounce apply it, so the expression is VISIBLE and EDITABLE - the whole point
+// of "one click builds the filter" rather than "one click filters".
+void MainWindow::ApplyQuickFilter(int commandId) {
+    const wchar_t* expr = L"";
+    switch (commandId) {
+        case IDM_QFILTER_TCP:    expr = L"proto:tcp";        break;
+        case IDM_QFILTER_UDP:    expr = L"proto:udp";        break;
+        case IDM_QFILTER_LISTEN: expr = L"state:listen";    break;
+        case IDM_QFILTER_ESTAB:  expr = L"state:estab";     break;
+        case IDM_QFILTER_MINE:
+            // The ticket says "Mine" without defining it, and the filter grammar
+            // cannot OR two terms - so "listening OR established" is not
+            // expressible. What IS expressible, and what the name means:
+            // connections whose LOCAL endpoint is on a non-routable range, i.e.
+            // this machine talking to its own network rather than to the internet.
+            expr = L"local:private";
+            break;
+        case IDM_QFILTER_ALL:
+        default:                 expr = L"";                break;
+    }
+    if (hwndSearchEdit_ != nullptr && CurrentSearchText() != expr) {
+        ::SetWindowTextW(hwndSearchEdit_, expr);
+    }
+    // Re-arm the debounce explicitly, exactly as ClearFilterBox does: a
+    // programmatic SetWindowText does not guarantee EN_CHANGE, and without the
+    // re-arm a box that already held the same text would not re-apply.
+    ::KillTimer(hwnd_, kFilterTimerId);
+    ::SetTimer(hwnd_, kFilterTimerId, kFilterDebounceMs, nullptr);
+    SyncQuickFilterChecks();
+}
+
+void MainWindow::SyncQuickFilterChecks() {
+    const HMENU bar = ::GetMenu(hwnd_);
+    if (bar == nullptr) return;
+    const wchar_t* want = nullptr;
+    {
+        const std::wstring cur = CurrentSearchText();
+        if (cur == L"proto:tcp") want = L"proto:tcp";
+        else if (cur == L"proto:udp") want = L"proto:udp";
+        else if (cur == L"state:listen") want = L"state:listen";
+        else if (cur == L"state:estab") want = L"state:estab";
+        else if (cur == L"local:private") want = L"local:private";
+        else if (cur.empty()) want = L"";
+    }
+    const int ids[] = {IDM_QFILTER_ALL,   IDM_QFILTER_TCP,    IDM_QFILTER_UDP,
+                       IDM_QFILTER_LISTEN, IDM_QFILTER_ESTAB, IDM_QFILTER_MINE};
+    for (int id : ids) {
+        bool on = false;
+        switch (id) {
+            case IDM_QFILTER_ALL:     on = (want != nullptr && *want == L'\0'); break;
+            case IDM_QFILTER_TCP:     on = (want != nullptr && ::wcscmp(want, L"proto:tcp") == 0); break;
+            case IDM_QFILTER_UDP:     on = (want != nullptr && ::wcscmp(want, L"proto:udp") == 0); break;
+            case IDM_QFILTER_LISTEN:  on = (want != nullptr && ::wcscmp(want, L"state:listen") == 0); break;
+            case IDM_QFILTER_ESTAB:   on = (want != nullptr && ::wcscmp(want, L"state:estab") == 0); break;
+            case IDM_QFILTER_MINE:    on = (want != nullptr && ::wcscmp(want, L"local:private") == 0); break;
+            default: break;
+        }
+        ::CheckMenuItem(bar, id, MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+    }
+}
 void MainWindow::ToggleColumn(int columnId) {
     if (columnId < 0 || columnId >= COL_COUNT) return;
     RebuildColumns();                     // harvests current widths first
@@ -1664,20 +1836,12 @@ void MainWindow::EnsureTrafficCounters() {
 }
 
 void MainWindow::RecreateFont() {
-    if (font_ != nullptr) {
-        ::DeleteObject(font_);
-        font_ = nullptr;
-    }
-    LOGFONTW lf = {};
-    lf.lfHeight = -::MulDiv(9, static_cast<int>(dpi_), 72);   // 9pt
-    lf.lfWeight = FW_NORMAL;
-    lf.lfCharSet = DEFAULT_CHARSET;
-    lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
-    lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-    lf.lfQuality = CLEARTYPE_QUALITY;
-    lf.lfPitchAndFamily = DEFAULT_PITCH;
-    ::wcscpy_s(lf.lfFaceName, L"Segoe UI");
-    font_ = ::CreateFontIndirectW(&lf);
+    // F5.15. No handle is created or destroyed here any more. The cache owns every
+    // font the process uses, so a DPI change is one call to OnDpiChanged and the
+    // next Get() is correct by construction - instead of three windows each
+    // releasing their own handles and one of them chasing a copy held elsewhere.
+    FontCache::Get().OnDpiChanged();
+    font_ = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, dpi_);
     ApplyFontToChildren();
     // The details window is a separate top-level window holding a copy of
     // this handle; it must receive the replacement too (its header font is
@@ -1840,6 +2004,12 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     // re-reading the box.
     v.ApplyTo(&store_, &filterProgram_);
 
+    // 9.4.2. Recomputed here rather than only at startup because this is the
+    // single funnel every path goes through: startup, a refresh result, a column
+    // toggle, a preset, a GeoIP pick and a freeze all end here, and at this point
+    // the row count, the column mask and both database states are simultaneously
+    // valid.
+    UpdateEmptyState();
     const size_t count = store_.View().size();
     ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, static_cast<WPARAM>(count),
                    LVSICF_NOINVALIDATEALL);
@@ -2007,7 +2177,20 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
                                 : L"Ready";
     // 9.2.8: append the DNS-stall hint so a user knows some Host cells show
     // `pending` rather than `—`.
-    if (!dnsStalledHint_.empty()) right += L"  ·  " + dnsStalledHint_;
+    // 9.4.2: the empty-state strip. One sentence per case, and the sentence is the
+    // ACTION rather than a description of a blank - "no country database loaded -
+    // pick one in View > GeoIP database", not "Country: empty".
+    //
+    // Recomputed from live state every second by OnTimer through this same
+    // function, so there is no timer to write and nothing to clean up. That is
+    // the shape dnsStalledHint_ already uses and the only time-scoped message
+    // channel the window has: there is no toolbar and no WM_PAINT hook in this
+    // window, so a banner over the list would be new chrome rather than a reuse.
+    if (!emptyStateHint_.empty()) {
+        if (!right.empty()) right += L"  ";
+        right += emptyStateHint_;
+    }
+
     // 5.5: while frozen, pane 2 must say so AND say how stale it is. Showing
     // the pre-freeze "Updated: 14:32:05" on its own would be a lie - it reads
     // as current, and the user has no way to tell the list is not updating.
@@ -2281,6 +2464,30 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         case IDM_VIEW_ASNIP:
             LoadAsnDatabase();
+            break;
+        // F5.11. The quick filters write the box and let the debounce do the
+        // work, so there is exactly one code path from a click to a filtered
+        // view - the same one typing uses. Going straight to ApplyView here
+        // would skip the EN_CHANGE path and leave the two able to disagree.
+        case IDM_QFILTER_ALL:
+        case IDM_QFILTER_TCP:
+        case IDM_QFILTER_UDP:
+        case IDM_QFILTER_LISTEN:
+        case IDM_QFILTER_ESTAB:
+        case IDM_QFILTER_MINE:
+            ApplyQuickFilter(static_cast<int>(id));
+            break;
+        case IDM_QFILTER_CLEAR:
+            FocusFilterBox();
+            break;
+        // 9.4.4.
+        case IDM_PROFILE_DEFAULT:
+        case IDM_PROFILE_MINIMAL:
+        case IDM_PROFILE_NETWORK:
+        case IDM_PROFILE_SECURITY:
+        case IDM_PROFILE_PERFORMANCE:
+        case IDM_PROFILE_DIAGNOSTICS:
+            ApplyColumnProfile(static_cast<int>(id));
             break;
         case IDM_VIEW_GEOIP:
             LoadGeoIpDatabase();

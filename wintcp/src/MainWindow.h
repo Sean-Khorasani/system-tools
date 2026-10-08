@@ -1,4 +1,5 @@
 // MainWindow.h
+// SPDX-License-Identifier: Apache-2.0
 // Main application window: control bar + virtual ListView (LVS_OWNERDATA)
 // + status bar. Owns the RefreshEngine worker, the ConnectionStore model,
 // filter/sort/export logic, selection preservation, and column layout.
@@ -168,7 +169,15 @@ private:
     void LoadGeoIpDatabase();              // 4.3: pick a .mmdb, load, refresh
     void OfferAsnForAllRows();             // F5.4: fill the ASN half of Country
     void LoadAsnDatabase();                // F5.4: pick a GeoLite2-ASN .mmdb
-
+    // 9.4.4 column profiles and F5.11 quick filters. Both are one-click named
+    // sets, so both live here as a pair of apply-and-sync helpers rather than as
+    // five and six near-identical command handlers.
+    void ApplyColumnProfile(int profileId);
+    UINT32 ColumnProfileMask(int profileId) const;   // profile id -> column mask
+    void ApplyQuickFilter(int filterId);
+    void SyncColumnProfileChecks();        // View > Column profile ticks
+    void SyncQuickFilterChecks();          // Filter menu ticks
+    void UpdateEmptyState();               // 9.4.2: the empty-column infobar
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
     void ApplyViewWith(const std::vector<std::uint64_t>& ids,
@@ -357,6 +366,10 @@ private:
     bool reportErrorsNextResult_ = false;
     bool dnsEnabled_ = false;              // View > Resolve hostnames
     std::wstring dnsStalledHint_;         // 9.2.8 status-bar hint on stalls
+    // 9.4.2. Same shape and same lifetime as dnsStalledHint_ - derived from live
+    // state each second, never stored across a refresh - because a stored hint
+    // outlives the condition that produced it.
+    std::wstring emptyStateHint_;
     bool topMost_ = false;                 // View > Always on top
     bool trayEnabled_ = false;             // View > Tray icon
     bool trayIconShown_ = false;

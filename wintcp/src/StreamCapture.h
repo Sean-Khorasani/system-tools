@@ -1,4 +1,5 @@
 // StreamCapture.h
+// SPDX-License-Identifier: Apache-2.0
 // Drives pktmon to capture one TCP connection, converts the ETL to pcapng,
 // parses it and reassembles the stream. This is the only part of
 // the follow-stream feature that touches the filesystem or spawns processes.

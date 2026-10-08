@@ -1,4 +1,5 @@
 // WinCaps.h
+// SPDX-License-Identifier: Apache-2.0
 // Runtime capability report: which optional Windows facilities this machine
 // actually offers, and why not when it does not.
 //

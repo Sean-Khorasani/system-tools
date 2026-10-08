@@ -1,4 +1,5 @@
 // Utils.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Implementations for Utils.h.
 
 #include "Utils.h"

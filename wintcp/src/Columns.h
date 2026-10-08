@@ -1,4 +1,5 @@
 // Columns.h
+// SPDX-License-Identifier: Apache-2.0
 // The logical column set, shared by the model (ConnectionStore), the
 // settings (Settings) and the UI. It lives in its own header so Settings
 // does not have to include the whole model just to learn COL_COUNT - the

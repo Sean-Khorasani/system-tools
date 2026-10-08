@@ -1,4 +1,5 @@
 // Commands.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Commands.h. All headless; no HWND, no dialogs, no clipboard.
 
 #include "Commands.h"

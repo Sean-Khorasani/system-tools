@@ -4,6 +4,9 @@
 
 #include "Bench.h"
 
+#include "ColumnsWin.h"   // 9.4.4 profile masks
+#include "FontCache.h"     // F5.15
+
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -1204,6 +1207,211 @@ void CheckRealGeoIp(TestResult& r) {
     }
 }
 
+// ---- 9.4.4 column profiles, F5.11 quick filters, F5.15 font cache ----------
+// All three are pure data transforms over public types, so they are checked here
+// rather than through the window. The GUI handler is a thin wrapper round them.
+
+void CheckColumnProfiles(TestResult& r) {
+    struct Case {
+        const char* name;
+        UINT32 mask;
+        int col;      // a column the profile MUST contain
+        int absent;   // a column the profile MUST NOT contain
+    };
+    const Case cases[] = {
+        {"minimal", kMinimalProfileCols, COL_REMOTE, COL_CPU},
+        {"network", kNetworkProfileCols, COL_REMOTE, COL_CPU},
+        // Network keeps the byte counters AND keeps Country: knowing WHERE the
+        // bytes go is a network question, so an ASN-less Network view would be
+        // the wrong narrowing. The column it drops instead is the process budget.
+        {"network-keeps-country", kNetworkProfileCols, COL_COUNTRY, COL_MEM},
+        {"security", kSecurityProfileCols, COL_PATH, COL_LOCAL},
+        {"performance", kPerformanceProfileCols, COL_BANDWIDTH, COL_COUNTRY},
+        {"diagnostics", kDiagnosticsCols, COL_RTT, COL_CPU},
+    };
+    for (const Case& c : cases) {
+        const bool present = (c.mask & (1u << c.col)) != 0;
+        const bool missing = (c.mask & (1u << c.absent)) == 0;
+        Check(r, ("profile." + std::string(c.name)).c_str(), present && missing);
+    }
+    // The freeze: the mask must never name a column that does not exist, or a
+    // profile would silently widen the 32-column set.
+    // The freeze: no profile may name a column that does not exist. The real
+    // check is that every mask is a subset of kAllColMask, expressed that way
+    // rather than by ORing them into one number with a self-comparison.
+    const UINT32 allProfiles = kMinimalProfileCols | kNetworkProfileCols |
+                               kSecurityProfileCols | kPerformanceProfileCols |
+                               kDiagnosticsCols;
+    Check(r, "profile.all-within-32-columns", (allProfiles & ~kAllColMask) == 0);
+    // ClampVisibleCols is the one guard between a bad mask and a blank window.
+    Check(r, "profile.clamp-keeps-something-visible",
+          ClampVisibleCols(0) != 0 && ClampVisibleCols(0) != kAllColMask);
+    Check(r, "profile.clamp-drops-out-of-range",
+          ClampVisibleCols(0xFFFFFFFFu) == kAllColMask);
+    // "Default" must be the default, or picking it is not a way back.
+    Check(r, "profile.default-is-the-default",
+          kDefaultVisibleCols == ClampVisibleCols(kDefaultVisibleCols));
+}
+
+void CheckQuickFilters(TestResult& r) {
+    // Each quick filter's expression must PARSE and must select the row built for
+    // it while excluding the opposite one. A filter that parses but matches nothing
+    // is a silent dead click, and these are clicked with no box to type in.
+    //
+    // The rows go through a ConnectionStore because `state:` matches stateLABEL,
+    // which the store derives from the MIB state - a bare Connection carries
+    // neither, so a direct MatchClause on one would test nothing.
+    auto test = [&r](const char* name, const wchar_t* expr, MIB_TCP_STATE state,
+                     int protocol, const wchar_t* local, const wchar_t* remote,
+                     bool want, int localPort = 50000, int remotePort = 443) {
+        Connection a;
+        a.protocol = protocol;
+        a.state = state;
+        a.localAddress = local;
+        a.localPort = static_cast<UINT>(localPort);
+        a.remoteAddress = remote;
+        a.remotePort = static_cast<UINT>(remotePort);
+        // The private predicate reads the BINARY address, not the text. The store
+        // does not fill local4/remote4 from the text - the snapshot builder does
+        // that - so a row with only the text set is answering with 0.0.0.0, which
+        // happens to be private, which makes every negative case pass for free.
+        auto fillBin = [](const wchar_t* s, IN_ADDR* v4, IN6_ADDR* v6) {
+            if (::InetPtonW(AF_INET, s, v4) != 1) ::InetPtonW(AF_INET6, s, v6);
+        };
+        fillBin(local, &a.local4, &a.local6);
+        fillBin(remote, &a.remote4, &a.remote6);
+        if (::InetPtonW(AF_INET6, local, &a.local6) == 1 ||
+            ::InetPtonW(AF_INET6, remote, &a.remote6) == 1) {
+            a.family = AF_INET6;
+        }
+        ConnectionStore st;
+        st.ReplaceSnapshot({a});
+        st.SetView(ViewQuery());
+        const Connection* row = st.ViewRow(0);
+        std::vector<FilterClause> p;
+        const bool ok = row != nullptr && ParseFilter(expr, p) && !p.empty() &&
+                        MatchFilter(*row, p) == want;
+        Check(r, name, ok);
+    };
+
+    test("qfilter.tcp-selects-tcp", L"proto:tcp", MIB_TCP_STATE_ESTAB,
+         IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", true);
+    test("qfilter.tcp-rejects-udp", L"proto:tcp", MIB_TCP_STATE_ESTAB,
+         IPPROTO_UDP, L"10.0.0.5", L"93.184.216.34", false);
+    test("qfilter.udp-selects-udp", L"proto:udp", MIB_TCP_STATE_ESTAB,
+         IPPROTO_UDP, L"10.0.0.5", L"93.184.216.34", true);
+    // A listener: no remote endpoint, LISTEN state.
+    test("qfilter.listen-selects-listener", L"state:listen", MIB_TCP_STATE_LISTEN,
+         IPPROTO_TCP, L"0.0.0.0", L"0.0.0.0", true);
+    test("qfilter.listen-rejects-established", L"state:listen",
+         MIB_TCP_STATE_ESTAB, IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", false);
+    test("qfilter.estab-selects-established", L"state:estab",
+         MIB_TCP_STATE_ESTAB, IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", true);
+    test("qfilter.estab-rejects-listener", L"state:estab", MIB_TCP_STATE_LISTEN,
+         IPPROTO_TCP, L"0.0.0.0", L"0.0.0.0", false);
+    // "Mine" is `local:private` - a non-routable LOCAL endpoint. The ticket says
+    // "Mine" without defining it, and the grammar cannot OR two terms, so
+    // "listening OR established" is not expressible and a three-condition version
+    // would have been invented rather than implemented.
+    const wchar_t* kMine = L"local:private";
+    test("qfilter.mine-selects-private-local", kMine, MIB_TCP_STATE_ESTAB,
+         IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", true);
+    test("qfilter.mine-selects-listener-too", kMine, MIB_TCP_STATE_LISTEN,
+         IPPROTO_TCP, L"0.0.0.0", L"0.0.0.0", true);
+    test("qfilter.mine-excludes-public-local", kMine, MIB_TCP_STATE_ESTAB,
+         IPPROTO_TCP, L"93.184.216.34", L"93.184.216.34", false, 443, 443);
+
+    // Negated, and agreeing with `global`: the two are inverses over ONE range
+    // table rather than two lists that could drift.
+    std::vector<FilterClause> neg;
+    Check(r, "qfilter.private-negation-parses",
+          ParseFilter(L"exclude:local:private", neg) && !neg.empty() && neg[0].exclude);
+
+    // v6. A unique-local local address is private and a remote global one is not,
+    // answered by the v6 predicate - the v4 one would call every v6 row public.
+    {
+        Connection a;
+        a.protocol = IPPROTO_TCP;
+        a.state = MIB_TCP_STATE_ESTAB;
+        a.family = AF_INET6;
+        a.localAddress = L"fd00::1";
+        ::InetPtonW(AF_INET6, a.localAddress.c_str(), &a.local6);
+        a.remoteAddress = L"2606:4700::1111";
+        ::InetPtonW(AF_INET6, a.remoteAddress.c_str(), &a.remote6);
+        ConnectionStore st;
+        st.ReplaceSnapshot({a});
+        st.SetView(ViewQuery());
+        const Connection* row = st.ViewRow(0);
+        std::vector<FilterClause> p, g;
+        Check(r, "qfilter.v6-private-local",
+              row != nullptr && ParseFilter(L"local:private", p) &&
+                  MatchFilter(*row, p));
+        Check(r, "qfilter.v6-global-remote",
+              row != nullptr && ParseFilter(L"remote:global", g) &&
+                  MatchFilter(*row, g));
+    }
+
+    // "All" is the EMPTY expression - meaning no filter at all, which is ZERO
+    // clauses rather than one empty one. Asserting it parses to a non-empty
+    // program would be asserting the wrong thing.
+    std::vector<FilterClause> emptyProg;
+    const bool emptyParses = ParseFilter(L"", emptyProg);
+    Check(r, "qfilter.all-is-the-empty-expression",
+          emptyParses && emptyProg.empty());
+}
+
+void CheckFontCache(TestResult& r) {
+    // The cache hands out the SAME handle for the same request, so a second caller
+    // does not create a second font. That is the whole point: three windows asking
+    // for the body font must end up holding one object.
+    FontCache::Get().OnDpiChanged();
+    HFONT a = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, FontCache::SystemDpi());
+    HFONT b = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, FontCache::SystemDpi());
+    Check(r, "fontcache.same-request-same-handle", a != nullptr && a == b);
+
+    // Different requests must not collide: a bold font is not the regular one.
+    HFONT bold = FontCache::Get().Get(kBodyPtSize, FW_BOLD,
+                                     FontCache::SystemDpi());
+    Check(r, "fontcache.bold-differs", bold != nullptr && bold != a);
+
+    // A monospace request is a different family, so a different handle AND a
+    // different face name - the byte columns depend on that.
+    HFONT mono = FontCache::Get().Get(kBodyPtSize, FW_NORMAL,
+                                     FontCache::SystemDpi(), true);
+    Check(r, "fontcache.mono-differs", mono != nullptr && mono != a);
+
+    LOGFONTW lf = {};
+    const int n = mono != nullptr ? ::GetObjectW(mono, sizeof(lf), &lf) : 0;
+    Check(r, "fontcache.mono-face-name",
+          n == sizeof(lf) && ::wcscmp(lf.lfFaceName, L"Consolas") == 0,
+          "monospace must be Consolas, not whatever the mapper picks");
+
+    // The pixel height is derived from the DPI in the request, so a different DPI
+    // yields a different handle. This is the per-monitor DPI case: a 144dpi window
+    // must never be handed the 96dpi font.
+    HFONT at144 = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, 144);
+    LOGFONTW l96 = {}, l144 = {};
+    const bool got96 = a != nullptr && ::GetObjectW(a, sizeof(l96), &l96) == sizeof(l96);
+    const bool got144 =
+        at144 != nullptr && ::GetObjectW(at144, sizeof(l144), &l144) == sizeof(l144);
+    Check(r, "fontcache.dpi-changes-height",
+          got96 && got144 && l96.lfHeight != l144.lfHeight,
+          "a 144dpi request must not be answered with the 96dpi metrics");
+
+    // OnDpiChanged drops everything, and the next request rebuilds - a caller that
+    // rebuilt its layout BEFORE this call would keep stale metrics, which is the
+    // exact bug the cache exists to remove.
+    FontCache::Get().OnDpiChanged();
+    HFONT fresh = FontCache::Get().Get(kBodyPtSize, FW_NORMAL,
+                                      FontCache::SystemDpi());
+    Check(r, "fontcache.reset-then-rebuild",
+          fresh != nullptr && fresh != a && fresh ==
+                                    FontCache::Get().Get(kBodyPtSize, FW_NORMAL,
+                                                        FontCache::SystemDpi()));
+    Check(r, "fontcache.system-dpi-sane", FontCache::SystemDpi() >= 72 &&
+                                              FontCache::SystemDpi() <= 720);
+    FontCache::Get().OnDpiChanged();
+}
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -8496,6 +8704,9 @@ static const unsigned char kClientHello[] = {
     // The GeoIP reader against a database it is meant to accept: a real tree,
     // real metadata, both record layouts.
         CheckRealGeoIp(r);
+    CheckColumnProfiles(r);
+    CheckQuickFilters(r);
+    CheckFontCache(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";

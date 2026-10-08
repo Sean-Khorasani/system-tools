@@ -1,4 +1,5 @@
 // SysStats.h
+// SPDX-License-Identifier: Apache-2.0
 // Headless system-wide stats sampler: CPU %, memory, disk B/s, network B/s.
 // Extracted from ChartsWindow::Sample so the CLI (`stat`, `top`) and scripts
 // can read the same numbers without a window. No HWND anywhere in this file.

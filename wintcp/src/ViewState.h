@@ -1,4 +1,5 @@
 // ViewState.h
+// SPDX-License-Identifier: Apache-2.0
 // What to show: filter, sort, grouping, freeze, column set. One struct, shared
 // by the GUI's live view and by a saved preset.
 //

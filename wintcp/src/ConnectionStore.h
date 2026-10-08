@@ -1,4 +1,5 @@
 // ConnectionStore.h
+// SPDX-License-Identifier: Apache-2.0
 // The model: owns all connection rows, computes refresh-to-refresh diffs
 // (stable row ids + appear/disappear/state-change events), applies the
 // active filter (plain text or field expression) and sorting

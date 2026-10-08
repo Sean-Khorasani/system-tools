@@ -102,6 +102,7 @@ endpoint can outlive the refresh that asked for it — not a silent gap.
 | Form | Meaning |
 |---|---|
 | `local:10.` | The local **address** contains `10.`. |
+| `local:private` / `local:global` | Whether the local endpoint is on a **non-routable** range; `remote:private` is the same question about the peer. `local:private` is what the GUI's **Mine** quick filter writes. Negates as `exclude:local:private`. |
 | `remote:203` | The remote address contains `203`. |
 | `local:port:80` | The **port**, restricted to the local side. It cannot match a connection *to* a remote port 80. |
 | `remote:port:443` | The port, restricted to the remote side. |

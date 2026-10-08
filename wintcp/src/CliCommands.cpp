@@ -1,4 +1,5 @@
 // CliCommands.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See CliCommands.h. Verbs for users and for unattended scripts:
 // every verb prints machine-readable table/csv/json, honours --watch/--count
 // for polling, and never prompts: mutating verbs need --yes (exit 3 without).

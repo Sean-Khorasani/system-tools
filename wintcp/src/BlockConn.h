@@ -1,4 +1,5 @@
 // BlockConn.h
+// SPDX-License-Identifier: Apache-2.0
 // Two-layer "block this connection":
 //   Layer 1 - tear the live TCP connection down immediately.
 //   Layer 2 - install Windows Firewall outbound rules so it cannot come back.

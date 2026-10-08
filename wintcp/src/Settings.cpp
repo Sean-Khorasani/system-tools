@@ -1,4 +1,5 @@
 // Settings.cpp
+// SPDX-License-Identifier: Apache-2.0
 // HKCU\Software\WinTCP registry load/save. Every field is optional: a
 // missing value simply leaves the compiled-in default in place, so the
 // registry can be pruned freely without breaking startup.

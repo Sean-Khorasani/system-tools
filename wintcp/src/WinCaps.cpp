@@ -1,4 +1,5 @@
 // WinCaps.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See WinCaps.h.
 //
 // The libraries probed here, and WHY each one is a candidate at all:

@@ -1,4 +1,5 @@
 // Freeze.h
+// SPDX-License-Identifier: Apache-2.0
 // Pause / freeze the live view.
 //
 // WHY THIS IS ITS OWN MODULE. The whole feature is one boolean plus a

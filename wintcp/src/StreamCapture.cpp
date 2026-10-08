@@ -1,4 +1,5 @@
 // StreamCapture.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See StreamCapture.h. Process spawning, temp files and pktmon invocation
 // live here and nowhere else.
 

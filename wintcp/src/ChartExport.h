@@ -1,4 +1,5 @@
 // ChartExport.h
+// SPDX-License-Identifier: Apache-2.0
 // chart series serialisation (CSV) and per-panel zoom reset.
 // Deliberately window-free: every function here is a free function over plain
 // data, so the exact text a user would get on disk can be asserted by a

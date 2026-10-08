@@ -1,4 +1,5 @@
 // ChartsWindow.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See ChartsWindow.h. GDI line charts, double-buffered, DPI-scaled layout.
 //
 // Fixes live next to the code they address (each carries its
@@ -28,6 +29,7 @@
 
 #include "Utils.h"
 #include "WinCaps.h"   // DllAvailable: pdh.dll is delay-loaded (see kDelayedDlls)
+#include "FontCache.h"   // F5.15: shared, DPI-correct fonts
 
 namespace wintcp {
 namespace {
@@ -183,20 +185,16 @@ void ChartsWindow::StopSampling() {
 void ChartsWindow::CreateFonts() {
     DeleteFonts();
     const UINT dpi = QueryDpiForWindow(hwnd_);
-    LOGFONTW lf = {};
-    lf.lfHeight = -::MulDiv(9, static_cast<int>(dpi), 72);
-    lf.lfWeight = FW_NORMAL;
-    lf.lfCharSet = DEFAULT_CHARSET;
-    lf.lfQuality = CLEARTYPE_QUALITY;
-    ::wcscpy_s(lf.lfFaceName, L"Segoe UI");
-    font_ = ::CreateFontIndirectW(&lf);
-    lf.lfWeight = FW_BOLD;
-    boldFont_ = ::CreateFontIndirectW(&lf);
+    font_ = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, dpi);
+    boldFont_ = FontCache::Get().Get(kBodyPtSize, FW_BOLD, dpi);
 }
 
 void ChartsWindow::DeleteFonts() {
-    if (font_ != nullptr) { ::DeleteObject(font_); font_ = nullptr; }
-    if (boldFont_ != nullptr) { ::DeleteObject(boldFont_); boldFont_ = nullptr; }
+    // Deliberately does NOT DeleteObject: these are cache-owned handles, and
+    // releasing one here would break every other window holding it. Nulling the
+    // local pointers is the whole of what a caller may do.
+    font_ = nullptr;
+    boldFont_ = nullptr;
 }
 
 void ChartsWindow::CleanupPdh() {

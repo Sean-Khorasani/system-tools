@@ -1,4 +1,5 @@
 // TcpTable.h
+// SPDX-License-Identifier: Apache-2.0
 // Enumeration of all TCP and UDP endpoints (IPv4 + IPv6) with owning PID,
 // using the IP Helper API GetExtendedTcpTable() / GetExtendedUdpTable().
 

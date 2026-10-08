@@ -1,4 +1,5 @@
 // Utils.h
+// SPDX-License-Identifier: Apache-2.0
 // Small general-purpose helpers used across the wintcp application.
 // All functions here are Unicode (std::wstring) based.
 

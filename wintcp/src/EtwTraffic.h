@@ -1,4 +1,5 @@
 // EtwTraffic.h
+// SPDX-License-Identifier: Apache-2.0
 // Per-PID traffic counters: a real-time consumer of the ETW
 // NT Kernel Logger with EVENT_TRACE_FLAG_NETWORK_TCPIP. Counts bytes per
 // PID from the classic MOF TcpIp/UdpIp send/receive events.

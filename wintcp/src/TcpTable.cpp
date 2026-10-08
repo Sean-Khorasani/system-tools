@@ -1,4 +1,5 @@
 // TcpTable.cpp
+// SPDX-License-Identifier: Apache-2.0
 // TCP + UDP enumeration via GetExtendedTcpTable() / GetExtendedUdpTable().
 // Fills the identity/display halves of Connection: family, protocol,
 // binary addresses, scope ids, ports, state, pid, address+endpoint strings.

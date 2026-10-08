@@ -1,4 +1,5 @@
 // BlockConn.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Implementation of the two-layer connection block. See BlockConn.h for the
 // full rationale and, in particular, for why layer 1 is IPv4-only.
 

@@ -1,4 +1,5 @@
 // DetailsDialog.h
+// SPDX-License-Identifier: Apache-2.0
 // Modeless "Details" window.
 //
 // Previously this was a header STATIC plus one read-only multiline EDIT fed

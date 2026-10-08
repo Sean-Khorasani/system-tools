@@ -1,4 +1,5 @@
 // DetailModel.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See DetailModel.h. The only non-trivial logic here is the plain-text
 // rendering used by the Copy button, which must agree with what the window
 // draws closely enough that a pasted details block is not misleading.

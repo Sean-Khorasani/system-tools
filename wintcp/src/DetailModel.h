@@ -1,4 +1,5 @@
 // DetailModel.h
+// SPDX-License-Identifier: Apache-2.0
 // The structured content of the Details window.
 //
 // The window used to be a single flat wstring built by string concatenation

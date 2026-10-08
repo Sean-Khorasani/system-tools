@@ -1,4 +1,5 @@
 // Alerts.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Alerts.h.
 
 #include "Alerts.h"

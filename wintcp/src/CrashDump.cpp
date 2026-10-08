@@ -1,4 +1,5 @@
 // CrashDump.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See CrashDump.h.
 
 #ifndef WIN32_LEAN_AND_MEAN

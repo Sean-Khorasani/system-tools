@@ -1,4 +1,5 @@
 // DnsResolver.h
+// SPDX-License-Identifier: Apache-2.0
 // Asynchronous reverse-DNS for remote endpoints: a dedicated
 // worker thread resolves PTR records with getnameinfo(NI_NAMEREQD) while
 // the UI thread keeps painting. Results (positive and negative) are cached

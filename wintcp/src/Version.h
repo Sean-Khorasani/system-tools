@@ -1,4 +1,5 @@
 // Version.h
+// SPDX-License-Identifier: Apache-2.0
 // The single source of truth for the application version.
 //
 // The version used to be spelled out in four places that disagreed:

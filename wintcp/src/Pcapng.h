@@ -1,4 +1,5 @@
 // Pcapng.h
+// SPDX-License-Identifier: Apache-2.0
 // A minimal, allocation-happy pcapng reader for the follow-stream feature
 // Pure: it parses a byte buffer the caller supplies, and does
 // no file I/O, no registry, no window work.

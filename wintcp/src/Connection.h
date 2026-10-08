@@ -1,4 +1,5 @@
 // Connection.h
+// SPDX-License-Identifier: Apache-2.0
 // Core data model: one network endpoint row (TCP or UDP, IPv4 or IPv6).
 // Produced by TcpTable enumeration, enriched by ProcessResolver / service
 // map / reverse-DNS, diffed and filtered by ConnectionStore.

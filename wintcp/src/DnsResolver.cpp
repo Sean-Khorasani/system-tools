@@ -1,4 +1,5 @@
 // DnsResolver.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Worker thread: pop an address, launch a helper that calls getnameinfo
 // (NI_NAMEREQD), and bound the wait to a per-tick budget (9.2.8). A lookup
 // that exceeds the budget is reported back as "pending" so the row shows

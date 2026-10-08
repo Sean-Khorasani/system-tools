@@ -1,4 +1,5 @@
 // Bookmarks.h
+// SPDX-License-Identifier: Apache-2.0
 // Bookmarked connections: a colour tag, a free-text note and a timestamp for
 // each remote endpoint the user has marked, persisted under
 // HKCU\Software\WinTCP\Bookmarks.

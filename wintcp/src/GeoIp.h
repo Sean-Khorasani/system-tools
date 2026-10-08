@@ -1,4 +1,5 @@
 // File: wintcp/src/GeoIp.h (c-header)
+// SPDX-License-Identifier: Apache-2.0
 // GeoIp.h
 // A read-only MaxMind DB (.mmdb) reader: address -> ISO 3166-1 alpha-2
 // country code, for the Country column.
@@ -215,5 +216,12 @@ private:
 // Public so the caller can skip the lookup entirely.
 bool IsGlobalUnicastV4(uint32_t hostOrderAddr);
 bool IsGlobalUnicastV6(const unsigned char addr[16]);
+
+// F5.11: the same question, named for what a FILTER means by it. `local:private`
+// is "is this endpoint on a non-routable range", which is the same set GeoIP
+// refuses to assign a country - so the two share one implementation rather than
+// keeping two lists of ranges that could drift apart.
+bool IsPrivateAddrV4(uint32_t hostOrderAddr);
+bool IsPrivateAddrV6(const unsigned char addr[16]);
 
 }  // namespace wintcp

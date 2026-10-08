@@ -425,7 +425,27 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 | `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing prints only its header and exits `0`, exactly as `list` does; `apply` takes no `--quiet` (that is `2`), so there is no match-or-not exit code to branch on. |
 | `delete --name N` | Removes a preset. |
 
-### `geoip`
+### Quick filters and column profiles (GUI)
+
+**Filter -> All / TCP / UDP / Listeners / Established / Mine** writes a filter into
+the box and applies it, so the expression stays visible and editable - the box is
+the same one typing uses, and clearing the menu is the same as emptying it.
+`Mine` is `local:private`, i.e. connections whose local endpoint is on a
+non-routable range: this machine talking to its own network rather than to the
+internet. The grammar cannot OR two terms, so "listening OR established" is not
+expressible and was not invented.
+
+**View -> Column profile** switches the visible column set in one click:
+`Default`, `Minimal`, `Network`, `Security`, `Performance` and `Show diagnostics`.
+A profile is a COLUMN MASK and nothing else - a *preset* (File > Save view as
+preset) is still the full view (filter, sort, grouping, sources and mask), and the
+two are deliberately not the same thing. `Show diagnostics` ORs the five G6/G5
+readings onto whatever is already visible rather than replacing it, and reads as on
+while all five are present even after you hide one of them.
+
+`local:private` and `remote:private` also work on the CLI, negated as
+`exclude:local:private`.
+## `geoip`
 
 `geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". The record count is the file's own `record_count` metadata, and most real files **omit it** - every DBIP edition does - in which case the count is reported as *not stated* rather than as `0`, which would otherwise read as "this 8 MB database is empty". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
 

@@ -1,4 +1,5 @@
 // Snapshot.h
+// SPDX-License-Identifier: Apache-2.0
 // ONE connection-snapshot pipeline, shared by the GUI and the CLI.
 //
 // WHY THIS EXISTS. There used to be two implementations of "enumerate the

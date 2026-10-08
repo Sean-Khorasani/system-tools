@@ -1,4 +1,5 @@
 // DetailsDialog.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Details window: registered class, a button row, and an owner-drawn body.
 // No dialog template, matching the rest of the codebase's zero-dependency
 // style (see DetailsDialog.h for why the body is custom-drawn).

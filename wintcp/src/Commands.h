@@ -1,4 +1,5 @@
 // Commands.h
+// SPDX-License-Identifier: Apache-2.0
 // Abstract command layer: every feature as a pure function over
 // (ConnectionStore, SnapshotSource, ViewState, args). No HWND here and none
 // may be added. Both the CLI and the GUI call these; the GUI only gathers
