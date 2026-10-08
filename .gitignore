@@ -24,3 +24,10 @@ build-fast/
 .vs/
 /session-ses_ee7b.md
 /sess_7b.md
+
+# Real MaxMind/DBIP databases for the wintcp/tests fixtures. Never commit a
+# .mmdb: these files are licensed and redistributing them is forbidden, which is
+# the whole reason WinTCP ships none. They are LOCAL test fixtures only - the
+# tests use them when present and skip cleanly when not, so a fresh clone still
+# gates green. See docs/development.md.
+*.mmdb

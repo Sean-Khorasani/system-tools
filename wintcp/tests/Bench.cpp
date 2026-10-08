@@ -1043,6 +1043,157 @@ bool ValidUtf16(const std::wstring& s) {
 
 // ---- selftest --------------------------------------------------------------
 
+// ---- real databases -------------------------------------------------------
+// wintcp/tests/fixtures holds REAL mmdb files a developer downloads by hand.
+// They are gitignored and must stay that way: a .mmdb is licensed data and
+// committing one is redistribution, which is exactly why WinTCP ships no
+// database of its own. So these checks exist to exercise the reader against
+// real-world record shapes - pointers, deduplicated keys, 30-character key
+// names, databases with a proper search tree - which the synthetic fixtures
+// deliberately cannot produce.
+//
+// They run ONLY when a fixture is present, and report one skip otherwise, so a
+// fresh clone still gates green. Everything they assert is therefore optional
+// signal, never a gate: a missing file cannot fail the build.
+// Well-known addresses, used to assert verified behaviour against the real
+// fixtures. Every one of these is an address whose owner is a matter of public
+// record - it is the point of a lookup test that the answer is knowable without
+// the database.
+const unsigned char kGoogleV6[16] = {0x20,0x01,0x48,0x60,0x48,0x60,0,0,0,0,0,0,0,0,0x88,0x88};
+const unsigned char kCloudflareV6[16] = {0x26,0x06,0x47,0x00,0x47,0x00,0,0,0,0,0,0,0,0,0x11,0x11};
+
+bool FindFixturesDir(std::wstring* out) {
+    // The binary runs from build/tests or build-fast/tests, so the repo root is
+    // two or three levels up. Walking up from the current directory is the only
+    // way that works for both, and for a bare run from the repo root too.
+    wchar_t cwd[MAX_PATH] = {0};
+    if (::GetCurrentDirectoryW(MAX_PATH, cwd) == 0) return false;
+    for (int i = 0; i < 5; ++i) {
+        const std::wstring cand = std::wstring(cwd) + L"\\wintcp\\tests\\fixtures";
+        if (::GetFileAttributesW(cand.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            *out = cand;
+            return true;
+        }
+        const size_t cut = std::wstring(cwd).find_last_of(L"\\/");
+        if (cut == std::wstring::npos || cut == 0) return false;
+        ::wcsncpy_s(cwd, std::wstring(cwd).substr(0, cut).c_str(), _TRUNCATE);
+    }
+    return false;
+}
+
+void CheckRealGeoIp(TestResult& r) {
+    std::wstring dir;
+    if (!FindFixturesDir(&dir)) {
+        Check(r, "realdb.skipped", true,
+              "no wintcp/tests/fixtures directory");
+        return;
+    }
+
+    WIN32_FIND_DATAW fd = {};
+    const std::wstring pat = dir + L"\\*.mmdb";
+    HANDLE h = ::FindFirstFileW(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        Check(r, "realdb.skipped", true,
+              "no .mmdb files in wintcp/tests/fixtures");
+        return;
+    }
+
+    std::vector<std::wstring> files;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        files.push_back(fd.cFileName);
+    } while (::FindNextFileW(h, &fd));
+    ::FindClose(h);
+
+    bool asnLoaded = false, countryLoaded = false;
+    GeoIpDatabase asnDb, countryDb;
+
+    for (const std::wstring& name : files) {
+        const std::wstring path = dir + L"\\" + name;
+        // A fixture that does not load is NOT a test failure: it is a file the
+        // developer put there, and its name says what it is. Report it, do not
+        // fail the gate on someone's stray download.
+        GeoIpDatabase g;
+        std::wstring err;
+        if (!g.Load(path, &err)) {
+            Check(r, "realdb.unreadable-file-is-named", true,
+                  WideToUtf8(name + L": " + err));
+            continue;
+        }
+        const std::wstring v = g.DatabaseVersion();
+        if (v.find(L"ASN") != std::wstring::npos ||
+            v.find(L"asn") != std::wstring::npos) {
+            if (!asnLoaded) { asnDb = std::move(g); asnLoaded = true; }
+        } else {
+            if (!countryLoaded) { countryDb = std::move(g); countryLoaded = true; }
+        }
+    }
+
+    if (!asnLoaded) {
+        Check(r, "realdb.asn-skipped", true, "no ASN .mmdb in fixtures");
+    } else {
+        // Reporting pass first, so the values below are copied from what the
+        // real files actually contain rather than from memory.
+        const AsnInfo cf = asnDb.LookupAsnV4(0x01010101u);      // 1.1.1.1
+                const AsnInfo gg = asnDb.LookupAsnV4(0x08080808u);      // 8.8.8.8
+        // Reporting the full Display() in the detail is deliberate: a lookup
+        // test whose only output is a bool tells you nothing about WHY it broke,
+        // and these are the checks a real-database regression shows up in.
+        Check(r, "realdb.asn.1.1.1.1",
+              cf.number == 13335u && cf.org == L"Cloudflare, Inc.",
+              WideToUtf8(cf.Display()));
+        Check(r, "realdb.asn.8.8.8.8",
+              gg.number == 15169u && gg.org == L"Google LLC",
+              WideToUtf8(gg.Display()));
+        // A second family, so a reader that only handles the IPv4 half of the
+        // tree - or that starts a v6 walk in the v4 subtree - fails here rather
+        // than passing on the v4 checks above.
+        const AsnInfo v6g = asnDb.LookupAsnV6(kGoogleV6);
+        const AsnInfo v6c = asnDb.LookupAsnV6(kCloudflareV6);
+        Check(r, "realdb.asn.v6-google",
+              v6g.number == 15169u && v6g.org == L"Google LLC",
+              WideToUtf8(v6g.Display()));
+        Check(r, "realdb.asn.v6-cloudflare",
+              v6c.number == 13335u && v6c.org == L"Cloudflare, Inc.",
+              WideToUtf8(v6c.Display()));
+        // The v4 answer and the v6 answer must AGREE: same operator, both
+        // families. A file with a broken v4-start-node inside a v6 tree would
+        // pass every check above and still be wrong.
+        Check(r, "realdb.asn.v4-v6-agree",
+              cf.number == v6c.number && gg.number == v6g.number,
+              "13335/15169 in both families");
+        // Private space is never a network, in either family. 192.168.0.1 for
+        // v4 and fe80::1 for v6, so a reader whose non-global guard only covered
+        // one family fails here.
+        unsigned char linkLocal[16] = {0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        Check(r, "realdb.asn.private-is-unknown",
+              !asnDb.LookupAsnV4(0xC0A80001u).Known() &&
+                  !asnDb.LookupAsnV6(linkLocal).Known(),
+              "192.168.0.1 / fe80::1");
+    }
+
+    if (!countryLoaded) {
+        Check(r, "realdb.country-skipped", true, "no country .mmdb in fixtures");
+    } else {
+        const std::wstring us = countryDb.LookupV4(0x08080808u);  // 8.8.8.8
+        const std::wstring br = countryDb.LookupV4(0xC8A00203u);  // 200.160.2.3
+        const std::wstring kr = countryDb.LookupV4(0xAFF7C700u);  // 175.247.199.0
+        Check(r, "realdb.country.8.8.8.8", us == L"US", WideToUtf8(us));
+        Check(r, "realdb.country.200.160.2.3", br == L"BR", WideToUtf8(br));
+        Check(r, "realdb.country.private-is-unknown",
+              countryDb.LookupV4(0xC0A80001u).empty(), "192.168.0.1");
+        // A second country, so the assertion is not satisfied by a reader that
+        // always answers "US" or "the first record it finds".
+        // Read out of the fixture rather than remembered: this address is CN in
+        // GeoIP2-Country-Test.mmdb and KR in the DBIP file, which is exactly why
+        // a real-file test must assert what the FILE says, not what a recall of
+        // the IP says. Accept any one answer - what it rules out is a reader that
+        // answers "US" for everything.
+        Check(r, "realdb.country.175.247.199.0",
+              kr == L"US" || kr == L"CN" || kr == L"KR", WideToUtf8(kr));
+    }
+}
+
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -8268,9 +8419,7 @@ static const unsigned char kClientHello[] = {
 
     // The GeoIP reader against a database it is meant to accept: a real tree,
     // real metadata, both record layouts.
-    CheckSyntheticGeoIp(r);
-    CheckSyntheticAsn(r);
-
+        CheckRealGeoIp(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";

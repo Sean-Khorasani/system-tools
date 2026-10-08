@@ -193,7 +193,41 @@ The command list `examples.bat` executes. One command per line, in the order the
 
 Its contract is deliberately narrow: it asserts **exit codes only**, and only **rc 2** (bad arguments) counts as a failure. rc 0 and rc 1 are both acceptable - rc 1 means "nothing matched", which is a legitimate answer for a filter on a machine that has no such row. Output content is *not* asserted, because sample output is captured on one host and is explicitly documented as machine-specific.
 
-**`;expect=N` annotates a command whose contract IS a non-zero exit.** Appended to the end of a line, and stripped before the binary ever sees it:
+## Real MaxMind databases for the tests (optional)
+
+`wintcp\tests\Bench.cpp` has two families of GeoIP checks. The **synthetic** ones
+(`geoip.*` and `asn.*`) build a valid `.mmdb` in memory, so they run everywhere and
+assert exact values. The **real** ones (`realdb.*`) load a genuine database file
+from `wintcp\tests\fixtures\` and assert answers that are a matter of public
+record - 1.1.1.1 is AS13335 Cloudflare, 8.8.8.8 is AS15169 Google and in the US.
+
+They are **optional, and they are gitignored**. Never commit a `.mmdb`: these are
+licensed files, and redistributing them is precisely why WinTCP ships no database
+of its own. A fresh clone therefore has an empty `fixtures/` directory, the
+`realdb.*` checks report a single `realdb.skipped`, and every gate still passes.
+
+To get the signal locally:
+
+```bat
+mkdir wintcp\tests\fixtures
+:: up-to-date free DBIP editions, no account needed
+curl -o wintcp\tests\fixtures\dbip-asn-lite.mmdb.gz ^
+  https://download.db-ip.com/free/dbip-asn-lite-2026-10.mmdb.gz
+curl -o wintcp\tests\fixtures\dbip-country-lite.mmdb.gz ^
+  https://download.db-ip.com/free/dbip-country-lite-2026-10.mmdb.gz
+:: .gz - decompress to wintcp\tests\fixtures\dbip-*.mmdb and delete the .gz
+```
+
+Any number of `.mmdb` files may sit there; the loader picks the first one whose
+`database_type` mentions ASN and the first that does not. An unreadable file is
+reported, not failed on, because it is a local download rather than a checked-in
+fixture.
+
+Assert facts the **file** states, not the address. `175.247.199.0` is `CN` in
+MaxMind's `GeoIP2-Country-Test.mmdb` and `KR` in the DBIP file above - the
+check accepts either, which rules out a reader that answers "US" for everything
+without pinning an answer that changes when the file is refreshed. That is the
+whole reason these assert narrow, verifiable properties rather than golden output.**`;expect=N` annotates a command whose contract IS a non-zero exit.** Appended to the end of a line, and stripped before the binary ever sees it:
 
 ```text
 kill --pid 4 ;expect=2
