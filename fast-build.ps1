@@ -227,6 +227,18 @@ try {
         return $t
     }
 
+    # The cache above exists so the ~200 header comparisons in Test-ObjStale do
+    # not each re-stat the disk. It is only valid for READS. The compile step
+    # WRITES every .obj it plans, and Test-ObjStale has already read (and
+    # cached) each of those .obj's pre-compile timestamp - so the link step,
+    # which runs afterwards and asks "is any input newer than the exe?", got
+    # the stale cached answer and concluded the exe was current. Effect: any run
+    # that compiled anything left the exes UNRELINKED, and `-Test` then silently
+    # exercised the previous binary. Deterministic repro: touch one .cpp, run,
+    # the .obj advances and the .exe does not. Drop the cache once the writers
+    # are done.
+    function Clear-MtimeCache { $mtimes.Clear() }
+
     $projectSet = @{}
     foreach ($d in @($SrcDir, $TstSrc, $ResDir)) {
         if (Test-Path -LiteralPath $d) {
@@ -347,6 +359,12 @@ try {
                     -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput $w.Log `
                     -RedirectStandardError ($w.Log + '.err')
+                # Cache the native handle NOW. Without this, .NET is free to let
+                # go of it, and ExitCode then reads $null once the process has
+                # exited - at which point `$null -ne 0` is TRUE and a file that
+                # compiled perfectly is reported as a failure. Observed: 8 of 43
+                # files "failed" with empty cl rc while all 43 .obj existed.
+                $null = $p.Handle
                 $procs.Add($p)
                 $batchW.Add($w)
             }
@@ -354,7 +372,23 @@ try {
 
             $failures = @()
             for ($b = 0; $b -lt $procs.Count; $b++) {
-                if ($procs[$b].ExitCode -ne 0) { $failures += ,@($batchW[$b], $procs[$b].ExitCode) }
+                # A $null ExitCode is never proof of success - decide from the log.
+                $rc = $procs[$b].ExitCode
+                if ($null -eq $rc) {
+                    # We lost the process handle, so the exit code is
+                    # unknowable. Fall back to the compiler log: cl writes every
+                    # diagnostic there, so a non-empty log IS a failure. The old
+                    # `-ne 0` test reported a failure here *by accident* - with
+                    # $null it reported one even when the compile had succeeded.
+                    # Read-Text returns '' for a missing or empty log.
+                    if ((Read-Text $batchW[$b].Log).Trim().Length -gt 0) {
+                        $failures += ,@($batchW[$b], 'unreadable rc, compiler log NOT empty')
+                    } else {
+                        Say ('WARN  could not read the exit code for {0}; the compiler log is empty, so treating it as success' -f (Rel $batchW[$b].Cpp))
+                    }
+                    continue
+                }
+                if ($rc -ne 0) { $failures += ,@($batchW[$b], $rc) }
             }
             if ($failures.Count -gt 0) {
                 foreach ($f in $failures) {
@@ -394,6 +428,9 @@ try {
     }
 
     # ---- link (skipped by -TestOnly) -----------------------------------------------------------
+    # Every .obj the compile step rewrote is still cached at its OLD timestamp
+    # (see Clear-MtimeCache). Re-read from disk or the exe looks up to date.
+    Clear-MtimeCache
     if ($doBuild) {
     # Same library list and delay-load set as build.bat. /SUBSYSTEM:CONSOLE is
     # load-bearing (main.cpp's wmain + the batch gates); /MANIFEST:NO because
@@ -420,6 +457,10 @@ try {
 
         $t0 = Get-Date
         $lp = Join-Path $LogDir ('link-' + $name + '.out')
+        # -Wait -PassThru returns a Process whose ExitCode is already populated
+        # (the process has exited by the time Start-Process returns). The
+        # handle-caching dance the compile loop needs is NOT wanted here:
+        # touching .Handle on an exited process can throw.
         $p  = Start-Process -FilePath $clPath -ArgumentList $arg -WorkingDirectory $Root `
                 -WindowStyle Hidden -Wait -PassThru `
                 -RedirectStandardOutput $lp `
