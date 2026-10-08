@@ -158,7 +158,17 @@ struct MmdbEntry {
     uint32_t prefix;     // host-order address of the network
     const char* iso;
     const char* name;
+    // ASN fields, so one fixture type builds either kind of database. A Country
+    // entry leaves them alone; an ASN entry leaves iso/name alone. Defaulted so
+    // the existing brace-initialised entries below keep compiling unchanged.
+    uint32_t asn = 0;
+    const char* asnOrg = "";
 };
+
+// Which kind of record the data section holds. Not a bool: the two need
+// different writers AND different metadata (database_type), and a reader handed
+// the wrong one must simply find nothing rather than misparse.
+enum class MmRecordKind { Country, Asn };
 
 // Control byte, then the payload. An integer's size IS its byte width, so it is
 // never long enough to need the 29/30/31 escape - which is why MmUint can push
@@ -179,7 +189,24 @@ void MmUint(std::vector<unsigned char>* out, unsigned char type,
 
 void MmStr(std::vector<unsigned char>* out, const char* s) {
     const size_t n = std::strlen(s);
-    out->push_back(MmControlByte(kMmString, n));
+    if (n < kMmMaxInlineSize) {
+        out->push_back(MmControlByte(kMmString, n));
+    } else {
+        // Extended size. The low five bits set to 29 do NOT mean "29 bytes" -
+        // they mean "one more byte follows, and the real size is that byte plus
+        // 29". MmControlByte clamps to 29, so a clamped length here produced a
+        // string the reader cannot read: it took the first CHARACTER as the
+        // size and derailed the rest of the map walk, which is how every lookup
+        // silently answered "unknown" instead of failing loudly.
+        //
+        // This is not a theoretical length. "autonomous_system_organization" -
+        // one of the two keys in every GeoLite2-ASN record - is exactly 29
+        // characters, so the first ASN feature to use this reader hit it
+        // immediately, and no fixture could express a real ASN record until
+        // this was fixed.
+        out->push_back(static_cast<unsigned char>(kMmString | 29u));
+        out->push_back(static_cast<unsigned char>(n - 29));
+    }
     out->insert(out->end(), s, s + n);
 }
 
@@ -195,6 +222,51 @@ void MmCountry(std::vector<unsigned char>* out, const char* iso,
     out->push_back(kMmMap + 2);  MmStr(out, "iso_code"); MmStr(out, iso);
     out->push_back(kMmMap + 1);  MmStr(out, "names");
     out->push_back(kMmMap + 1);  MmStr(out, "en");       MmStr(out, name);
+}
+
+// {"autonomous_system_number": <uint32>, "autonomous_system_organization": <str>}
+//
+// The shape is the point. GeoLite2-ASN records have NO wrapper object - the
+// record IS the autonomous system, so both keys sit at the TOP level of the map.
+// A reader that looked for a nested "autonomous_system" key (the shape a
+// country record suggests) would find nothing and report every address unknown,
+// which is exactly the failure a synthetic fixture has to be able to reproduce.
+//
+// An entry with asn == 0 writes only the organisation, and one with asnOrg == ""
+// writes only the number: real databases contain both kinds, and a reader that
+// requires the pair to be present throws away half its answers.
+void MmAsnRecord(std::vector<unsigned char>* out, uint32_t asn,
+                 const char* org) {
+    // The map's entry COUNT lives in the control byte the record STARTS with,
+    // and it cannot be known until both entries are decided - so remember where
+    // this record begins and patch that byte at the end. Writing the count first
+    // and then reaching back for it (out->begin()) edits the first record in the
+    // whole section instead of this one, which corrupts one record per call and
+    // leaves the record it meant to fix still wrong.
+    const size_t start = out->size();
+    // RESERVE the control byte before writing any entry. A map's entry count
+    // lives in the byte the record STARTS with, and the count is not known until
+    // both entries have been decided - so the byte has to be claimed first and
+    // filled in at the end. Patching afterwards without reserving lets the first
+    // key's own control byte be written on top of the map byte, and the patch
+    // then destroys the key: the record still claims two entries, but its first
+    // key starts with a bare 'a', so every lookup for it misses and the whole
+    // feature answers "unknown" for every address.
+    out->push_back(0);
+    unsigned entries = 0;
+    if (asn != 0) {
+        MmStr(out, "autonomous_system_number");
+        MmUint(out, kMmUint32, asn);
+        ++entries;
+    }
+    if (org != nullptr && org[0] != '\0') {
+        MmStr(out, "autonomous_system_organization");
+        MmStr(out, org);
+        ++entries;
+    }
+    // entries == 0 is a legal empty map, and decodes to "unknown", which is the
+    // right answer for a record with nothing in it.
+    (*out)[start] = static_cast<unsigned char>(kMmMap + entries);
 }
 
 // One metadata key -> already-encoded value.
@@ -313,7 +385,8 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
                                               int depth, unsigned recordBits,
                                               bool ipv6Tree = false,
                                               bool awkward = false,
-                                              unsigned declaredRecordBits = 0) {
+                                              unsigned declaredRecordBits = 0,
+                                              MmRecordKind kind = MmRecordKind::Country) {
     // An ip_version 6 file holds the whole IPv4 space at ::/96, so the IPv4
     // half sits 96 zero-bit steps below the root and the tree needs those 96
     // nodes in front of it. Note that no shipped metadata says WHERE - the spec
@@ -340,8 +413,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     // the first entry below is read back from offset 0 or the check fails.
     std::vector<unsigned char> data;
     std::vector<size_t> offsets;
-    if (awkward) {
-        // One shared copy of "country" per size code, at an offset chosen to
+    if (awkward && kind == MmRecordKind::Country) {
+        // The awkward layout is the country record's, so it is only built for a
+        // Country database. Silently honouring it for an ASN build would emit
+        // country records under ASN metadata - a fixture that fails for a reason
+        // that has nothing to do with the reader.
         // sit inside that code's range. Records first, then the strings.
         const size_t targets[4] = {kMmPtrTarget0, kMmPtrTarget1, kMmPtrTarget2,
                                    kMmPtrTarget0};
@@ -360,7 +436,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     } else {
         for (const MmdbEntry& e : entries) {
             offsets.push_back(data.size());
-            MmCountry(&data, e.iso, e.name);
+            if (kind == MmRecordKind::Asn) {
+                MmAsnRecord(&data, e.asn, e.asnOrg);
+            } else {
+                MmCountry(&data, e.iso, e.name);
+            }
         }
     }
 
@@ -467,7 +547,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     epoch.push_back(kMmSpecTypeUint64 - kMmExtendedTypeBias);
     epoch.push_back(0x65); epoch.push_back(0x53);
     epoch.push_back(0xA8); epoch.push_back(0x00);
-    MmStr(&type_, "Country");
+    // database_type is metadata, and the two databases differ by exactly this
+// string - it is what tells a user which file they picked. It does NOT gate
+// decoding here: the reader looks up the keys a record actually carries, so a
+// Country database asked for an ASN answers unknown rather than misparsing.
+MmStr(&type_, kind == MmRecordKind::Asn ? "ASN" : "Country");
     MmUint(&ver, kMmUint16, ipv6Tree ? 6 : 4);  // ip_version, uint16
     MmUint(&count, kMmUint32, static_cast<uint64_t>(nodeCount));
     // record_size, uint16 - unless the caller wants metadata to claim
@@ -703,6 +787,131 @@ void CheckSyntheticGeoIp(TestResult& r) {
                              "geoip.reject-record-size-4", "record_size = 4");
     CheckSyntheticDbRejected(r, BuildSyntheticMmdb(entries, 0, 24),
                              "geoip.reject-node-count-0", "node_count = 0");
+}
+
+// The same tree walk, data section and metadata machinery, holding ASN records.
+// Deliberately separate from CheckSyntheticGeoIp rather than folded into it: the
+// two databases differ in RECORD SHAPE, and a check that cannot tell which kind
+// it is looking at cannot say which half regressed.
+void CheckSyntheticAsn(TestResult& r) {
+    // Three shapes, because a reader that assumes all three are present is a
+    // reader that silently drops the ones that are not:
+    //   number + org   the normal record
+    //   org only       real databases carry these; the number is not optional
+    //                  in the spec but a fixture must prove the reader copes
+    //   number only    likewise, and it is what makes `asn:15169` possible
+    const std::vector<MmdbEntry> entries = {
+        {0x08000000u, "", "", 15169u, "Google LLC"},   // data offset 0
+        {0x01000000u, "", "", 13335u, "Cloudflare, Inc."},
+        {0x05200000u, "", "", 0u, "Deutsche Telekom AG"},   // org only
+        {0x0DC00000u, "", "", 64512u, ""},                   // number only
+    };
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase g;
+        if (LoadSyntheticDb(r,
+                            BuildSyntheticMmdb(entries, 11, bits, false, false, 0,
+                                              MmRecordKind::Asn),
+                            "geoip.asn", &g)) {
+            const std::string layout = (bits == 24) ? "rec24" : "rec28";
+
+            // Offset 0 again, for the same reason as the country fixture: a
+            // reader that treats node_count + 16 as "no data" cannot see this.
+            const AsnInfo a = g.LookupAsnV4(0x08080808u);
+            Check(r, "asn.hit-number-and-org",
+                  a.number == 15169u && a.org == L"Google LLC", layout);
+            // The two halves read independently: one present, one absent.
+            Check(r, "asn.org-without-number",
+                  !g.LookupAsnV4(0x05280101u).Known() &&
+                      g.LookupAsnV4(0x05280101u).org == L"Deutsche Telekom AG",
+                  layout);
+            Check(r, "asn.number-without-org",
+                  g.LookupAsnV4(0x0DF897D2u).number == 64512u &&
+                      g.LookupAsnV4(0x0DF897D2u).org.empty(),
+                  layout);
+            // Display is what the column prints, so it is checked in all three
+            // shapes - including the one where only the org exists, which must
+            // NOT be rendered as a bare "AS0".
+            Check(r, "asn.display-both",
+                  a.Display() == L"AS15169 Google LLC", layout);
+            Check(r, "asn.display-org-only",
+                  g.LookupAsnV4(0x05280101u).Display() ==
+                      L"Deutsche Telekom AG",
+                  layout);
+            Check(r, "asn.display-number-only",
+                  g.LookupAsnV4(0x0DF897D2u).Display() == L"AS64512", layout);
+
+            Check(r, "asn.miss-unmapped",
+                  !g.LookupAsnV4(0x68201001u).Known(), layout);
+            // Never looked up: the same three blocks the country reader skips.
+            Check(r, "asn.skip-non-global",
+                  !g.LookupAsnV4(0x7F000001u).Known() &&
+                      !g.LookupAsnV4(0xC0A80101u).Known() &&
+                      !g.LookupAsnV4(0xA9FE0101u).Known(),
+                  layout);
+            Check(r, "asn.metadata",
+                  g.DatabaseVersion() == L"ASN" && g.NodeCount() == (1u << 11) - 1,
+                  layout);
+
+            // THE POINT OF TWO DATABASES: an ASN file asked for a country, and a
+            // Country file asked for an ASN, both answer "unknown" rather than
+            // misparsing each other's records. These are the two cases that
+            // decide whether a user who picked the wrong file gets a blank cell
+            // or a wrong answer.
+            Check(r, "asn.asn-db-has-no-country",
+                  g.LookupV4(0x08080808u).empty(), layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // The other half of that pair, in its own scope: both databases are written
+    // to the SAME fixed %TEMP% path, and a second Load while the first still
+    // holds its memory-mapped view cannot write the file. Nesting the two loads
+    // (rather than running them in sequence) fails at "wrote" and looks like a
+    // reader bug.
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase country;
+        if (LoadSyntheticDb(r, BuildSyntheticMmdb(entries, 11, bits),
+                            "geoip.asn-vs-country", &country)) {
+            const std::string layout = (bits == 24) ? "rec24" : "rec28";
+            Check(r, "asn.country-db-has-no-asn",
+                  !country.LookupAsnV4(0x08080808u).Known() &&
+                      country.LookupAsnV4(0x08080808u).Display().empty(),
+                  layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // IPv6 tree, so the ASN path is pinned against the start-node split too.
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase g;
+        if (LoadSyntheticDb(r,
+                            BuildSyntheticMmdb(entries, 11, bits, true, false, 0,
+                                              MmRecordKind::Asn),
+                            "geoip.asn.v6", &g)) {
+            const std::string layout = (bits == 24) ? "rec24v6" : "rec28v6";
+            Check(r, "asn.v6-ipv4-start-node",
+                  g.LookupAsnV4(0x01010101u).number == 13335u, layout);
+            unsigned char a6[16] = {0};
+            a6[12] = 0x01; a6[13] = 0x01; a6[14] = 0x01; a6[15] = 0x01;
+            const AsnInfo v6 = g.LookupAsnV6(a6);
+            Check(r, "asn.v6-from-root",
+                  v6.number == 13335u && v6.org == L"Cloudflare, Inc.", layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // A record at data offset 0 that is not a map at all, and a lookup against a
+    // database that was never loaded. Both must be "unknown", never a crash and
+    // never a number read out of the wrong bytes.
+    {
+        GeoIpDatabase empty;
+        Check(r, "asn.not-loaded-is-unknown",
+              !empty.LookupAsnV4(0x08080808u).Known() &&
+                  empty.LookupAsnV4(0x08080808u).Display().empty(),
+              "no database");
+        Check(r, "asn.display-empty-is-empty",
+              AsnInfo().Display().empty(), "default");
+    }
 }
 
 
@@ -7949,6 +8158,7 @@ static const unsigned char kClientHello[] = {
     // The GeoIP reader against a database it is meant to accept: a real tree,
     // real metadata, both record layouts.
     CheckSyntheticGeoIp(r);
+    CheckSyntheticAsn(r);
 
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
