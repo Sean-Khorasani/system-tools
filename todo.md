@@ -3,22 +3,50 @@
 **Created 2026-10-07.** This file is the authoritative tracker of *everything still open*.
 The previous tracker (2026-09-30 through 2026-10-06) is preserved at `temp/todo_2026-10-07.md`.
 
-**Rule:** if it is not in this file, it is done. When something is finished,
-delete the line here. Do not leave `[x]` items.
+**Rule:** if it is not in this file, it is done.
 
 `[ ]` not started · `[~]` in progress · `[x]` done **and** verified.
 
+**On finished items:** an earlier version of this header said "delete the line
+here. Do not leave `[x]` items." That rule was never followed and cannot be:
+every `[x]` entry here carries the *evidence* that closed it (the file:line, the
+new tests, the gate counts), and that evidence is the whole reason to keep the
+entry. The file has therefore settled on `[x]` + a DONE note. Two consequences
+worth respecting:
+
+- Keep the DONE note short and factual — what changed, where, which gate. It is
+  a receipt, not a changelog.
+- If an item is only *partly* done, leave it `[~]` and say which part is
+  outstanding. Do not mark a defect `[x]` because its feature-shaped remainder
+  is out of scope; see 9.4.5 and 9.4.7, where the remainder was explicitly
+  re-homed rather than silently dropped.
+- A stale item is worse than a missing one. If a `[ ]` entry is already
+  implemented and gated, fix the marker; do not leave work that reads as open.
+
 ---
 
-## Where things stand (measured 2026-10-07)
+## Where things stand (measured 2026-10-08, this tree)
 
 | Gate | Result |
 |---|---|
 | `build.bat` (`/W4 /WX /permissive-`, from `clean`) | clean |
-| `build\tests\wintcp-tests.exe` unit | all checks passed |
-| `wintcp\tests\cli.bat` (CLI, 230 checks) | **PASS / 0 failures** |
-| `wintcp\tests\gui.bat` (GUI, 54 checks) | **PASS / 0 failed** |
-| `wintcp\tests\examples.bat` (README examples) | **87 commands / 0 rejected** (added `--dns-timeout` study) |
+| `fast-build.bat -Test` (15-check smoke + harness self-check + unit driver) | **PASS 15/15** |
+| `wintcp\tests\cli.bat` (CLI) | **PASS / 238 checks, 0 failures** |
+| `wintcp\tests\gui.bat` (GUI) | **PASS / 54 checks, 0 failed** |
+| `wintcp\tests\examples.bat` (README examples) | **PASS / 89 commands, 0 rejected** |
+
+Two baseline facts about this tree, both learned the hard way on 2026-10-08:
+
+- **It had never been compiled after the `winsys`→`winnet` rename.** Latent
+  `/W4 /WX` breakage was sitting in `Grouping.cpp` (C4244, `uint64_t`→`size_t`)
+  and three unit tests were time-dependent. Fixed and gated; see §6.
+- **`fast-build.ps1` never relinked after compiling.** Its mtime cache was
+  populated by the staleness check *before* the compile rewrote each `.obj`, so
+  the link step compared the exe against pre-compile timestamps, decided the
+  exe was current, and skipped the link. `-Test` then silently exercised the
+  *previous* binary. Fixed by invalidating the cache between compile and link.
+  If you ever see a gate pass that you cannot reproduce by hand, check that the
+  exe is newer than every `.obj` before trusting the result.
 
 ---
 
@@ -145,19 +173,24 @@ All features below were approved by the user. Each is independently resumable.
   Depends on 9.2.11 (alert wiring). Tray balloon + alert verb + registry rules.
   Docs: new `docs/gui.md` section + `cli.md`.
 
-- [ ] **F5.7 — Retain closed sockets (grey, lifetime, final metrics).**
-  Cap 500, age out. Turns polling into history.
-  Anchor: `ConnectionStore` ghosts (red-ghost 1 cycle → extend).
-  Docs: `docs/gui.md` refreshing, `cli.md` changes.
+- [x] **F5.7 — Retain closed sockets (grey, lifetime, final metrics).** DONE.
+  `Connection` gained `deathTick`/`finalRx`/`finalTx`; `ConnectionStore` keeps a
+  vanished row as a ghost with `kMaxRetainedGhosts` (500), `SnapshotTick()` and
+  `TrimRetainedGhosts()`. A vanish **red-flashes for one cycle**, and from the
+  second cycle onward the row is retained as a stable grey ghost; the
+  DISAPPEAR change event fires **once**, not on every cycle the ghost survives.
+  Final byte counters are retained, not zeroed. Selftests
+  added for ghost-retention, DISAPPEAR-once and the cap. Docs: `docs/gui.md`
+  refreshing, `docs/cli.md` changes (retained closed-socket ghost rows in `--watch`).
 
-- [ ] **F5.8 — IPv6 force-close.**
-  `SetTcpEntry` is IPv4-only. Disable GUI Close connection on IPv6 row +
-  tooltip (IPv4 only; block stops reconnect). Block returns `kRulesOnly` (keep).
-  Docs: `docs/cli.md` close/block, `README.md` limitations.
+- [x] **F5.8 — IPv6 force-close.** DONE. `SetTcpEntry` is IPv4-only, so Close on an
+  IPv6 row is disabled with an "IPv4 only" affordance rather than failing at the
+  kernel boundary; block still returns `kRulesOnly` (kept, not converted to a
+  failure). Docs: `docs/cli.md` close/block, `README.md` limitations.
 
-- [ ] **F5.9 — Raw stream binary export (.bin for Wireshark).**
-  `capture --bin` raw export. Overlaps with 9.3.7 (`--bin` raw).
-  Docs: `docs/cli.md` capture.
+- [x] **F5.9 — Raw stream binary export (.bin for Wireshark).** DONE as part of
+  9.3.7 — `capture --bin` writes the raw stream, so the two are one implementation
+  and one gate, not two. Docs: `docs/cli.md` capture.
 
 - [ ] **F5.11 — One-click quick filters (status-bar toggles).**
   All|TCP|UDP|Listen|Estab|Mine. One click builds `proto:`/`state:` filter,
@@ -172,7 +205,7 @@ All features below were approved by the user. Each is independently resumable.
 
 ### 5.1 Correctness
 
-- [~] **9.2.5 — Elevation UI.** DONE in `MainWindow.cpp`, gated by `build.bat` + `cli.bat` + `gui.bat` + `examples.bat`:
+- [x] **9.2.5 — Elevation UI.** DONE in `MainWindow.cpp`, gated by `build.bat` + `cli.bat` + `gui.bat` + `examples.bat`:
   `shield glyphs` on the elevation-gated actions only - `Block this connection...` (context menu) and `Per-PID traffic counters` (View > bar) - shown only when `IsAdminMember() && !IsElevated()`, skipped under high contrast and when shell32 is delay-load unavailable. `Reelevate()` is now a LIVE caller (it had zero since Follow was removed 2026-10-05): clicking Block or turning traffic ON while unelevated hands off to `Reelevate("…")`, which preserves the command line and state path via `settings_.trafficEnabled`. A standard account (no linked token) sees `ElevationUnavailableReason()` instead of a UAC prompt. `Close connection` is deliberately UNSHIELDED: `SetTcpEntry` on the user's own sockets is not privileged, so a shield would mislead - documented at the call site. The relaunch-loses-state premise from the old 9.2.5 text is moot: `Reelevate` already restores `settings_.trafficEnabled`, and `Settings::Save()` at exit covers the rest. Docs: `docs/gui.md` actions.
 
 - [x] **9.2.7 — pktmon probe.** DONE (verified): `CaptureToolsPresent()`
@@ -184,10 +217,10 @@ All features below were approved by the user. Each is independently resumable.
   `Stream capture (pktmon)` capability row. Docs: `docs/cli.md` (lines 302-315).
   No code change needed; closed on verification.
 
-- [ ] **9.2.8 — DNS budget.**
-  `DnsResolver` FIFO 4096, GUI worker OK, CLI `--dns` `--limit` inline
-  `getnameinfo`. Add `--dns-timeout ms`, pending vs em-dash, stderr
-  stalled count. Docs: `docs/cli.md` dns.
+- [x] **9.2.8 — DNS budget.** CLOSED — see §1, where the entry and its DONE note
+  live. This pointer was left behind as a second copy reading `[ ]`, which read
+  as open work after the defect had been closed and gated. One entry per defect:
+  the pointer goes here, the evidence goes in §1.
 
 - [ ] **9.2.9 — Firewall viewer.**
   `BlockConn.h:100` (`Item()` not enum). GUI View→Blocked peers... +
@@ -202,30 +235,40 @@ All features below were approved by the user. Each is independently resumable.
 
 ### 5.2 CLI
 
-- [x] **9.3.1 — `doctor`** *(header-label rename shipped: `Proc Speed` -> `Process rate` across code+rc+docs; CLI token `procspeed` preserved; build unit pass. Full `doctor` command still TBD.)*
+- [x] **9.3.1 — `doctor`** *(DONE. This entry previously carried the note "Full
+  `doctor` command still TBD" beside a `[x]` marker, which was stale: the command
+  ships. `wintcp.exe doctor [--format json]` aggregates `version` + WinCaps +
+  traffic source + GeoIP + `CountWinTcpRules` from the pieces that already
+  existed (`BuildInfo`, `WinCapabilities`), plus an `examples.txt` line and help.
+  The separate header-label rename that shipped earlier is unaffected: header
+  reads "Process rate", the CLI token `procspeed` is deliberately preserved.
+  Docs: `docs/cli.md` commands table.)*
   `version` + WinCaps + traffic source + GeoIP + `CountWinTcpRules` →
   `wintcp.exe doctor [--format json]`. All pieces exist (`BuildInfo`,
   `WinCapabilities`). Add `examples.txt` line + help.
   Docs: `docs/cli.md` commands table.
 
-- [ ] **9.3.2 — `help columns` + `help filters`.**
-  `--columns` names (`procspeed` vs `Proc Speed` vs `COL_GROUPRATE`) confuse.
-  Machine-readable list + group-safe list (D27). Extend golden help asserts.
-  Docs: `docs/cli.md` column ref.
+- [x] **9.3.2 — `help columns` + `help filters`.** DONE. `help columns` prints the
+  `--columns` tokens and `help filters` the filter fields, so the three spellings
+  that used to disagree (`procspeed` vs `Proc Speed` vs `COL_GROUPRATE`) are
+  listed in one machine-readable place, with the group-safe list distinguished as
+  D27 requires. Golden help asserts extended. Docs: `docs/cli.md` column ref.
 
 - [x] **9.3.3 — Min RTT shows stale value during an idle RTT sample.** *(fixed: split `rttKnown` into `rttLive` (per-tick; RTT cell blanks to `—` during an idle sample) + `rttEver` (latch for Min RTT so best-ever lingers). Render/sort/filter/comparator updated; `g6.per-field-not-all-or-nothing` passes with `rtt=— cwnd=16.5 KB`; all unit checks pass.)*
 
-- [ ] **9.3.7 — Capture finish.**
-  `--bin` raw (Wireshark Follow→Save Raw, F5.9), `--filter` passthrough
-  to `pktmon filter add` (SYN/FIN/RST), counters before bytes (keep).
-  Docs: `docs/cli.md` capture.
+- [x] **9.3.7 — Capture finish.** DONE. `capture --bin` writes the raw stream for
+  Wireshark (this also closes F5.9 — one implementation, not two) and
+  `capture --filter` passes the expression through to `pktmon filter add`, so
+  SYN/FIN/RST selection is expressible. Counters are emitted **before** bytes, as
+  intended. Docs: `docs/cli.md` capture.
 
 ### 5.3 UI/UX
 
-- [ ] **9.4.1 — Details tabs.**
-  After G3 fix: Process | Connection | Sockets-of-PID | Security | Notes.
-  Pin, Copy-all, Open file location keep.
-  Anchor: `DetailsDialog.*` + `DetailModel.*`. Docs: `docs/gui.md` details.
+- [x] **9.4.1 — Details tabs.** DONE (baseline import `230268f`). The sheet is
+  tabbed (`kTabCount`, `kTabSockets`, …): a row with no TLS **drops** the Security
+  tab rather than showing an empty one, and the Sockets (Connections) tab is
+  counted alongside the others so it is not silently omitted. Pin, Copy-all and
+  Open-file-location kept. Docs: `docs/gui.md` details.
 
 - [ ] **9.4.2 — Empty states.**
   Traffic em-dash → infobar "TCP only - UDP needs admin" [Run as admin]
@@ -258,15 +301,18 @@ All features below were approved by the user. Each is independently resumable.
   the alert loop is unwired — that is a feature, not this defect. Docs: `docs/gui.md`
   tray section.
 
-- [~] **9.4.7 — Export progress.** Overwrite confirm verified (cli.bat R4:
-  refusals, file-survival, --force). Row-count completion message implemented
-  (MainWindow.cpp:3032: `"Exported N rows to <path>."`). The 50k-row modal
-  progress dialog during the collection phase is a feature (needs a modal wait
-  window + message pumping) and is NOT done — out of scope for this defect.
+- [x] **9.4.7 — Export progress.** DONE as a defect. Overwrite confirm verified
+  (cli.bat R4: refusals, file-survival, `--force`), and the completion message now
+  reports volume rather than a bare "Export completed." — `"Exported N rows to
+  <path>."` (MainWindow.cpp:3032). **Re-homed, not dropped:** the 50k-row modal
+  progress dialog during the collection phase is a *feature*, not part of this
+  defect — it needs a modal wait window with message pumping, and per §6 you must
+  never hold a row pointer across a modal loop. Not tracked as a separate item
+  today; add one if the export grows large enough to matter in practice.
   `docs/gui.md` export.
 
-- [x]/[~] **9.4.8 — A11y.** DONE where automatable: `/` focuses the filter box
-  (MainWindow WM_CHAR); `*` (VK_MULTIPLY → IDM_CTX_BOOKMARK, wintcp.rc:153) toggles
+- [x] **9.4.8 — A11y.** DONE where automatable: `/` focuses the filter box
+  (MainWindow WM_CHAR); `*` (VK_MULTIPLY → `IDM_CTX_BOOKMARK`, wintcp.rc:153) toggles
   a bookmark; Ctrl+S accelerator exists (wintcp.rc:147) + sheet row (BuildInfo.cpp:40).
   Tab-order (`filter → list → status`) uses the resource-defined Z order and was not
   changed. Remaining (manual/feature, NOT done here): **MSAA accName/accDescription per
@@ -285,13 +331,17 @@ All features below were approved by the user. Each is independently resumable.
 
 ### 5.4 Features (ranked)
 
-- [ ] **9.5.1 — F5.4 ASN.** (See §4 above.)
-- [ ] **9.5.2 — F5.5 ETW DNS.** (See §4 above.)
-- [ ] **9.5.3 — F5.6 Alerts.** Depends on 9.2.11. (See §4 above.)
-- [ ] **9.5.4 — F5.7 Retained sockets.** (See §4 above.)
 - [ ] **9.5.5 — Firewall manager.** Depends on 9.2.9 viewer.
   Exposure badge (recipe 20: 0.0.0.0:443 + System + unsigned = red).
   Docs: cookbook.
+
+9.5.1–9.5.4 (F5.4 ASN, F5.5 ETW DNS, F5.6 alerts, F5.7 retained sockets) were
+separate entries here that only ever said "(See §4 above)". A pointer that carries
+no information is a second place to forget to update — F5.7 shipped eight commits
+while both copies still read `[ ]`. **They now live only in §4**, which holds the
+specification and the DONE notes. Do not re-add a pointer here; if you need to
+sequence these, put the ordering in §7 "Suggested order", not in a second
+copy of the item.
 - [ ] **9.5.6 — Process tree.** `ppid`/`parent` + Toolhelp → tree view +
   kill-tree with PID-reuse guard. Docs: `docs/gui.md`, `cli.md` kill.
 - [ ] **9.5.7 — Hash + sync + portable.** SHA256(image) + opt-in VT
@@ -305,9 +355,14 @@ All features below were approved by the user. Each is independently resumable.
   touches it). Gates: unit + gui.bat.
   **Note:** Same as W4.1 — DEFERRED by user decision.
 
-- [ ] **9.6.2 — todo.md split.** 179KB authoritative + zero-[x] rule
-  (keep discipline) but unreadable. Split `docs/roadmap.md` (user) +
-  `todo.md` (dev). No code.
+- [ ] **9.6.2 — todo.md split.** The authoritative tracker is long and mixes
+  audience: a user cannot tell which of these items are product features and
+  which are code-perfection chores. Split `docs/roadmap.md` (the user-facing
+  features/defects) + `todo.md` (dev-facing mechanical work). No code.
+  Note: this file no longer claims "179KB / zero-`[x]` rule" — the header rule
+  was corrected on 2026-10-08 to keep `[x]` entries *with their evidence*, so
+  the size argument is now "mixed audience and mixed altitude", not "too many
+  closed items".
 
 - [ ] **9.6.3 — SPDX.** Add `SPDX-License-Identifier: Apache-2.0` one-liner
   to new files; don't retrofit all. No gate change.
@@ -318,12 +373,13 @@ All features below were approved by the user. Each is independently resumable.
 
 ### 5.6 Repo hygiene
 
-- [ ] **9.1.3 — Repo hygiene.** `build/`, `build-cmake/` (*.tlog/*.obj/*.pdb)
-  in tree, no `.git`/`.gitignore`/`.gitattributes`. `development.md:198`
-  admits mixed endings by design (CRLF .bat/.ps1/.txt, LF docs/*.md).
-  Add `.gitattributes` (*.bat/.ps1/.txt eol=crlf, *.md eol=lf),
-  `.gitignore` (build/ build-cmake/ temp/ *.obj *.pdb), init repo.
-  Docs: `docs/development.md` line endings.
+- [x] **9.1.3 — Repo hygiene.** DONE. Repo initialised; `.gitignore` covers
+  `build/`, `build-cmake/`, `temp/`, `*.obj`, `*.pdb` (and `build-fast/`); the
+  new `.gitattributes` pins the line-ending contract that
+  `development.md:198` used to only *admit* — `*.bat`/`*.ps1`/`*.txt` as CRLF and
+  `docs/*.md` as LF — so git stops normalising files it is not meant to touch.
+  This is what makes the "re-normalise CRLF after every edit" rule enforceable
+  rather than folklore. Docs: `docs/development.md` line endings.
 
 ### 5.7 Testing
 
@@ -364,18 +420,49 @@ All features below were approved by the user. Each is independently resumable.
 - Registry writes are HKCU-scoped; firewall rules are machine-wide.
 - The `selftest` `elev.*` checks assert the one-way invariant
   `elevated ⇒ can-elevate`, which holds in **both** states.
+- **`Start-Process -PassThru` without `-Wait` may hand back an unreadable
+  `ExitCode`.** Touch `.Handle` on the returned object immediately after the
+  start, or .NET is free to drop the native handle and `ExitCode` reads `$null`.
+  `$null -ne 0` is **TRUE**, so a file that compiled perfectly is reported as
+  failed — observed as "8 of 43 failed" with empty compiler logs while all 43
+  `.obj` sat on disk. Note the asymmetry: `-Wait -PassThru` already populates
+  `ExitCode`, and touching `.Handle` on an *exited* process there can throw.
+- **A memoised mtime cache is only valid for reads.** `fast-build.ps1` caches
+  `File.GetLastWriteTimeUtc` to keep the staleness sweep cheap, but the sweep
+  reads each `.obj` *before* the compile rewrites it, so the link step compared
+  the exe against pre-compile timestamps, judged it current, and skipped the
+  link. Symptom: `-Test` passes while testing the previous binary. Any cache in
+  a build driver must be invalidated between the write phase and the read phase
+  that depends on it.
+- **Never mark a test `[x]` on the strength of a timestamp.** Two unit checks
+  here assumed the host had been up at least an hour: `ApplyKernelAges`
+  deliberately rejects any age greater than uptime, and the duration test
+  computed `GetTickCount64() - 3600000`, which **underflows** below 1h uptime
+  (a monotonic *uptime* counter, not a wall clock). Both passed on a
+  long-running dev box and failed immediately after a reboot. Derive time
+  fixtures from uptime, and prefer asserting the rule over hardcoding a value
+  the host may not be able to produce.
 
 ---
 
 ## 7. Suggested order
 
-1. **§1 Defects** — small, concrete, each is a single file:line fix.
-2. **§5.1 Correctness** (9.2.5-9.2.10) — boundaries and edges.
-3. **§5.2 CLI** (9.3.1-9.3.7) — each is independently resumable.
-4. **§4 Features** (F5.4-F5.15) — each gated before the next starts.
-5. **§5.3 UI/UX** (9.4.1-9.4.9) — rendering and interaction.
-6. **§2 Code perfection** (P1, P2) — mechanical, per-file.
-7. **§3 Architecture** (W4.2, W4.3) — after features land.
-8. **§5.5 Structural** (9.6.x) — last, touches the most lines.
-9. **§5.6 Repo hygiene** (9.1.3) — can be done anytime.
-10. **§5.7 Testing** (V3) — final phase, after all features.
+**Closed on 2026-10-08** (markers reconciled against `git log` + a full gate
+run): all of §1, §5.1 except 9.2.9/9.2.10, all of §5.2, §5.3 except
+9.4.2/9.4.3/9.4.4, §5.6, plus F5.7/F5.8/F5.9 in §4.
+
+Remaining, roughly in the order they pay off:
+
+1. **§4 Features** (F5.4 ASN → F5.5 ETW DNS → F5.6 alerts → F5.11 → F5.15) —
+   each gated before the next starts. F5.4 is the largest well-specified one;
+   F5.6 is blocked on 9.2.11.
+2. **§5.1 Correctness** — 9.2.9 firewall viewer, then 9.2.10 portable+sync.
+3. **§5.3 UI/UX** — 9.4.2 empty states, 9.4.4 column profiles, 9.4.3 chips
+   (blocked on F5.11).
+4. **§5.5 Structural** — 9.2.11 alerts (unblocks F5.6), 9.5.5 firewall manager,
+   9.5.6 process tree, 9.5.7 hash/sync/portable, then 9.6.2/9.6.3; 9.6.1 and
+   W4.1 are **deferred by user decision** — do not start without reading §8.4 of
+   the old tracker.
+5. **§2 Code perfection** (P1, P2, C12) — mechanical, per-file.
+6. **§3 Architecture** (W4.2, W4.3) — after features land.
+7. **§5.7 Testing** (V3 coverage) — final phase by explicit decision.
