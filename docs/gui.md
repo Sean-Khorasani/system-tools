@@ -45,7 +45,8 @@ Rows keep a stable identity across refreshes, so changes are visible rather than
 |---|---|
 | Green | New row. |
 | Yellow | The TCP state changed (for example `ESTABLISHED` → `TIME_WAIT`). |
-| Red "ghost" | The row vanished. It stays visible for one more cycle, then drops. |
+| Red | The row vanished **this** refresh. It flashes red for one cycle. |
+| Grey "ghost" | A retained closed socket (F5.7). After the red flash it lingers as a grey ghost so the table keeps a short history of what closed; up to 500 sockets are kept, the oldest dropped first, with their final byte counters frozen at the moment of death. |
 
 The identity of a row is **endpoint + PID**. State is not part of the identity, so a state change updates the same row instead of replacing it. Duplicates pair up in order rather than collapsing, which matters in practice: every browser binds its own socket to mDNS port 5353, so a busy desktop has dozens of rows that share one key. See [Architecture](architecture.md#row-identity-and-diffing) for why this matters.
 
