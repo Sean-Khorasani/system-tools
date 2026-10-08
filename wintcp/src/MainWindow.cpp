@@ -3405,7 +3405,7 @@ void MainWindow::CloseSelectedConnection() {
                       L"WinTCP - Close failed", MB_OK | MB_ICONWARNING);
         return;
     }
-    Refresh(false);   // the row disappears (and flashes red as a ghost)
+    Refresh(false);   // the row vanishes, flashes red, then lingers as a grey F5.7 ghost
 }
 
 void MainWindow::RemoveAllWinTcpBlocks() {
@@ -3472,8 +3472,8 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             // needed for sub-item draw stages this list does not use.
             return CDRF_NOTIFYITEMDRAW;
         case CDDS_ITEMPREPAINT: {
-            // Change highlighting: green = new, yellow = state
-            // changed, red = removed this refresh (ghost row). The colors
+            // Change highlighting: green = new, yellow = state changed, red =
+            // vanished THIS refresh (then a grey F5.7 retained ghost). The colors
             // are chosen from the active theme: on a dark theme the pastel
             // fills would glare, so a darker background and a light
             // foreground are used instead.
@@ -3490,12 +3490,27 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             if (HighContrastActive()) return CDRF_DODEFAULT;
             const bool dark = ThemeIsDark();
             if (c->flags & kRowRemoved) {
-                if (dark) {
-                    cd->clrTextBk = RGB(0x4A, 0x1F, 0x1F);
-                    cd->clrText = RGB(0xFF, 0xB4, 0xB4);
+                // F5.7: a socket that vanished THIS refresh flashes red once,
+                // then settles to a muted grey retained ghost for the rest of its
+                // life (up to kMaxRetainedGhosts). deathTick is touched only at
+                // vanishing, so it equals this snapshot's tick for the flashing row.
+                const bool justDied = (c->deathTick == store_.SnapshotTick());
+                if (justDied) {
+                    if (dark) {
+                        cd->clrTextBk = RGB(0x4A, 0x1F, 0x1F);
+                        cd->clrText = RGB(0xFF, 0xB4, 0xB4);
+                    } else {
+                        cd->clrTextBk = RGB(0xF8, 0xC8, 0xC8);
+                        cd->clrText = RGB(0x7A, 0x1F, 0x1F);
+                    }
                 } else {
-                    cd->clrTextBk = RGB(0xF8, 0xC8, 0xC8);
-                    cd->clrText = RGB(0x7A, 0x1F, 0x1F);
+                    if (dark) {
+                        cd->clrTextBk = RGB(0x2B, 0x2B, 0x2B);
+                        cd->clrText = RGB(0xC0, 0xC0, 0xC0);
+                    } else {
+                        cd->clrTextBk = RGB(0xEA, 0xEA, 0xEA);
+                        cd->clrText = RGB(0x5A, 0x5A, 0x5A);
+                    }
                 }
                 return CDRF_NEWFONT;
             }
