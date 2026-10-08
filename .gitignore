@@ -1,2 +1,26 @@
+# Editor scratch.
 .aider*
+.assistant*
+.cursor*
+# Build output (build.bat / CMakeLists).
+build/
+build-cmake/
+# Development scratch (see todo.md temp/ usage).
+temp/
+# Scratch driver build only (fast-build.ps1).
 build-fast/
+# MSVC artifacts that never live in source.
+*.obj
+*.pdb
+*.tlog
+*.ilk
+*.exp
+*.lib
+*.exe
+*.dll
+# IDE cruft.
+*.user
+*.suo
+.vs/
+/session-ses_ee7b.md
+/sess_7b.md

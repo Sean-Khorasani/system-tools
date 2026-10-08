@@ -1,0 +1,25 @@
+# WinTCP line-ending policy (docs/development.md: "mixed endings by design"):
+# CRLF text for Windows-native scripts/data, LF for code and markdown.
+*.bat      text eol=crlf
+*.ps1      text eol=crlf
+*.cmd      text eol=crlf
+*.txt      text eol=crlf
+*.md       text eol=lf
+*.cpp      text eol=lf
+*.h        text eol=lf
+*.rc       text eol=lf
+*.vcxproj  text eol=lf
+*.filters  text eol=lf
+*.sln      text eol=lf
+*.json     text eol=lf
+*.tlog     binary
+*.obj      binary
+*.pdb      binary
+*.exe      binary
+*.dll      binary
+*.lib      binary
+*.exp      binary
+*.ilk      binary
+*.mmdb     binary
+*.pcapng   binary
+*.bin      binary
