@@ -181,9 +181,20 @@ All features below were approved by the user. Each is independently resumable.
   Answers `host:` without `--dns` slowness. Elevated only.
   Docs: `docs/traffic.md`, `cli.md`.
 
-- [ ] **F5.6 — Real-time connection alerts (right-click → toast/balloon).**
-  Depends on 9.2.11 (alert wiring). Tray balloon + alert verb + registry rules.
-  Docs: new `docs/gui.md` section + `cli.md`.
+- [x] **F5.6 - Real-time connection alerts.** DONE across three commits: the rule
+  model and latch (`e640e25`), the CLI (`f911d49`), and the window hook (`1ec22f7`).
+  `alert rule add|list|remove` builds a rule, and `MainWindow::RunAlerts` loads and
+  evaluates them on every refresh, so a rule added from another process reaches a
+  running window without a restart. Balloon when the tray icon is present,
+  status-bar text when it is not - an alert that does nothing is worse than none.
+  Address matching is exact, process matching a case-insensitive substring; a rule
+  with neither selector is refused rather than silently matching every connection.
+  Both sources feed one RaiseAlert, so a rule alert and a threshold alert are
+  indistinguishable in how they reach the user.
+  Gates: build.bat clean, cli.bat 268/0, examples.bat 97/0, gui.bat 54/0, unit 15/15
+  with 18 rule.* checks.
+  NOT done: an editor inside the window. The CLI is the complete configuration
+  surface; a menu item duplicating it would be two editors for one setting.
 
 - [x] **F5.7 — Retain closed sockets (grey, lifetime, final metrics).** DONE.
   `Connection` gained `deathTick`/`finalRx`/`finalTx`; `ConnectionStore` keeps a
