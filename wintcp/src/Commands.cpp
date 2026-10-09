@@ -3,6 +3,7 @@
 // See Commands.h. All headless; no HWND, no dialogs, no clipboard.
 
 #include "Commands.h"
+#include "Settings.h"
 
 #include <algorithm>
 #include <cwchar>
@@ -2836,6 +2837,118 @@ CommandResult CmdBlocks() {
     return r;
 }
 
+// ---- alert (9.2.11 / F5.6) -------------------------------------------------
+// The engine has been pure and tested since it was written; what it lacked was a
+// persistence layer and a surface to set the thresholds. Both are here.
+//
+// Everything is expressed in the SAME domain the threshold is applied in - the
+// engine reads bytes/sec, so the switch takes bytes/sec. A KB/MB suffix would be
+// friendlier to type and one more place for a unit to be misread, and the numbers
+// are small enough that "1000000" is not a burden.
+// ---- alert (9.2.11 / F5.6) -------------------------------------------------
+// The engine has been pure and tested since it was written; what it lacked was a
+// persistence layer and a surface to set the thresholds. Both are here.
+//
+// Rates are in the SAME domain the engine applies them in - bytes/sec - because a
+// KB/MB suffix would be friendlier to type and one more place for a unit to be
+// misread, and the numbers are small enough that "1000000" is not a burden.
+//
+// AlertFlags is tri-state so a caller can change one switch without restating the
+// whole configuration; the engine's own defaults are what "unset" leaves alone.
+// 9.2.11. A threshold stored as a double but typed as a whole number of bytes/sec.
+// std::to_string on a double gives "2000000.000000", which is correct and
+// unreadable; printing the two halves separately would print "2e+06" for the same
+// value on a different compiler. Round, and only show a fraction when there is one.
+std::string NumberNoTrailingZeros(double v) {
+    const long long whole = static_cast<long long>(v < 0 ? v - 0.5 : v + 0.5);
+    if (static_cast<double>(whole) == v) return std::to_string(whole);
+    char buf[64] = {0};
+    ::snprintf(buf, sizeof(buf), "%.3f", v);
+    std::string s(buf);
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s;
+}
+
+CommandResult CmdAlert(AlertFlags f) {
+    CommandResult r;
+    Settings s;
+    if (!s.Load()) {
+        // A Settings store that will not read is not fatal here: the engine works
+        // from the struct's defaults, which are the muted ones. Say so rather than
+        // failing, because a user asking to SEE the configuration should get an
+        // answer rather than a refusal.
+        r.err = "note: settings could not be read; showing and writing defaults.\r\n";
+    }
+
+    // MUTED BY DEFAULT is a design rule, not an unfinished state, and it is
+    // asserted here as well as in the engine: a network viewer that raises a
+    // balloon on every refresh is one the user switches off, and then it is useless
+    // for the one event that mattered.
+    bool changed = false;
+    if (f.enableSet)         { s.alerts.enabled = f.enable; changed = true; }
+    if (f.bpsWarn >= 0)      { s.alerts.bpsWarn = static_cast<double>(f.bpsWarn); changed = true; }
+    if (f.bpsCritical >= 0)  { s.alerts.bpsCritical = static_cast<double>(f.bpsCritical); changed = true; }
+    if (f.connWarn >= 0)     { s.alerts.connectionWarn = static_cast<size_t>(f.connWarn); changed = true; }
+    if (f.onListenerSet)     { s.alerts.alertOnNewListener = f.onListener; changed = true; }
+    if (f.onConnectionSet)   { s.alerts.alertOnNewConnection = f.onConnection; changed = true; }
+    if (f.onRstSet)          { s.alerts.alertOnRst = f.onRst; changed = true; }
+    if (f.onClosedSet)       { s.alerts.alertOnClosed = f.onClosed; changed = true; }
+
+    if (changed && !s.Save()) {
+        r.exitCode = kExitFail;
+        r.err += "alert: could not write settings to the registry.\r\n";
+        return r;
+    }
+
+    if (f.format == "json") {
+        std::string out = "{";
+        out += "\n  \"enabled\": " + std::string(s.alerts.enabled ? "true" : "false") + ",";
+        out += "\n  \"bpsWarn\": " + NumberNoTrailingZeros(s.alerts.bpsWarn) + ",";
+        out += "\n  \"bpsCritical\": " + NumberNoTrailingZeros(s.alerts.bpsCritical) + ",";
+        out += "\n  \"connectionWarn\": " + std::to_string(s.alerts.connectionWarn) + ",";
+        out += "\n  \"onNewListener\": " +
+               std::string(s.alerts.alertOnNewListener ? "true" : "false") + ",";
+        out += "\n  \"onNewConnection\": " +
+               std::string(s.alerts.alertOnNewConnection ? "true" : "false") + ",";
+        out += "\n  \"onRst\": " + std::string(s.alerts.alertOnRst ? "true" : "false") + ",";
+        out += "\n  \"onClosed\": " +
+               std::string(s.alerts.alertOnClosed ? "true" : "false");
+        out += "\n}\n";
+        r.out = out;
+        return r;
+    }
+
+    std::wstring o;
+    o += L"alerting      : " +
+         std::wstring(s.alerts.enabled ? L"enabled" : L"muted") + L"\r\n";
+    o += L"rate warning  : " +
+
+
+         (s.alerts.bpsWarn > 0
+              ? Utf8ToWide(NumberNoTrailingZeros(s.alerts.bpsWarn).c_str()) + L" bytes/sec"
+              : L"off") + L"\r\n";
+    o += L"rate critical : " +
+         (s.alerts.bpsCritical > 0
+              ? Utf8ToWide(NumberNoTrailingZeros(s.alerts.bpsCritical).c_str()) + L" bytes/sec"
+              : L"off") + L"\r\n";
+
+    o += L"new listener  : " +
+         std::wstring(s.alerts.alertOnNewListener ? L"yes" : L"no") + L"\r\n";
+    o += L"new connection: " +
+         std::wstring(s.alerts.alertOnNewConnection ? L"yes" : L"no") + L"\r\n";
+    o += L"reset seen    : " +
+         std::wstring(s.alerts.alertOnRst ? L"yes" : L"no") + L"\r\n";
+    o += L"closed seen   : " +
+         std::wstring(s.alerts.alertOnClosed ? L"yes" : L"no") + L"\r\n";
+    if (!s.alerts.enabled) {
+        o += L"note: alerting is muted by default. Set --enable to turn it on.\r\n";
+    }
+    r.out = WideToUtf8(o);
+    return r;
+}
+
+
 // A database's own record_count metadata, phrased honestly.
 //
 // Real files very often OMIT this field - every DBIP edition does - so 0 means
@@ -2849,6 +2962,7 @@ std::string RecordsText(uint64_t n) {
 std::string RecordsJson(uint64_t n) {
     return n == 0 ? "null" : std::to_string(n);
 }
+
 
 CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
                          const std::wstring& asnDbPath, const std::string& format) {

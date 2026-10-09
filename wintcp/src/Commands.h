@@ -455,6 +455,23 @@ CommandResult CmdGeoIpInfo(SnapshotSource& source,
 // WinTCP firewall-rule ledger, and capture availability (tools + elevation).
 // Text here reuses AboutText/BuildSummary so `version` and `doctor` can never
 // disagree about process state.
+// 9.2.11 / F5.6. Every field is tri-state: -1 or unset means "leave alone", so a
+// caller can change one switch without restating the whole configuration.
+// Values are in the domain the engine applies them in, so rates are bytes/sec.
+struct AlertFlags {
+    bool enableSet = false;
+    bool enable = false;
+    long long bpsWarn = -1;
+    long long bpsCritical = -1;
+    long long connWarn = -1;
+    bool onListenerSet = false, onListener = false;
+    bool onConnectionSet = false, onConnection = false;
+    bool onRstSet = false, onRst = false;
+    bool onClosedSet = false, onClosed = false;
+    std::string format;
+};
+
+CommandResult CmdAlert(AlertFlags f);
 CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
                         const std::wstring& asnDbPath, const std::string& format);
 

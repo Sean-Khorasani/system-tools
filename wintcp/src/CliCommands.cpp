@@ -97,7 +97,7 @@ const char* kHelp =
     "Library (bookmarks, presets, export, GeoIP):\r\n"
     "  bookmark | preset | export | geoip\r\n"
     "\r\n"
-      "Other: version | doctor | help\r\n"
+    "Other: version | doctor | alert | help\r\n"
     "\r\n"
     "Exit codes: 0 ok, 1 failure or empty result, 2 bad arguments,\r\n"
     "            3 refused (mutating command without --yes).\r\n"
@@ -548,7 +548,31 @@ const CommandHelp kCommandHelps[] = {
      "Examples:\r\n"
      "  wintcp.exe version\r\n"
       "  wintcp.exe version --verbose\r\n"},
-     {"doctor",
+     {"alert",
+     "alert - read and set the threshold-alerting configuration\r\n"
+     "\r\n"
+     "Usage: wintcp.exe alert [--enable|--disable]\r\n"
+     "       wintcp.exe alert [--bps-warn N] [--bps-critical N] [--connections N]\r\n"
+     "       wintcp.exe alert [--on-listener|--off-listener] [--on-connection|--off-connection]\r\n"
+     "       wintcp.exe alert [--on-rst|--off-rst] [--on-closed|--off-closed]\r\n"
+     "       wintcp.exe alert [--alert-format table|json]\r\n"
+     "\r\n"
+     "Alerting is MUTED BY DEFAULT and every threshold is off until set. That is\r\n"
+     "the design, not an unfinished state: a network viewer that raises a balloon\r\n"
+     "on every refresh is one the user switches off, and then it is useless for\r\n"
+     "the one event that mattered.\r\n"
+     "\r\n"
+     "Rates are BYTES PER SECOND, the same unit the engine applies them in - a\r\n"
+     "KB/MB suffix would be one more place for a unit to be misread, and the\r\n"
+     "numbers are small enough not to need it. 0 disables that threshold.\r\n"
+     "\r\n"
+     "Every switch is optional; supplying none prints the current configuration.\r\n"
+     "The four event switches default to on, on, on, off.\r\n"
+     "\r\n"
+     "Examples:\r\n"
+     "  wintcp.exe alert --enable --bps-warn 1000000\r\n"
+     "  wintcp.exe alert --enable --connections 400 --off-connection\r\n"
+     "  wintcp.exe alert --alert-format json\r\n"},    {"doctor",
       "doctor - environment diagnostics for running this tool here\r\n"
       "\r\n"
       "Usage: wintcp.exe doctor [--format table|json] [--verbose] [--db FILE] [--asn-db FILE]\r\n"
@@ -619,6 +643,8 @@ bool TakesValue(const std::wstring& t) {
            t == L"--pid" || t == L"--address" || t == L"--port" ||
            t == L"--tag" || t == L"--note" || t == L"--name" ||
            t == L"--db" || t == L"--asn-db" || t == L"--secs" || t == L"--event" ||
+           t == L"--alert-format" || t == L"--bps-warn" ||
+           t == L"--bps-critical" || t == L"--connections" ||
            t == L"--dir";
 }
 
@@ -713,6 +739,12 @@ struct Args {
     std::wstring db;
     // F5.4: the ASN database is a different file from the country one.
     std::wstring asnDb;
+    // 9.2.11 / F5.6. Tri-state: -1 means "not supplied". Rates are bytes/sec.
+    long long alertBpsWarn = -1, alertBpsCritical = -1, alertConnWarn = -1;
+    int alertEnable = -1;                 // -1 unset, 0 off, 1 on
+    int alertOnListener = -1, alertOnConnection = -1;
+    int alertOnRst = -1, alertOnClosed = -1;
+    std::wstring alertFmtW;
     std::wstring ip;
     std::wstring sub;     // bookmark/preset/geoip subverb
     bool quiet = false;   // list/ps: no output, rc answers
@@ -821,6 +853,20 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
         auto need = [&](std::wstring* out) -> bool {
             if (i + 1 >= argc) return false;
             *out = argv[++i] != nullptr ? argv[i] : L"";
+            return true;
+        };
+        // 9.2.11: the numeric counterpart. Rejects a non-number rather than
+        // silently storing 0, because 0 DISABLES an alert and a typo that
+        // reads as a disabled threshold makes the feature look broken for no
+        // visible reason.
+        auto needNum = [&](long long* out) -> bool {
+            if (i + 1 >= argc) return false;
+            const wchar_t* raw = argv[++i];
+            if (raw == nullptr) return false;
+            wchar_t* endp = nullptr;
+            const long long v = ::wcstoll(raw, &endp, 10);
+            if (endp == raw || *endp != L'\0') return false;
+            *out = v;
             return true;
         };
         if (t == L"--filter") {
@@ -951,6 +997,37 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             if (!need(&a->db)) return "missing value for --db";
         } else if (t == L"--asn-db") {
             if (!need(&a->asnDb)) return "missing value for --asn-db";
+        } else if (t == L"--enable") {
+            a->alertEnable = 1;
+        } else if (t == L"--disable") {
+            a->alertEnable = 0;
+        } else if (t == L"--bps-warn") {
+            if (!needNum(&a->alertBpsWarn))
+                return "missing or non-numeric value for --bps-warn";
+        } else if (t == L"--bps-critical") {
+            if (!needNum(&a->alertBpsCritical))
+                return "missing or non-numeric value for --bps-critical";
+        } else if (t == L"--connections") {
+            if (!needNum(&a->alertConnWarn))
+                return "missing or non-numeric value for --connections";
+        } else if (t == L"--alert-format") {
+            if (!need(&a->alertFmtW)) return "missing value for --alert-format";
+        } else if (t == L"--on-listener") {
+            a->alertOnListener = 1;
+        } else if (t == L"--off-listener") {
+            a->alertOnListener = 0;
+        } else if (t == L"--on-connection") {
+            a->alertOnConnection = 1;
+        } else if (t == L"--off-connection") {
+            a->alertOnConnection = 0;
+        } else if (t == L"--on-rst") {
+            a->alertOnRst = 1;
+        } else if (t == L"--off-rst") {
+            a->alertOnRst = 0;
+        } else if (t == L"--on-closed") {
+            a->alertOnClosed = 1;
+        } else if (t == L"--off-closed") {
+            a->alertOnClosed = 0;
         } else if (t == L"--traffic") {
             a->traffic = true;
     } else if (t == L"--dns") {
@@ -1120,6 +1197,12 @@ const wchar_t* const kSwitchNames[] = {
     L"--text", L"--bin", L"--dir",
      L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
      L"--dns-timeout",
+     L"--dns-timeout",
+     // 9.2.11 / F5.6. Eleven of these are booleans and deliberately do NOT
+     // appear in TakesValue.
+     L"--enable", L"--disable", L"--on-listener", L"--off-listener",
+     L"--on-connection", L"--off-connection", L"--on-rst", L"--off-rst",
+     L"--on-closed", L"--off-closed",
 };
 constexpr size_t kSwitchNameCount =
     sizeof(kSwitchNames) / sizeof(kSwitchNames[0]);
@@ -1260,6 +1343,8 @@ const VerbSwitches kVerbSwitches[] = {
     // it silently refused. An asn: filter that matches nothing had no way to ask
     // whether the file it was given was even an ASN database.
     {L"doctor", L"--verbose --format --db --asn-db"},
+    // 9.2.11 / F5.6. Takes switches because it IS the surface that sets them.
+    {L"alert", L"--enable --disable --bps-warn --bps-critical --connections on-listener off-listener on-connection off-connection on-rst off-rst on-closed off-closed --alert-format"},
     {L"help", L""},       // takes no switches
     // Hidden test verb for R1: raises a real access violation so that
     // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
@@ -2096,6 +2181,26 @@ int RunCliCommand(int argc, wchar_t** argv) {
         // export --format csv|tsv|json names the file format here.
         SnapshotSource src;
         const CommandResult r = CmdExport(src, opt, a.out, a.force);
+        Emit(r);
+        return r.exitCode;
+    }
+    if (cmd == L"alert") {
+        AlertFlags af;
+        af.enableSet = a.alertEnable >= 0;
+        af.enable = a.alertEnable > 0;
+        af.bpsWarn = a.alertBpsWarn;
+        af.bpsCritical = a.alertBpsCritical;
+        af.connWarn = a.alertConnWarn;
+        af.onListenerSet = a.alertOnListener >= 0;
+        af.onListener = a.alertOnListener > 0;
+        af.onConnectionSet = a.alertOnConnection >= 0;
+        af.onConnection = a.alertOnConnection > 0;
+        af.onRstSet = a.alertOnRst >= 0;
+        af.onRst = a.alertOnRst > 0;
+        af.onClosedSet = a.alertOnClosed >= 0;
+        af.onClosed = a.alertOnClosed > 0;
+        af.format = WideToUtf8(a.alertFmtW);
+        const CommandResult r = CmdAlert(af);
         Emit(r);
         return r.exitCode;
     }
