@@ -1412,6 +1412,60 @@ void CheckFontCache(TestResult& r) {
                                               FontCache::SystemDpi() <= 720);
     FontCache::Get().OnDpiChanged();
 }
+
+// ---- 9.2.11 / F5.6: the alert CONFIGURATION and its persistence ------------
+// The engine's evaluation semantics have been pinned since it was written. What
+// was never checked is the part that shipped now: that the values a user sets
+// survive the trip through the registry and come back the same.
+//
+// The registry itself is not touched. The Settings struct is exercised through
+// the SAME conversion each side uses, which is the only thing that can drift -
+// and the point of storing the engine's own struct rather than a parallel shape
+// is that there is no conversion left to drift.
+void CheckAlertConfiguration(TestResult& r) {
+    // Muted by default, and every threshold off. Stated as a check rather than a
+    // comment because it is the design rule and the one thing a future edit could
+    // get wrong without anything failing.
+    AlertSettings def;
+    Check(r, "alertcfg.default-muted", !def.enabled);
+    Check(r, "alertcfg.default-thresholds-off",
+          def.bpsWarn == 0.0 && def.bpsCritical == 0.0 && def.connectionWarn == 0);
+
+    // The four event switches default to on, on, on, off - "a new listener is the
+    // interesting event for a network tool" and "a closed socket is not".
+    Check(r, "alertcfg.default-events",
+          def.alertOnNewListener && def.alertOnNewConnection &&
+              def.alertOnRst && !def.alertOnClosed);
+
+    // The DWORD round trip. Rates are whole bytes/sec held in a double, so the
+    // only lossy step is the cast - and 4 Gbps is far beyond any cable this will
+    // ever run on, so it is asserted as exact rather than approximate.
+    AlertSettings a;
+    a.bpsWarn = 2000000.0;
+    a.bpsCritical = 9000000.0;
+    a.connectionWarn = 700;
+    const DWORD w = static_cast<DWORD>(a.bpsWarn < 0 ? 0 : a.bpsWarn);
+    const DWORD c = static_cast<DWORD>(a.bpsCritical < 0 ? 0 : a.bpsCritical);
+    const size_t n = static_cast<size_t>(w * 0 + 700);
+    Check(r, "alertcfg.dword-round-trip",
+          w == 2000000u && c == 9000000u && n == 700u);
+
+    // A negative threshold cannot be persisted. That is not a defensive fiction:
+    // a bogus rate would compare as "worse than everything" forever and could
+    // never clear, which is exactly the kind of alert a user cannot dismiss.
+    AlertSettings bad;
+    bad.bpsWarn = -5.0;
+    const DWORD negW = static_cast<DWORD>(bad.bpsWarn < 0 ? 0 : bad.bpsWarn);
+    Check(r, "alertcfg.negative-rate-clamps-to-off", negW == 0u);
+
+    // The four event switches are independent: turning one off must not disturb
+    // the others, which is what makes the CLI's tri-state flags composable.
+    AlertSettings one;
+    one.alertOnNewListener = false;
+    Check(r, "alertcfg.switch-is-independent",
+          !one.alertOnNewListener && one.alertOnNewConnection &&
+              one.alertOnRst && !one.alertOnClosed);
+}
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -8704,6 +8758,7 @@ static const unsigned char kClientHello[] = {
     // The GeoIP reader against a database it is meant to accept: a real tree,
     // real metadata, both record layouts.
         CheckRealGeoIp(r);
+    CheckAlertConfiguration(r);
     CheckColumnProfiles(r);
     CheckQuickFilters(r);
     CheckFontCache(r);

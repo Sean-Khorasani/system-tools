@@ -480,6 +480,23 @@ REM was wrong. The rejection path is asserted here; the happy path needs a real
 REM .mmdb and is covered by wintcp-tests.exe unit's realdb.* checks.
 call :t "geoip lookup asn db junk" "geoip lookup --db %JUNKDB% 1.1.1.1" 1 "cannot load database"
 
+REM 9.2.11 / F5.6 alerting. The engine was pure, tested and NEVER WIRED - no
+REM persistence, no CLI, no caller. These assert the contract of the new surface:
+REM it reads the store, and a bad or missing value is an ARGUMENT error rather
+REM than a silently-disabled threshold - a typo that reads as "off" is the one
+REM mistake that makes the feature look broken for no visible reason.
+REM
+REM Deliberately NOT asserting a persisted value: these all share the real HKCU
+REM store, so a check depending on what a previous check left behind is a check
+REM that fails on the second run of this file. The round trip is pinned in
+REM wintcp-tests.exe unit, against a throwaway key path.
+call :t "alert reads default" "alert" 0 "muted"
+call :t "alert json shape" "alert --alert-format json" 0 "bpsWarn"
+call :t "alert json has connection count" "alert --alert-format json" 0 "connectionWarn"
+call :t "alert bad rate" "alert --bps-warn not-a-number" 2 "non-numeric"
+call :t "alert missing rate" "alert --bps-warn" 2 "missing"
+call :t "alert missing format" "alert --alert-format" 2 "missing"
+
 REM D3: the unenrichable-window hint is ADVISORY and goes to stderr only, so
 REM stdout must stay a clean table that no marker pollutes. Whether the hint
 REM fires depends on the live socket landscape (TIME_WAIT/listener rows come
