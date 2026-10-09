@@ -1,4 +1,5 @@
 // ColumnsWin.h
+// SPDX-License-Identifier: Apache-2.0
 // The parts of the column definitions that need a Windows type: the visible
 // column mask and the clamp that keeps it non-zero.
 //
@@ -121,5 +122,54 @@ inline UINT32 ClampVisibleCols(UINT32 mask) {
     mask &= kAllColMask;
     return (mask == 0) ? 1u : mask;
 }
+
+// 9.4.4 column profiles. A profile is a named column MASK - nothing else. A
+// preset (File > Save view as preset) is a whole ViewState and already carries a
+// mask; these must not become a second, weaker preset that can drift from it.
+//
+// Every mask is expressed as "everything, minus what this view does not need", so
+// a future column is present unless a profile says otherwise - rather than a list
+// of included columns that a new column silently misses.
+// Minimal is the connection identity and nothing else: enough to name a socket,
+// and deliberately short so it fits a narrow window. Unlike the other three it is
+// an INCLUSIVE list, because "everything except the things a socket is not" is
+// not a smaller set in any useful sense.
+constexpr UINT32 kMinimalProfileCols = (1u << COL_PROTO) | (1u << COL_LOCAL) |
+                                      (1u << COL_LPORT) | (1u << COL_REMOTE) |
+                                      (1u << COL_RPORT) | (1u << COL_STATE) |
+                                      (1u << COL_PID);
+
+// Network answers "who is this talking to, over what, and did it move anything",
+// so it keeps the address columns and adds the byte counters - and drops the
+// process-budget readings, which are about the machine rather than the socket.
+constexpr UINT32 kNetworkProfileCols =
+    kAllColMask & ~(1u << COL_CPU) & ~(1u << COL_MEM) & ~(1u << COL_DISK) &
+    ~(1u << COL_RTT) & ~(1u << COL_MINRTT) & ~(1u << COL_CWND) &
+    ~(1u << COL_RETRANS) & ~(1u << COL_GROUPRATE) & ~(1u << COL_PPID) &
+    ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) & ~(1u << COL_NOTE);
+
+// Network answers "who is this talking to, over what, and did it move anything",
+// so it keeps the address columns and adds the byte counters - and drops the
+// process-budget readings, which are about the machine rather than the socket.
+constexpr UINT32 kSecurityProfileCols =
+    kAllColMask &
+    ~(1u << COL_LOCAL) & ~(1u << COL_LPORT) & ~(1u << COL_BANDWIDTH) &
+    ~(1u << COL_RTT) & ~(1u << COL_MINRTT) & ~(1u << COL_CWND) &
+    ~(1u << COL_RETRANS) & ~(1u << COL_DISK) & ~(1u << COL_NOTE);
+
+// Security answers "which process, on whose authority, from where", so it keeps
+// the trust columns (path, integrity, signature) and drops the socket-level noise.
+constexpr UINT32 kPerformanceProfileCols =
+    kAllColMask &
+    ~(1u << COL_SERVICE) & ~(1u << COL_PATH) & ~(1u << COL_COUNTRY) &
+    ~(1u << COL_TLS) & ~(1u << COL_RTT) & ~(1u << COL_MINRTT) &
+    ~(1u << COL_CWND) & ~(1u << COL_RETRANS) & ~(1u << COL_PPID) &
+    ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) & ~(1u << COL_NOTE);
+
+// The five G6/G5 diagnostic readings, as one mask. "Show diagnostics" ORs these on
+// rather than replacing what is visible.
+constexpr UINT32 kDiagnosticsCols = (1u << COL_RTT) | (1u << COL_MINRTT) |
+                                    (1u << COL_CWND) | (1u << COL_RETRANS) |
+                                    (1u << COL_GROUPRATE);
 
 }  // namespace wintcp

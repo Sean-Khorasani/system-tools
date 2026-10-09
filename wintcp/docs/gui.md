@@ -45,7 +45,8 @@ Rows keep a stable identity across refreshes, so changes are visible rather than
 |---|---|
 | Green | New row. |
 | Yellow | The TCP state changed (for example `ESTABLISHED` → `TIME_WAIT`). |
-| Red "ghost" | The row vanished. It stays visible for one more cycle, then drops. |
+| Red | The row vanished **this** refresh. It flashes red for one cycle. |
+| Grey "ghost" | A retained closed socket (F5.7). After the red flash it lingers as a grey ghost so the table keeps a short history of what closed; up to 500 sockets are kept, the oldest dropped first, with their final byte counters frozen at the moment of death. |
 
 The identity of a row is **endpoint + PID**. State is not part of the identity, so a state change updates the same row instead of replacing it. Duplicates pair up in order rather than collapsing, which matters in practice: every browser binds its own socket to mDNS port 5353, so a busy desktop has dozens of rows that share one key. See [Architecture](architecture.md#row-identity-and-diffing) for why this matters.
 
@@ -77,7 +78,7 @@ Open **View → Columns** to show or hide columns. A check mark appears on every
 
 **Default layout** leads with identity: Process, CPU %, Traffic, Proto, Local, LPort, Remote, RPort, State, PID, Service, Host, Path. Memory, Disk I/O and the split Received / Sent / Net total columns are opt-in.
 
-Five further diagnostic columns are available from **View → Columns** and hidden by default because they are valuable while chasing one slow connection and noise otherwise: `RTT`, `Min RTT`, `Cwnd`, `Retrans` and `Proc Speed`. Their meaning is explained in [Traffic counters](traffic.md#what-the-per-socket-scan-provides).
+Five further diagnostic columns are available from **View → Columns** and hidden by default because they are valuable while chasing one slow connection and noise otherwise: `RTT`, `Min RTT`, `Cwnd`, `Retrans` and `Process rate`. Their meaning is explained in [Traffic counters](traffic.md#what-the-per-socket-scan-provides).
 
 **Parent process** and **Integrity** are hidden by default for a different reason than those five: they are *trust* columns, and a question about who launched a process or how much Windows trusts it is asked about a handful of rows, not about the three hundred on screen. They need no switch — both are read on the handle and the snapshot the resolver already has. `Signature` needs `--signatures` on the command line, because `WinVerifyTrust` builds a certificate chain per image; see the `list` verb in the [CLI reference](cli.md).
 
@@ -276,12 +277,36 @@ Reloading works on a live session: picking another file replaces the previous on
 
 The path is the only thing remembered, not the database's contents: a file replaced in place is picked up on the next refresh. From the command line `--db FILE` stays explicit per run, and `list --watch --db FILE` re-reads the file on every tick, so a refreshed database shows up without restarting anything.
 
+### The ASN database is a second file
+
+**View → ASN database (.mmdb)...** is a separate picker, for a separate reason: GeoLite2-Country and GeoLite2-ASN are different MaxMind products with different record shapes, so one database cannot answer both. Supply either, both or neither — the window holds them independently, so picking one never disturbs the other.
+
+Its picker is titled *Open a GeoLite2-ASN .mmdb database* and names the expected product on failure (**ASN database not loaded (expected GeoLite2-ASN)**), because the mistake a new user makes is picking the Country file they already have. That is not an error at all — the file loads, it simply carries no ASN records — so nothing would complain, and the column would just stay empty for a reason no dialog would otherwise explain. The title is where that gets said.
+
+The ASN appears in the same `Country` cell as `US · AS15169 Google LLC`, because the column count is frozen at 32 (see the [CLI column reference](cli.md#column-reference)). The separator only appears when both halves are known, and the AS number is placed *before* the operator name, so a narrow window that ellipsises on overflow never hides which network the row belongs to. **Details** gives the two their own rows when you want them apart.
+
+Its path persists on exactly the same terms as the country one, in its own `HKCU\Software\WinTCP` value: pick it once and it reloads silently, and a file that has moved fails quietly rather than nagging at every launch.
+
+## Alerts (F5.6)
+
+Threshold alerting is **off until you turn it on**, and that is the point: a
+network viewer that pops a balloon every time a connection crosses a line is one
+you switch off, and then it is useless for the one event that mattered.
+
+Set it with `wintcp.exe alert --enable --bps-warn 1000000` on the command line,
+or read the current state with `wintcp.exe alert`. The GUI window reads the same
+settings, so a change made anywhere takes effect on the next refresh.
+
+Each distinct condition fires **once** and then goes quiet until it clears, so a
+connection sitting above the threshold does not re-notify every tick. When the
+tray icon is off, an alert lands on the status bar instead of vanishing - an alert
+that does nothing is worse than no alert.
 ## Windows integration
 
 - **DPI.** Per-Monitor V2 DPI awareness via the manifest, 9 pt Segoe UI. Widths and fonts are recomputed on `WM_DPICHANGED`.
 - **Theme.** There is no dark-mode toggle. The list, status bar and filter box are painted from the live system colors (`GetSysColor`) and repaint on `WM_SYSCOLORCHANGE` and `WM_THEMECHANGED`, so light, dark and high-contrast schemes work without a restart.
-- **High contrast.** `SPI_GETHIGHCONTRAST` takes precedence over the theme check.
-- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; double-click restores.
+- **High contrast (9.4.9).** `DetailsDialog`. `MainWindow` and `DetailsDialog` both call `HighContrastActive()` (`SPI_GETHIGHCONTRAST`) and bypass their dark palette when it is set, deriving every colour from `GetSysColor` so the scheme's own values win. `MainWindow::ThemeIsDark` short-circuits to `false` under HC, and `DetailsDialog::ApplyColors` re-derives on `WM_SYSCOLORCHANGE`/`WM_THEMECHANGED`, so toggling HC mid-session repaints immediately. The hard-coded `kDark*` substitutes are never applied on top of an HC palette.
+- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; double-click (or single-click, line 759) restores. A balloon fires on a new listener via `ShowTrayBalloon` (Alerts.cpp), though the alert loop itself is not yet wired into the live refresh. **First-run minimize prompt (9.4.6):** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
 - **Always on top** can be toggled from the menu or the tray.
 
 ## Settings and reset

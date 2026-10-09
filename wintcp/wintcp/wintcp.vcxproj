@@ -248,6 +248,7 @@
     <ClCompile Include="src\EtwTraffic.cpp" />
     <ClCompile Include="src\ProcStats.cpp" />
     <ClCompile Include="src\ChartsWindow.cpp" />
+  <ClCompile Include="src\FontCache.cpp" />
     <ClCompile Include="src\CrashDump.cpp" />
     <ClCompile Include="src\WinCaps.cpp" />
   </ItemGroup>
@@ -292,6 +293,7 @@
     <ClInclude Include="src\EtwTraffic.h" />
     <ClInclude Include="src\ProcStats.h" />
     <ClInclude Include="src\ChartsWindow.h" />
+  <ClInclude Include="src\FontCache.h" />
     <ClInclude Include="src\CrashDump.h" />
     <ClInclude Include="src\WinCaps.h" />
     <ClInclude Include="src\resource.h" />

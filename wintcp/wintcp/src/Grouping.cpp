@@ -1,4 +1,5 @@
 // Grouping.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Grouping.h.
 
 #include "Grouping.h"
@@ -45,7 +46,12 @@ std::vector<ProcessGroup> GroupByProcess(const std::vector<GroupRow>& rows) {
         ProcessGroup& g = groups[it->second];
 
         g.members.push_back(i);
-        g.rowCount += (r.connectionCount == 0 ? 1 : r.connectionCount);
+        // static_cast: the ternary promotes to uint64_t (the common type of
+        // `1` and connectionCount), and rowCount is size_t. Same width on x64
+        // but nominally distinct, so /W4 C4244 + /WX rejects the implicit
+        // narrowing. The values are row counts, bounded by the store, so the
+        // cast cannot actually lose anything.
+        g.rowCount += static_cast<size_t>(r.connectionCount == 0 ? 1 : r.connectionCount);
         if (r.removed) ++g.ghostCount;
         if (r.tcp) g.hasTcp = true;
         else        g.hasUdp = true;
@@ -110,6 +116,14 @@ bool GroupColumnText(const ProcessGroup& g, int columnId, wchar_t* out,
 
     switch (columnId) {
         case COL_PROCESS:
+            // 9.4.5: the grouped header carries its member count so the row
+            // reads "chrome.exe (14)" at a glance, matching the freeze banner's
+            // "chrome.exe (14)" shape. ghosts count toward it - they are the
+            // process's vanished connections, still part of the group until
+            // GC'd. COL_STATE still reports the count in words; this is the
+            // one-shot numeric badge the eye catches first.
+            if (g.rowCount > 0)
+                return set(g.name + L" (" + std::to_wstring(g.rowCount) + L")");
             return set(g.name);
         case COL_PID:
             return set(std::to_wstring(g.pid));

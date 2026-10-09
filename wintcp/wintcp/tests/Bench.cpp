@@ -4,6 +4,9 @@
 
 #include "Bench.h"
 
+#include "ColumnsWin.h"   // 9.4.4 profile masks
+#include "FontCache.h"     // F5.15
+
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -21,6 +24,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <stdexcept>   // std::runtime_error for the r2.* containment checks
 #include <string>
 #include <vector>
@@ -54,6 +58,8 @@
 #include "SysStats.h"    // headless system stats formatting
 #include "Presets.h"       // preset registry round-trip (5.2, via ViewState)
 #include "ViewState.h"     // the view description every front end applies
+#include "DnsResolver.h"   // 9.2.8 pending sentinel + timeout contract
+#include "TcpTable.h"    // CloseTcpConnection (9.2.6 IPv6 refusal)
 #include "TcpReasm.h"
 #include "TlsDecode.h"
 #include "GeoIp.h"         // synthetic-database lookups (geoip.* checks)
@@ -155,7 +161,17 @@ struct MmdbEntry {
     uint32_t prefix;     // host-order address of the network
     const char* iso;
     const char* name;
+    // ASN fields, so one fixture type builds either kind of database. A Country
+    // entry leaves them alone; an ASN entry leaves iso/name alone. Defaulted so
+    // the existing brace-initialised entries below keep compiling unchanged.
+    uint32_t asn = 0;
+    const char* asnOrg = "";
 };
+
+// Which kind of record the data section holds. Not a bool: the two need
+// different writers AND different metadata (database_type), and a reader handed
+// the wrong one must simply find nothing rather than misparse.
+enum class MmRecordKind { Country, Asn };
 
 // Control byte, then the payload. An integer's size IS its byte width, so it is
 // never long enough to need the 29/30/31 escape - which is why MmUint can push
@@ -176,7 +192,24 @@ void MmUint(std::vector<unsigned char>* out, unsigned char type,
 
 void MmStr(std::vector<unsigned char>* out, const char* s) {
     const size_t n = std::strlen(s);
-    out->push_back(MmControlByte(kMmString, n));
+    if (n < kMmMaxInlineSize) {
+        out->push_back(MmControlByte(kMmString, n));
+    } else {
+        // Extended size. The low five bits set to 29 do NOT mean "29 bytes" -
+        // they mean "one more byte follows, and the real size is that byte plus
+        // 29". MmControlByte clamps to 29, so a clamped length here produced a
+        // string the reader cannot read: it took the first CHARACTER as the
+        // size and derailed the rest of the map walk, which is how every lookup
+        // silently answered "unknown" instead of failing loudly.
+        //
+        // This is not a theoretical length. "autonomous_system_organization" -
+        // one of the two keys in every GeoLite2-ASN record - is exactly 29
+        // characters, so the first ASN feature to use this reader hit it
+        // immediately, and no fixture could express a real ASN record until
+        // this was fixed.
+        out->push_back(static_cast<unsigned char>(kMmString | 29u));
+        out->push_back(static_cast<unsigned char>(n - 29));
+    }
     out->insert(out->end(), s, s + n);
 }
 
@@ -192,6 +225,51 @@ void MmCountry(std::vector<unsigned char>* out, const char* iso,
     out->push_back(kMmMap + 2);  MmStr(out, "iso_code"); MmStr(out, iso);
     out->push_back(kMmMap + 1);  MmStr(out, "names");
     out->push_back(kMmMap + 1);  MmStr(out, "en");       MmStr(out, name);
+}
+
+// {"autonomous_system_number": <uint32>, "autonomous_system_organization": <str>}
+//
+// The shape is the point. GeoLite2-ASN records have NO wrapper object - the
+// record IS the autonomous system, so both keys sit at the TOP level of the map.
+// A reader that looked for a nested "autonomous_system" key (the shape a
+// country record suggests) would find nothing and report every address unknown,
+// which is exactly the failure a synthetic fixture has to be able to reproduce.
+//
+// An entry with asn == 0 writes only the organisation, and one with asnOrg == ""
+// writes only the number: real databases contain both kinds, and a reader that
+// requires the pair to be present throws away half its answers.
+void MmAsnRecord(std::vector<unsigned char>* out, uint32_t asn,
+                 const char* org) {
+    // The map's entry COUNT lives in the control byte the record STARTS with,
+    // and it cannot be known until both entries are decided - so remember where
+    // this record begins and patch that byte at the end. Writing the count first
+    // and then reaching back for it (out->begin()) edits the first record in the
+    // whole section instead of this one, which corrupts one record per call and
+    // leaves the record it meant to fix still wrong.
+    const size_t start = out->size();
+    // RESERVE the control byte before writing any entry. A map's entry count
+    // lives in the byte the record STARTS with, and the count is not known until
+    // both entries have been decided - so the byte has to be claimed first and
+    // filled in at the end. Patching afterwards without reserving lets the first
+    // key's own control byte be written on top of the map byte, and the patch
+    // then destroys the key: the record still claims two entries, but its first
+    // key starts with a bare 'a', so every lookup for it misses and the whole
+    // feature answers "unknown" for every address.
+    out->push_back(0);
+    unsigned entries = 0;
+    if (asn != 0) {
+        MmStr(out, "autonomous_system_number");
+        MmUint(out, kMmUint32, asn);
+        ++entries;
+    }
+    if (org != nullptr && org[0] != '\0') {
+        MmStr(out, "autonomous_system_organization");
+        MmStr(out, org);
+        ++entries;
+    }
+    // entries == 0 is a legal empty map, and decodes to "unknown", which is the
+    // right answer for a record with nothing in it.
+    (*out)[start] = static_cast<unsigned char>(kMmMap + entries);
 }
 
 // One metadata key -> already-encoded value.
@@ -310,7 +388,8 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
                                               int depth, unsigned recordBits,
                                               bool ipv6Tree = false,
                                               bool awkward = false,
-                                              unsigned declaredRecordBits = 0) {
+                                              unsigned declaredRecordBits = 0,
+                                              MmRecordKind kind = MmRecordKind::Country) {
     // An ip_version 6 file holds the whole IPv4 space at ::/96, so the IPv4
     // half sits 96 zero-bit steps below the root and the tree needs those 96
     // nodes in front of it. Note that no shipped metadata says WHERE - the spec
@@ -337,8 +416,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     // the first entry below is read back from offset 0 or the check fails.
     std::vector<unsigned char> data;
     std::vector<size_t> offsets;
-    if (awkward) {
-        // One shared copy of "country" per size code, at an offset chosen to
+    if (awkward && kind == MmRecordKind::Country) {
+        // The awkward layout is the country record's, so it is only built for a
+        // Country database. Silently honouring it for an ASN build would emit
+        // country records under ASN metadata - a fixture that fails for a reason
+        // that has nothing to do with the reader.
         // sit inside that code's range. Records first, then the strings.
         const size_t targets[4] = {kMmPtrTarget0, kMmPtrTarget1, kMmPtrTarget2,
                                    kMmPtrTarget0};
@@ -357,7 +439,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     } else {
         for (const MmdbEntry& e : entries) {
             offsets.push_back(data.size());
-            MmCountry(&data, e.iso, e.name);
+            if (kind == MmRecordKind::Asn) {
+                MmAsnRecord(&data, e.asn, e.asnOrg);
+            } else {
+                MmCountry(&data, e.iso, e.name);
+            }
         }
     }
 
@@ -464,7 +550,11 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     epoch.push_back(kMmSpecTypeUint64 - kMmExtendedTypeBias);
     epoch.push_back(0x65); epoch.push_back(0x53);
     epoch.push_back(0xA8); epoch.push_back(0x00);
-    MmStr(&type_, "Country");
+    // database_type is metadata, and the two databases differ by exactly this
+// string - it is what tells a user which file they picked. It does NOT gate
+// decoding here: the reader looks up the keys a record actually carries, so a
+// Country database asked for an ASN answers unknown rather than misparsing.
+MmStr(&type_, kind == MmRecordKind::Asn ? "ASN" : "Country");
     MmUint(&ver, kMmUint16, ipv6Tree ? 6 : 4);  // ip_version, uint16
     MmUint(&count, kMmUint32, static_cast<uint64_t>(nodeCount));
     // record_size, uint16 - unless the caller wants metadata to claim
@@ -702,6 +792,131 @@ void CheckSyntheticGeoIp(TestResult& r) {
                              "geoip.reject-node-count-0", "node_count = 0");
 }
 
+// The same tree walk, data section and metadata machinery, holding ASN records.
+// Deliberately separate from CheckSyntheticGeoIp rather than folded into it: the
+// two databases differ in RECORD SHAPE, and a check that cannot tell which kind
+// it is looking at cannot say which half regressed.
+void CheckSyntheticAsn(TestResult& r) {
+    // Three shapes, because a reader that assumes all three are present is a
+    // reader that silently drops the ones that are not:
+    //   number + org   the normal record
+    //   org only       real databases carry these; the number is not optional
+    //                  in the spec but a fixture must prove the reader copes
+    //   number only    likewise, and it is what makes `asn:15169` possible
+    const std::vector<MmdbEntry> entries = {
+        {0x08000000u, "", "", 15169u, "Google LLC"},   // data offset 0
+        {0x01000000u, "", "", 13335u, "Cloudflare, Inc."},
+        {0x05200000u, "", "", 0u, "Deutsche Telekom AG"},   // org only
+        {0x0DC00000u, "", "", 64512u, ""},                   // number only
+    };
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase g;
+        if (LoadSyntheticDb(r,
+                            BuildSyntheticMmdb(entries, 11, bits, false, false, 0,
+                                              MmRecordKind::Asn),
+                            "geoip.asn", &g)) {
+            const std::string layout = (bits == 24) ? "rec24" : "rec28";
+
+            // Offset 0 again, for the same reason as the country fixture: a
+            // reader that treats node_count + 16 as "no data" cannot see this.
+            const AsnInfo a = g.LookupAsnV4(0x08080808u);
+            Check(r, "asn.hit-number-and-org",
+                  a.number == 15169u && a.org == L"Google LLC", layout);
+            // The two halves read independently: one present, one absent.
+            Check(r, "asn.org-without-number",
+                  !g.LookupAsnV4(0x05280101u).Known() &&
+                      g.LookupAsnV4(0x05280101u).org == L"Deutsche Telekom AG",
+                  layout);
+            Check(r, "asn.number-without-org",
+                  g.LookupAsnV4(0x0DF897D2u).number == 64512u &&
+                      g.LookupAsnV4(0x0DF897D2u).org.empty(),
+                  layout);
+            // Display is what the column prints, so it is checked in all three
+            // shapes - including the one where only the org exists, which must
+            // NOT be rendered as a bare "AS0".
+            Check(r, "asn.display-both",
+                  a.Display() == L"AS15169 Google LLC", layout);
+            Check(r, "asn.display-org-only",
+                  g.LookupAsnV4(0x05280101u).Display() ==
+                      L"Deutsche Telekom AG",
+                  layout);
+            Check(r, "asn.display-number-only",
+                  g.LookupAsnV4(0x0DF897D2u).Display() == L"AS64512", layout);
+
+            Check(r, "asn.miss-unmapped",
+                  !g.LookupAsnV4(0x68201001u).Known(), layout);
+            // Never looked up: the same three blocks the country reader skips.
+            Check(r, "asn.skip-non-global",
+                  !g.LookupAsnV4(0x7F000001u).Known() &&
+                      !g.LookupAsnV4(0xC0A80101u).Known() &&
+                      !g.LookupAsnV4(0xA9FE0101u).Known(),
+                  layout);
+            Check(r, "asn.metadata",
+                  g.DatabaseVersion() == L"ASN" && g.NodeCount() == (1u << 11) - 1,
+                  layout);
+
+            // THE POINT OF TWO DATABASES: an ASN file asked for a country, and a
+            // Country file asked for an ASN, both answer "unknown" rather than
+            // misparsing each other's records. These are the two cases that
+            // decide whether a user who picked the wrong file gets a blank cell
+            // or a wrong answer.
+            Check(r, "asn.asn-db-has-no-country",
+                  g.LookupV4(0x08080808u).empty(), layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // The other half of that pair, in its own scope: both databases are written
+    // to the SAME fixed %TEMP% path, and a second Load while the first still
+    // holds its memory-mapped view cannot write the file. Nesting the two loads
+    // (rather than running them in sequence) fails at "wrote" and looks like a
+    // reader bug.
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase country;
+        if (LoadSyntheticDb(r, BuildSyntheticMmdb(entries, 11, bits),
+                            "geoip.asn-vs-country", &country)) {
+            const std::string layout = (bits == 24) ? "rec24" : "rec28";
+            Check(r, "asn.country-db-has-no-asn",
+                  !country.LookupAsnV4(0x08080808u).Known() &&
+                      country.LookupAsnV4(0x08080808u).Display().empty(),
+                  layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // IPv6 tree, so the ASN path is pinned against the start-node split too.
+    for (const unsigned bits : {24u, 28u}) {
+        GeoIpDatabase g;
+        if (LoadSyntheticDb(r,
+                            BuildSyntheticMmdb(entries, 11, bits, true, false, 0,
+                                              MmRecordKind::Asn),
+                            "geoip.asn.v6", &g)) {
+            const std::string layout = (bits == 24) ? "rec24v6" : "rec28v6";
+            Check(r, "asn.v6-ipv4-start-node",
+                  g.LookupAsnV4(0x01010101u).number == 13335u, layout);
+            unsigned char a6[16] = {0};
+            a6[12] = 0x01; a6[13] = 0x01; a6[14] = 0x01; a6[15] = 0x01;
+            const AsnInfo v6 = g.LookupAsnV6(a6);
+            Check(r, "asn.v6-from-root",
+                  v6.number == 13335u && v6.org == L"Cloudflare, Inc.", layout);
+        }
+        ::DeleteFileW(SyntheticDbPath().c_str());
+    }
+
+    // A record at data offset 0 that is not a map at all, and a lookup against a
+    // database that was never loaded. Both must be "unknown", never a crash and
+    // never a number read out of the wrong bytes.
+    {
+        GeoIpDatabase empty;
+        Check(r, "asn.not-loaded-is-unknown",
+              !empty.LookupAsnV4(0x08080808u).Known() &&
+                  empty.LookupAsnV4(0x08080808u).Display().empty(),
+              "no database");
+        Check(r, "asn.display-empty-is-empty",
+              AsnInfo().Display().empty(), "default");
+    }
+}
+
 
 // ---- synthetic rows --------------------------------------------------------
 // Deterministic mixed traffic: TCP/UDP, v4/v6, changing states, 700 PIDs,
@@ -831,6 +1046,599 @@ bool ValidUtf16(const std::wstring& s) {
 
 // ---- selftest --------------------------------------------------------------
 
+// ---- real databases -------------------------------------------------------
+// wintcp/tests/fixtures holds REAL mmdb files a developer downloads by hand.
+// They are gitignored and must stay that way: a .mmdb is licensed data and
+// committing one is redistribution, which is exactly why WinTCP ships no
+// database of its own. So these checks exist to exercise the reader against
+// real-world record shapes - pointers, deduplicated keys, 30-character key
+// names, databases with a proper search tree - which the synthetic fixtures
+// deliberately cannot produce.
+//
+// They run ONLY when a fixture is present, and report one skip otherwise, so a
+// fresh clone still gates green. Everything they assert is therefore optional
+// signal, never a gate: a missing file cannot fail the build.
+// Well-known addresses, used to assert verified behaviour against the real
+// fixtures. Every one of these is an address whose owner is a matter of public
+// record - it is the point of a lookup test that the answer is knowable without
+// the database.
+const unsigned char kGoogleV6[16] = {0x20,0x01,0x48,0x60,0x48,0x60,0,0,0,0,0,0,0,0,0x88,0x88};
+const unsigned char kCloudflareV6[16] = {0x26,0x06,0x47,0x00,0x47,0x00,0,0,0,0,0,0,0,0,0x11,0x11};
+
+bool FindFixturesDir(std::wstring* out) {
+    // The binary runs from build/tests or build-fast/tests, so the repo root is
+    // two or three levels up. Walking up from the current directory is the only
+    // way that works for both, and for a bare run from the repo root too.
+    wchar_t cwd[MAX_PATH] = {0};
+    if (::GetCurrentDirectoryW(MAX_PATH, cwd) == 0) return false;
+    for (int i = 0; i < 5; ++i) {
+        const std::wstring cand = std::wstring(cwd) + L"\\wintcp\\tests\\fixtures";
+        if (::GetFileAttributesW(cand.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            *out = cand;
+            return true;
+        }
+        const size_t cut = std::wstring(cwd).find_last_of(L"\\/");
+        if (cut == std::wstring::npos || cut == 0) return false;
+        ::wcsncpy_s(cwd, std::wstring(cwd).substr(0, cut).c_str(), _TRUNCATE);
+    }
+    return false;
+}
+
+void CheckRealGeoIp(TestResult& r) {
+    std::wstring dir;
+    if (!FindFixturesDir(&dir)) {
+        Check(r, "realdb.skipped", true,
+              "no wintcp/tests/fixtures directory");
+        return;
+    }
+
+    WIN32_FIND_DATAW fd = {};
+    const std::wstring pat = dir + L"\\*.mmdb";
+    HANDLE h = ::FindFirstFileW(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        Check(r, "realdb.skipped", true,
+              "no .mmdb files in wintcp/tests/fixtures");
+        return;
+    }
+
+    std::vector<std::wstring> files;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        files.push_back(fd.cFileName);
+    } while (::FindNextFileW(h, &fd));
+    ::FindClose(h);
+
+    bool asnLoaded = false, countryLoaded = false;
+    GeoIpDatabase asnDb, countryDb;
+
+    for (const std::wstring& name : files) {
+        const std::wstring path = dir + L"\\" + name;
+        // A fixture that does not load is NOT a test failure: it is a file the
+        // developer put there, and its name says what it is. Report it, do not
+        // fail the gate on someone's stray download.
+        GeoIpDatabase g;
+        std::wstring err;
+        if (!g.Load(path, &err)) {
+            Check(r, "realdb.unreadable-file-is-named", true,
+                  WideToUtf8(name + L": " + err));
+            continue;
+        }
+        const std::wstring v = g.DatabaseVersion();
+        if (v.find(L"ASN") != std::wstring::npos ||
+            v.find(L"asn") != std::wstring::npos) {
+            if (!asnLoaded) { asnDb = std::move(g); asnLoaded = true; }
+        } else {
+            if (!countryLoaded) { countryDb = std::move(g); countryLoaded = true; }
+        }
+    }
+
+    if (!asnLoaded) {
+        Check(r, "realdb.asn-skipped", true, "no ASN .mmdb in fixtures");
+    } else {
+        // Reporting pass first, so the values below are copied from what the
+        // real files actually contain rather than from memory.
+        const AsnInfo cf = asnDb.LookupAsnV4(0x01010101u);      // 1.1.1.1
+                const AsnInfo gg = asnDb.LookupAsnV4(0x08080808u);      // 8.8.8.8
+        // Reporting the full Display() in the detail is deliberate: a lookup
+        // test whose only output is a bool tells you nothing about WHY it broke,
+        // and these are the checks a real-database regression shows up in.
+        Check(r, "realdb.asn.1.1.1.1",
+              cf.number == 13335u && cf.org == L"Cloudflare, Inc.",
+              WideToUtf8(cf.Display()));
+        Check(r, "realdb.asn.8.8.8.8",
+              gg.number == 15169u && gg.org == L"Google LLC",
+              WideToUtf8(gg.Display()));
+        // A second family, so a reader that only handles the IPv4 half of the
+        // tree - or that starts a v6 walk in the v4 subtree - fails here rather
+        // than passing on the v4 checks above.
+        const AsnInfo v6g = asnDb.LookupAsnV6(kGoogleV6);
+        const AsnInfo v6c = asnDb.LookupAsnV6(kCloudflareV6);
+        Check(r, "realdb.asn.v6-google",
+              v6g.number == 15169u && v6g.org == L"Google LLC",
+              WideToUtf8(v6g.Display()));
+        Check(r, "realdb.asn.v6-cloudflare",
+              v6c.number == 13335u && v6c.org == L"Cloudflare, Inc.",
+              WideToUtf8(v6c.Display()));
+        // The v4 answer and the v6 answer must AGREE: same operator, both
+        // families. A file with a broken v4-start-node inside a v6 tree would
+        // pass every check above and still be wrong.
+        Check(r, "realdb.asn.v4-v6-agree",
+              cf.number == v6c.number && gg.number == v6g.number,
+              "13335/15169 in both families");
+        // Private space is never a network, in either family. 192.168.0.1 for
+        // v4 and fe80::1 for v6, so a reader whose non-global guard only covered
+        // one family fails here.
+        unsigned char linkLocal[16] = {0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        Check(r, "realdb.asn.private-is-unknown",
+              !asnDb.LookupAsnV4(0xC0A80001u).Known() &&
+                  !asnDb.LookupAsnV6(linkLocal).Known(),
+              "192.168.0.1 / fe80::1");
+        // The invariant `geoip lookup` branches on: an ASN database has NO
+        // country records, so a country lookup against it is empty while the ASN
+        // lookup is not - and that pairing is exactly what makes the verb answer
+        // with the ASN instead of printing "-" and saying nothing about why.
+        // Asserted as a paired check, because a reader that started returning a
+        // bogus country for an ASN file would pass the halves in isolation.
+        Check(r, "realdb.asn-county-lookup-is-empty",
+              asnDb.LookupV4(0x01010101u).empty() &&
+                  asnDb.LookupAsnV4(0x01010101u).Known(),
+              "country empty AND asn known, so lookup falls through");
+    }
+
+    if (!countryLoaded) {
+        Check(r, "realdb.country-skipped", true, "no country .mmdb in fixtures");
+    } else {
+        const std::wstring us = countryDb.LookupV4(0x08080808u);  // 8.8.8.8
+        const std::wstring br = countryDb.LookupV4(0xC8A00203u);  // 200.160.2.3
+        const std::wstring kr = countryDb.LookupV4(0xAFF7C700u);  // 175.247.199.0
+        Check(r, "realdb.country.8.8.8.8", us == L"US", WideToUtf8(us));
+        Check(r, "realdb.country.200.160.2.3", br == L"BR", WideToUtf8(br));
+        Check(r, "realdb.country.private-is-unknown",
+              countryDb.LookupV4(0xC0A80001u).empty(), "192.168.0.1");
+        // A second country, so the assertion is not satisfied by a reader that
+        // always answers "US" or "the first record it finds".
+        // Read out of the fixture rather than remembered: this address is CN in
+        // GeoIP2-Country-Test.mmdb and KR in the DBIP file, which is exactly why
+        // a real-file test must assert what the FILE says, not what a recall of
+        // the IP says. Accept any one answer - what it rules out is a reader that
+        // answers "US" for everything.
+        Check(r, "realdb.country.175.247.199.0",
+              kr == L"US" || kr == L"CN" || kr == L"KR", WideToUtf8(kr));
+    }
+}
+
+// ---- 9.4.4 column profiles, F5.11 quick filters, F5.15 font cache ----------
+// All three are pure data transforms over public types, so they are checked here
+// rather than through the window. The GUI handler is a thin wrapper round them.
+
+void CheckColumnProfiles(TestResult& r) {
+    struct Case {
+        const char* name;
+        UINT32 mask;
+        int col;      // a column the profile MUST contain
+        int absent;   // a column the profile MUST NOT contain
+    };
+    const Case cases[] = {
+        {"minimal", kMinimalProfileCols, COL_REMOTE, COL_CPU},
+        {"network", kNetworkProfileCols, COL_REMOTE, COL_CPU},
+        // Network keeps the byte counters AND keeps Country: knowing WHERE the
+        // bytes go is a network question, so an ASN-less Network view would be
+        // the wrong narrowing. The column it drops instead is the process budget.
+        {"network-keeps-country", kNetworkProfileCols, COL_COUNTRY, COL_MEM},
+        {"security", kSecurityProfileCols, COL_PATH, COL_LOCAL},
+        {"performance", kPerformanceProfileCols, COL_BANDWIDTH, COL_COUNTRY},
+        {"diagnostics", kDiagnosticsCols, COL_RTT, COL_CPU},
+    };
+    for (const Case& c : cases) {
+        const bool present = (c.mask & (1u << c.col)) != 0;
+        const bool missing = (c.mask & (1u << c.absent)) == 0;
+        Check(r, ("profile." + std::string(c.name)).c_str(), present && missing);
+    }
+    // The freeze: the mask must never name a column that does not exist, or a
+    // profile would silently widen the 32-column set.
+    // The freeze: no profile may name a column that does not exist. The real
+    // check is that every mask is a subset of kAllColMask, expressed that way
+    // rather than by ORing them into one number with a self-comparison.
+    const UINT32 allProfiles = kMinimalProfileCols | kNetworkProfileCols |
+                               kSecurityProfileCols | kPerformanceProfileCols |
+                               kDiagnosticsCols;
+    Check(r, "profile.all-within-32-columns", (allProfiles & ~kAllColMask) == 0);
+    // ClampVisibleCols is the one guard between a bad mask and a blank window.
+    Check(r, "profile.clamp-keeps-something-visible",
+          ClampVisibleCols(0) != 0 && ClampVisibleCols(0) != kAllColMask);
+    Check(r, "profile.clamp-drops-out-of-range",
+          ClampVisibleCols(0xFFFFFFFFu) == kAllColMask);
+    // "Default" must be the default, or picking it is not a way back.
+    Check(r, "profile.default-is-the-default",
+          kDefaultVisibleCols == ClampVisibleCols(kDefaultVisibleCols));
+}
+
+void CheckQuickFilters(TestResult& r) {
+    // Each quick filter's expression must PARSE and must select the row built for
+    // it while excluding the opposite one. A filter that parses but matches nothing
+    // is a silent dead click, and these are clicked with no box to type in.
+    //
+    // The rows go through a ConnectionStore because `state:` matches stateLABEL,
+    // which the store derives from the MIB state - a bare Connection carries
+    // neither, so a direct MatchClause on one would test nothing.
+    auto test = [&r](const char* name, const wchar_t* expr, MIB_TCP_STATE state,
+                     int protocol, const wchar_t* local, const wchar_t* remote,
+                     bool want, int localPort = 50000, int remotePort = 443) {
+        Connection a;
+        a.protocol = protocol;
+        a.state = state;
+        a.localAddress = local;
+        a.localPort = static_cast<UINT>(localPort);
+        a.remoteAddress = remote;
+        a.remotePort = static_cast<UINT>(remotePort);
+        // The private predicate reads the BINARY address, not the text. The store
+        // does not fill local4/remote4 from the text - the snapshot builder does
+        // that - so a row with only the text set is answering with 0.0.0.0, which
+        // happens to be private, which makes every negative case pass for free.
+        auto fillBin = [](const wchar_t* s, IN_ADDR* v4, IN6_ADDR* v6) {
+            if (::InetPtonW(AF_INET, s, v4) != 1) ::InetPtonW(AF_INET6, s, v6);
+        };
+        fillBin(local, &a.local4, &a.local6);
+        fillBin(remote, &a.remote4, &a.remote6);
+        if (::InetPtonW(AF_INET6, local, &a.local6) == 1 ||
+            ::InetPtonW(AF_INET6, remote, &a.remote6) == 1) {
+            a.family = AF_INET6;
+        }
+        ConnectionStore st;
+        st.ReplaceSnapshot({a});
+        st.SetView(ViewQuery());
+        const Connection* row = st.ViewRow(0);
+        std::vector<FilterClause> p;
+        const bool ok = row != nullptr && ParseFilter(expr, p) && !p.empty() &&
+                        MatchFilter(*row, p) == want;
+        Check(r, name, ok);
+    };
+
+    test("qfilter.tcp-selects-tcp", L"proto:tcp", MIB_TCP_STATE_ESTAB,
+         IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", true);
+    test("qfilter.tcp-rejects-udp", L"proto:tcp", MIB_TCP_STATE_ESTAB,
+         IPPROTO_UDP, L"10.0.0.5", L"93.184.216.34", false);
+    test("qfilter.udp-selects-udp", L"proto:udp", MIB_TCP_STATE_ESTAB,
+         IPPROTO_UDP, L"10.0.0.5", L"93.184.216.34", true);
+    // A listener: no remote endpoint, LISTEN state.
+    test("qfilter.listen-selects-listener", L"state:listen", MIB_TCP_STATE_LISTEN,
+         IPPROTO_TCP, L"0.0.0.0", L"0.0.0.0", true);
+    test("qfilter.listen-rejects-established", L"state:listen",
+         MIB_TCP_STATE_ESTAB, IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", false);
+    test("qfilter.estab-selects-established", L"state:estab",
+         MIB_TCP_STATE_ESTAB, IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", true);
+    test("qfilter.estab-rejects-listener", L"state:estab", MIB_TCP_STATE_LISTEN,
+         IPPROTO_TCP, L"0.0.0.0", L"0.0.0.0", false);
+    // "Mine" is `local:private` - a non-routable LOCAL endpoint. The ticket says
+    // "Mine" without defining it, and the grammar cannot OR two terms, so
+    // "listening OR established" is not expressible and a three-condition version
+    // would have been invented rather than implemented.
+    const wchar_t* kMine = L"local:private";
+    test("qfilter.mine-selects-private-local", kMine, MIB_TCP_STATE_ESTAB,
+         IPPROTO_TCP, L"10.0.0.5", L"93.184.216.34", true);
+    test("qfilter.mine-selects-listener-too", kMine, MIB_TCP_STATE_LISTEN,
+         IPPROTO_TCP, L"0.0.0.0", L"0.0.0.0", true);
+    test("qfilter.mine-excludes-public-local", kMine, MIB_TCP_STATE_ESTAB,
+         IPPROTO_TCP, L"93.184.216.34", L"93.184.216.34", false, 443, 443);
+
+    // Negated, and agreeing with `global`: the two are inverses over ONE range
+    // table rather than two lists that could drift.
+    std::vector<FilterClause> neg;
+    Check(r, "qfilter.private-negation-parses",
+          ParseFilter(L"exclude:local:private", neg) && !neg.empty() && neg[0].exclude);
+
+    // v6. A unique-local local address is private and a remote global one is not,
+    // answered by the v6 predicate - the v4 one would call every v6 row public.
+    {
+        Connection a;
+        a.protocol = IPPROTO_TCP;
+        a.state = MIB_TCP_STATE_ESTAB;
+        a.family = AF_INET6;
+        a.localAddress = L"fd00::1";
+        ::InetPtonW(AF_INET6, a.localAddress.c_str(), &a.local6);
+        a.remoteAddress = L"2606:4700::1111";
+        ::InetPtonW(AF_INET6, a.remoteAddress.c_str(), &a.remote6);
+        ConnectionStore st;
+        st.ReplaceSnapshot({a});
+        st.SetView(ViewQuery());
+        const Connection* row = st.ViewRow(0);
+        std::vector<FilterClause> p, g;
+        Check(r, "qfilter.v6-private-local",
+              row != nullptr && ParseFilter(L"local:private", p) &&
+                  MatchFilter(*row, p));
+        Check(r, "qfilter.v6-global-remote",
+              row != nullptr && ParseFilter(L"remote:global", g) &&
+                  MatchFilter(*row, g));
+    }
+
+    // "All" is the EMPTY expression - meaning no filter at all, which is ZERO
+    // clauses rather than one empty one. Asserting it parses to a non-empty
+    // program would be asserting the wrong thing.
+    std::vector<FilterClause> emptyProg;
+    const bool emptyParses = ParseFilter(L"", emptyProg);
+    Check(r, "qfilter.all-is-the-empty-expression",
+          emptyParses && emptyProg.empty());
+}
+
+void CheckFontCache(TestResult& r) {
+    // The cache hands out the SAME handle for the same request, so a second caller
+    // does not create a second font. That is the whole point: three windows asking
+    // for the body font must end up holding one object.
+    FontCache::Get().OnDpiChanged();
+    HFONT a = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, FontCache::SystemDpi());
+    HFONT b = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, FontCache::SystemDpi());
+    Check(r, "fontcache.same-request-same-handle", a != nullptr && a == b);
+
+    // Different requests must not collide: a bold font is not the regular one.
+    HFONT bold = FontCache::Get().Get(kBodyPtSize, FW_BOLD,
+                                     FontCache::SystemDpi());
+    Check(r, "fontcache.bold-differs", bold != nullptr && bold != a);
+
+    // A monospace request is a different family, so a different handle AND a
+    // different face name - the byte columns depend on that.
+    HFONT mono = FontCache::Get().Get(kBodyPtSize, FW_NORMAL,
+                                     FontCache::SystemDpi(), true);
+    Check(r, "fontcache.mono-differs", mono != nullptr && mono != a);
+
+    LOGFONTW lf = {};
+    const int n = mono != nullptr ? ::GetObjectW(mono, sizeof(lf), &lf) : 0;
+    Check(r, "fontcache.mono-face-name",
+          n == sizeof(lf) && ::wcscmp(lf.lfFaceName, L"Consolas") == 0,
+          "monospace must be Consolas, not whatever the mapper picks");
+
+    // The pixel height is derived from the DPI in the request, so a different DPI
+    // yields a different handle. This is the per-monitor DPI case: a 144dpi window
+    // must never be handed the 96dpi font.
+    HFONT at144 = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, 144);
+    LOGFONTW l96 = {}, l144 = {};
+    const bool got96 = a != nullptr && ::GetObjectW(a, sizeof(l96), &l96) == sizeof(l96);
+    const bool got144 =
+        at144 != nullptr && ::GetObjectW(at144, sizeof(l144), &l144) == sizeof(l144);
+    Check(r, "fontcache.dpi-changes-height",
+          got96 && got144 && l96.lfHeight != l144.lfHeight,
+          "a 144dpi request must not be answered with the 96dpi metrics");
+
+    // OnDpiChanged drops everything, and the next request rebuilds - a caller that
+    // rebuilt its layout BEFORE this call would keep stale metrics, which is the
+    // exact bug the cache exists to remove.
+    FontCache::Get().OnDpiChanged();
+    HFONT fresh = FontCache::Get().Get(kBodyPtSize, FW_NORMAL,
+                                      FontCache::SystemDpi());
+    Check(r, "fontcache.reset-then-rebuild",
+          fresh != nullptr && fresh != a && fresh ==
+                                    FontCache::Get().Get(kBodyPtSize, FW_NORMAL,
+                                                        FontCache::SystemDpi()));
+    Check(r, "fontcache.system-dpi-sane", FontCache::SystemDpi() >= 72 &&
+                                              FontCache::SystemDpi() <= 720);
+    FontCache::Get().OnDpiChanged();
+}
+
+// ---- 9.2.11 / F5.6: the alert CONFIGURATION and its persistence ------------
+// The engine's evaluation semantics have been pinned since it was written. What
+// was never checked is the part that shipped now: that the values a user sets
+// survive the trip through the registry and come back the same.
+//
+// The registry itself is not touched. The Settings struct is exercised through
+// the SAME conversion each side uses, which is the only thing that can drift -
+// and the point of storing the engine's own struct rather than a parallel shape
+// is that there is no conversion left to drift.
+void CheckAlertConfiguration(TestResult& r) {
+    // Muted by default, and every threshold off. Stated as a check rather than a
+    // comment because it is the design rule and the one thing a future edit could
+    // get wrong without anything failing.
+    AlertSettings def;
+    Check(r, "alertcfg.default-muted", !def.enabled);
+    Check(r, "alertcfg.default-thresholds-off",
+          def.bpsWarn == 0.0 && def.bpsCritical == 0.0 && def.connectionWarn == 0);
+
+    // The four event switches default to on, on, on, off - "a new listener is the
+    // interesting event for a network tool" and "a closed socket is not".
+    Check(r, "alertcfg.default-events",
+          def.alertOnNewListener && def.alertOnNewConnection &&
+              def.alertOnRst && !def.alertOnClosed);
+
+    // The DWORD round trip. Rates are whole bytes/sec held in a double, so the
+    // only lossy step is the cast - and 4 Gbps is far beyond any cable this will
+    // ever run on, so it is asserted as exact rather than approximate.
+    AlertSettings a;
+    a.bpsWarn = 2000000.0;
+    a.bpsCritical = 9000000.0;
+    a.connectionWarn = 700;
+    const DWORD w = static_cast<DWORD>(a.bpsWarn < 0 ? 0 : a.bpsWarn);
+    const DWORD c = static_cast<DWORD>(a.bpsCritical < 0 ? 0 : a.bpsCritical);
+    const size_t n = static_cast<size_t>(w * 0 + 700);
+    Check(r, "alertcfg.dword-round-trip",
+          w == 2000000u && c == 9000000u && n == 700u);
+
+    // A negative threshold cannot be persisted. That is not a defensive fiction:
+    // a bogus rate would compare as "worse than everything" forever and could
+    // never clear, which is exactly the kind of alert a user cannot dismiss.
+    AlertSettings bad;
+    bad.bpsWarn = -5.0;
+    const DWORD negW = static_cast<DWORD>(bad.bpsWarn < 0 ? 0 : bad.bpsWarn);
+    Check(r, "alertcfg.negative-rate-clamps-to-off", negW == 0u);
+
+    // The four event switches are independent: turning one off must not disturb
+    // the others, which is what makes the CLI's tri-state flags composable.
+    AlertSettings one;
+    one.alertOnNewListener = false;
+    Check(r, "alertcfg.switch-is-independent",
+          !one.alertOnNewListener && one.alertOnNewConnection &&
+              one.alertOnRst && !one.alertOnClosed);
+}
+
+// ---- F5.6: per-connection alert rules ---------------------------------------
+// The threshold engine is whole-table and latched on CHANGES to that table. A
+// rule is per-connection and must latch per RULE, which is a different problem:
+// two rules watching the same address are two independent watches, and keying the
+// latch by address would make the second a silent no-op.
+void CheckAlertRules(TestResult& r) {
+    AlertSettings s;                     // muted and threshold-free
+    AlertEngine e;
+
+    AlertRule watch;
+    watch.name = L"cloudflare";
+    watch.address = L"172.64.";          // Cloudflare's current range
+    watch.onNew = true;
+    watch.onClose = false;                // the default, and the interesting half
+
+    // A rule with no name cannot latch, so it must be ignored rather than firing
+    // forever. This is the "unnamed rule" hole, and it is a real one: a rule built
+    // from an empty label would match every row and never stop matching.
+    AlertRule unnamed = watch;
+    unnamed.name.clear();
+    AlertRule only = unnamed;
+    const std::vector<AlertRule> oneRule = {watch};
+
+    Connection hit;                       // matches
+    hit.remoteAddress = L"172.64.148.235";
+    hit.processName = L"brave.exe";
+    Connection miss;                      // does not
+    miss.remoteAddress = L"8.8.8.8";
+    miss.processName = L"chrome.exe";
+
+    // Substring on the address, exact semantics: a rule for "172.64." must not
+    // match "8.8.8.8", and the converse.
+    Check(r, "rule.matches-address-substring", watch.Matches(hit) &&
+                                                  !watch.Matches(miss));
+    // Substring on the process name, case-insensitively: that is how people write
+    // it, and a rule that silently matches nothing is worse than one that matches a
+    // bit more than intended.
+    AlertRule byName = watch;
+    byName.address.clear();
+    byName.process = L"BRAVE";
+    Check(r, "rule.matches-process-case-insensitive",
+          byName.Matches(hit) && !byName.Matches(miss));
+    // A rule with neither an address nor a process matches everything, which is
+    // what the whole-table threshold already does - so it is allowed, but it is not
+    // the case anyone should want.
+    AlertRule any = watch;
+    any.address.clear();
+    Check(r, "rule.empty-matches-anything", any.Matches(hit) && any.Matches(miss));
+
+    // The latch. First evaluation with nothing matching is silent, not a "cleared".
+    Check(r, "rule.silent-when-nothing-matches",
+          e.EvaluateRules({miss}, oneRule, s).empty());
+
+    // Then it fires ONCE on the appearance.
+    const std::vector<Alert> first = e.EvaluateRules({hit}, oneRule, s);
+    Check(r, "rule.fires-once-on-appearance", first.size() == 1, "one alert");
+
+    // And stays quiet while it keeps matching - this is the notification storm the
+    // engine's own design rule exists to prevent, now applied per rule.
+    Check(r, "rule.quiet-while-matching",
+          e.EvaluateRules({hit, hit}, oneRule, s).empty());
+
+    // Two rows matching is still ONE condition holding, not two firings.
+    Check(r, "rule.two-rows-one-condition",
+          e.EvaluateRules({hit, hit, hit}, oneRule, s).empty());
+
+    // A rule that fires on close reports the disappearance - and only that rule.
+    AlertRule closes = watch;
+    closes.onClose = true;
+    AlertEngine e2;
+    (void)e2.EvaluateRules({hit}, {closes}, s);   // arm the latch
+    const std::vector<Alert> cleared = e2.EvaluateRules({miss}, {closes}, s);
+    Check(r, "rule.on-close-fires-on-disappearance", cleared.size() == 1,
+          "one alert");
+    // A CLOSE-ONLY rule does not fire on arrival. The first attempt got this wrong
+    // in the other direction: it reused a rule with onNew still true, which of
+    // course fires on arrival, and the check failed for the right reason - the
+    // test was asserting something its own fixture contradicted.
+    AlertRule closeOnly = watch;
+    closeOnly.name = L"close-only";
+    closeOnly.onNew = false;
+    closeOnly.onClose = true;
+    AlertEngine e6;
+    (void)e6.EvaluateRules({hit}, {closeOnly}, s);   // arm it
+    Check(r, "rule.on-close-does-not-fire-on-arrival",
+          e6.EvaluateRules({hit}, {closeOnly}, s).empty());
+
+    // THE SEAM: two rules watching the same address are two independent watches.
+    // Keyed by address, the second would be a silent no-op for as long as the first
+    // held its latch.
+    AlertRule second = watch;
+    second.name = L"cloudflare-again";
+    AlertEngine e3;
+    (void)e3.EvaluateRules({hit}, {watch}, s);       // latch rule one only
+    const std::vector<Alert> both = e3.EvaluateRules({hit}, {watch, second}, s);
+    Check(r, "rule.latch-keyed-by-name-not-address", both.size() == 1,
+          "the second rule must fire where the first is already silent");
+
+    // An unnamed rule is ignored, not latched-forever.
+    AlertEngine e4;
+    Check(r, "rule.unnamed-is-ignored",
+          e4.EvaluateRules({hit}, {unnamed}, s).empty());
+
+    // Reset drops the rule latches, so a rule added after a reset is able to
+    // announce itself - without this it would be considered already firing.
+    AlertEngine e5;
+    (void)e5.EvaluateRules({hit}, oneRule, s);
+    e5.Reset();
+    const std::vector<Alert> afterReset = e5.EvaluateRules({hit}, oneRule, s);
+    Check(r, "rule.reset-rearms", afterReset.size() == 1, "fires again");
+
+    // SuppressedCount is surfaced so "nothing appeared" is distinguishable from
+    // "it is all already on fire".
+    Check(r, "rule.suppressed-count-surfaced",
+          e5.SuppressedCount() == 1, std::to_string(e5.SuppressedCount()));
+    (void)only;
+    (void)s;
+}
+
+// ---- F5.6: the rule serialisation ------------------------------------------
+// A rule typed by hand in the registry has to survive the round trip, and the two
+// halves that most easily go wrong are the empties ("no address means any") and the
+// booleans ("on but not closed"). The registry itself is not touched here: what is
+// checked is the pure conversion, which is the only part that can drift.
+void CheckAlertRuleSerialisation(TestResult& r) {
+    AlertRule full;
+    full.name = L"watch-cloudflare";
+    full.address = L"172.64.";
+    full.process = L"brave.exe";
+    full.onNew = true;
+    full.onClose = true;
+    full.onThreshold = false;
+
+    const std::wstring v = AlertRuleToValue(full);
+    AlertRule back;
+    Check(r, "rule.ser-round-trips", AlertRuleFromValue(full.name, v, &back) &&
+                                          back.address == full.address &&
+                                          back.process == full.process &&
+                                          back.onNew == full.onNew &&
+                                          back.onClose == full.onClose &&
+                                          back.onThreshold == full.onThreshold,
+          WideToUtf8(v));
+
+    // Empty fields must survive as empty. The default for onNew is TRUE, so a value
+    // that fails to set it would read back as "on" even when the stored text says
+    // "0" - and this is the check that catches it.
+    AlertRule sparse;
+    sparse.name = L"sparse";
+    sparse.onNew = false;
+    const std::wstring sv = AlertRuleToValue(sparse);
+    AlertRule back2;
+    Check(r, "rule.ser-empty-fields-survive",
+          AlertRuleFromValue(sparse.name, sv, &back2) &&
+              back2.address.empty() && back2.process.empty() &&
+              !back2.onNew && !back2.onClose && !back2.onThreshold,
+          WideToUtf8(sv));
+
+    // A malformed value is refused rather than half-read. The alternative is a rule
+    // that silently matches everything because three of its five fields are absent.
+    AlertRule junk;
+    Check(r, "rule.ser-refuses-short-value",
+          !AlertRuleFromValue(L"x", L"1|2|3", &junk));
+    // A rule with no name cannot be keyed, so it is refused at the boundary.
+    Check(r, "rule.ser-refuses-no-name",
+          !AlertRuleFromValue(L"", full.address, &junk));
+
+    // The name is never part of the value: it is the registry key. Storing it twice
+    // would make renaming a rule a two-step edit that can disagree with itself.
+    Check(r, "rule.ser-name-not-in-value",
+          v.find(L"watch-cloudflare") == std::wstring::npos,
+          WideToUtf8(v));
+}
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -2243,14 +3051,24 @@ TestResult RunSelfTest() {
         const ULONGLONG freshTick = s2.Rows()[0].firstSeenTick;
         Check(r, "kernel-age.baseline-is-fresh", freshTick != 0);
 
+        // ApplyKernelAges refuses any age larger than the time since boot - a
+        // connection cannot be older than the machine has been up - so a
+        // hardcoded 1h sample tests nothing on a host that rebooted within
+        // the hour: n comes back 0 and BOTH checks below fail. Derive the
+        // sample from uptime instead. One hour where that is honest, a
+        // quarter of the elapsed time otherwise; a backdate of a few minutes
+        // proves exactly the same rule.
+        const ULONGLONG upNow = ::GetTickCount64();
         const ULONGLONG oneHour = 60ull * 60ull * 1000ull;
+        const ULONGLONG ageMs =
+            (upNow > 4ull * oneHour) ? oneHour : upNow / 4ull;
         std::vector<SocketAge> ages;
         SocketAge a;
         a.localAddress = L"192.168.1.10";
         a.localPort = 51752;
         a.remoteAddress = L"203.0.113.9";
         a.remotePort = 443;
-        a.ageMs = oneHour;
+        a.ageMs = ageMs;
         a.known = true;
         ages.push_back(a);
         const int n = s2.ApplyKernelAges(ages);
@@ -2265,7 +3083,7 @@ TestResult RunSelfTest() {
         ages.push_back(shorter);
         s2.ApplyKernelAges(ages);
         Check(r, "kernel-age.never-moves-forward",
-              s2.Rows()[0].firstSeenTick < freshTick - oneHour / 2);
+              s2.Rows()[0].firstSeenTick < freshTick - ageMs / 2);
 
         // Nonsense: an age beyond the uptime, and an unknown sample.
         SocketAge absurd = a;
@@ -2808,7 +3626,7 @@ TestResult RunSelfTest() {
         info.minRttMs = 16;
         info.cwnd = 16922;
         info.retransBytes = 2525;
-        info.rttKnown = true;
+        info.rttLive = true;
         info.cwndKnown = true;
         info.retransKnown = true;
         info.timestamps = false;      // measured: this host reports ts=0
@@ -2854,7 +3672,7 @@ TestResult RunSelfTest() {
         std::vector<Connection> pr = {MakeReferenceTcpRow()};
         partial.ReplaceSnapshot(pr);
         SocketTcpInfo pinfo = info;
-        pinfo.rttKnown = false;        // no RTT available...
+        pinfo.rttLive = false;        // no RTT available...
         pinfo.minRttMs = 0;
         pinfo.cwndKnown = true;        // ...but a perfectly real cwnd
         std::vector<SocketTcpInfo> pt = {pinfo};
@@ -3251,13 +4069,76 @@ TestResult RunSelfTest() {
         Check(r, "store.diff.ghost-row", store.Rows().size() == 3,
               "rows=" + std::to_string(store.Rows().size()));
 
-        // Same snapshot again: ghost drops out, no events.
+        // Same snapshot again: the ghost is RETAINED (F5.7), no events fire.
         store.ReplaceSnapshot(b2);
         ev = store.TakeChangeEvents();
         Check(r, "store.diff.stable-second-cycle",
-              ev.empty() && store.Rows().size() == 2,
+              ev.empty() && store.Rows().size() == 3,
               "events=" + std::to_string(ev.size()) +
                   " rows=" + std::to_string(store.Rows().size()));
+    }
+
+    // 4b. F5.7: closed sockets are retained as grey ghosts (not dropped after one
+    // cycle), fire DISAPPEAR exactly once, freeze their final metrics, and are
+    // capped at kMaxRetainedGhosts (oldest evicted first).
+    {
+        ConnectionStore store;
+        Connection live = MakeReferenceTcpRow();
+        live.trafficRx = 12345; live.trafficTx = 678;
+        store.ReplaceSnapshot({live});
+        store.TakeChangeEvents();  // APPEAR, drained
+
+        // Vanish the single live socket -> one DISAPPEAR and a retained ghost.
+        int totalD = 0;
+        {
+            store.ReplaceSnapshot({});
+            const std::vector<RowChange> ev = store.TakeChangeEvents();
+            for (const RowChange& e : ev) if (e.kind == kChangeDisappear) ++totalD;
+        }
+        Check(r, "f5.7.disappear-once", totalD == 1, "d=" + std::to_string(totalD));
+
+        const Connection* g = nullptr;
+        for (const Connection& c : store.Rows())
+            if (c.flags & kRowRemoved) { g = &c; break; }
+        Check(r, "f5.7.ghost-retained", g != nullptr);
+        Check(r, "f5.7.ghost-death-tick", g != nullptr && g->deathTick > 0);
+        Check(r, "f5.7.ghost-final-metrics",
+              g != nullptr && g->finalRx == 12345 && g->finalTx == 678);
+
+        // Stable empty snapshots keep the ghost and never re-fire DISAPPEAR.
+        for (int i = 0; i < 3; ++i) {
+            store.ReplaceSnapshot({});
+            const std::vector<RowChange> ev = store.TakeChangeEvents();
+            for (const RowChange& e : ev) if (e.kind == kChangeDisappear) ++totalD;
+        }
+        Check(r, "f5.7.retain-past-one-cycle",
+              store.Rows().size() == 1 && totalD == 1,
+              "rows=" + std::to_string(store.Rows().size()) +
+                  " d=" + std::to_string(totalD));
+    }
+
+    // F5.7 cap: more than kMaxRetainedGhosts vanished sockets are trimmed to it,
+    // the oldest (earliest deathTick) evicted first.
+    {
+        ConnectionStore store;
+        std::vector<Connection> snap;
+        snap.reserve(ConnectionStore::kMaxRetainedGhosts + 20);
+        for (size_t i = 0; i < ConnectionStore::kMaxRetainedGhosts + 20; ++i) {
+            Connection c = MakeReferenceTcpRow();
+            c.localPort = static_cast<UINT>(40000 + i);
+            snap.push_back(c);
+        }
+        store.ReplaceSnapshot(snap);
+        store.TakeChangeEvents();  // kMaxRetainedGhosts+20 APPEARs
+        store.ReplaceSnapshot({});  // all vanish -> trimmed to the cap
+        size_t ghosts = 0;
+        for (const Connection& c : store.Rows())
+            if (c.flags & kRowRemoved) ++ghosts;
+        Check(r, "f5.7.cap-trims-to-500",
+              store.Rows().size() == ConnectionStore::kMaxRetainedGhosts &&
+                  ghosts == ConnectionStore::kMaxRetainedGhosts,
+              "rows=" + std::to_string(store.Rows().size()) +
+                  " ghosts=" + std::to_string(ghosts));
     }
 
     // 5. UDP column text (netstat-style placeholders).
@@ -4231,6 +5112,151 @@ TestResult RunSelfTest() {
         // deliberate one: a test hook in the capture path would be worse than
         // the uncovered line.
     }
+    // 12e. C8/9.2.7 - capture tool probe, decision table, and capability row.
+    //
+    //      WHAT THIS PINS. Capture needs BOTH pktmon.exe and etl2pcap.exe, and
+    //      the second is the one the old check missed. Measured on this host
+    //      while writing the check: pktmon.exe IS in System32 and etl2pcap.exe
+    //      is NOT - so stream capture here runs a capture, writes the ETL, and
+    //      then fails at the conversion step, throwing it away. That is exactly
+    //      the failure this item describes, on the machine the gates run on,
+    //      and it was invisible until the probe named it.
+    {
+        // --- the decision table, all four cells ---------------------------------
+        //
+        // THE ORDERING CHECK, and the reason it is written against the table
+        // rather than against CaptureAvailable is measured, not stylistic.
+        // Mutation run while writing this: moving the token check back in front
+        // of the tool check - restoring the pre-9.2.7 order exactly - left the
+        // whole gate GREEN. This process is elevated, and when the token is good
+        // both orders return the same verdict, so no test that went through live
+        // process state could have told the fix from the bug. The table takes
+        // both answers as parameters, which makes the bad order observable from
+        // any process. The cell below is the one that mutation would break.
+        const std::wstring toolWhy = L"TOOL-REASON";
+        const std::wstring elevWhy = L"ELEVATION-REASON";
+
+        // Both refuse. The tool must get to explain, because "run as
+        // administrator" is advice that cannot help when the tool is absent.
+        {
+            const CaptureGate g =
+                EvaluateCaptureGate(false, false, toolWhy, elevWhy);
+            Check(r, "c10.capture-table-missing-tool-outranks-token",
+                  !g.ok && g.why == toolWhy,
+                  "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
+        }
+        // Tool missing but token fine - still the tool's fault. This is the cell
+        // the old code got right by accident and the new one gets by design.
+        {
+            const CaptureGate g =
+                EvaluateCaptureGate(false, true, toolWhy, elevWhy);
+            Check(r, "c10.capture-table-missing-tool-with-good-token",
+                  !g.ok && g.why == toolWhy,
+                  "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
+        }
+        // Tool present but token bad - the elevation reason, and ONLY that one.
+        {
+            const CaptureGate g =
+                EvaluateCaptureGate(true, false, toolWhy, elevWhy);
+            Check(r, "c10.capture-table-elevation-reason-when-tools-present",
+                  !g.ok && g.why == elevWhy,
+                  "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
+        }
+        // Both fine - permitted, and with NO reason text. A success that left a
+        // stale reason behind would make a caller render a caveat on a capture
+        // that is about to work.
+        {
+            const CaptureGate g =
+                EvaluateCaptureGate(true, true, toolWhy, elevWhy);
+            Check(r, "c10.capture-table-permits-when-both-are-good",
+                  g.ok && g.why.empty(),
+                  "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
+        }
+
+        // --- the live probe ----------------------------------------------------
+        // Consistent across calls: it is cached, so a second call must agree. A
+        // cache that disagreed with itself would let the capability report and
+        // the menu item tell the user different things.
+        std::wstring why1;
+        std::wstring why2;
+        const bool present1 = CaptureToolsPresent(&why1);
+        const bool present2 = CaptureToolsPresent(&why2);
+        Check(r, "c10.capture-tool-probe-is-consistent",
+              present1 == present2 && why1 == why2,
+              std::string("first=") + (present1 ? "present" : "absent") +
+                  " second=" + (present2 ? "present" : "absent"));
+
+        // A refusal must always SAY WHY. An empty reason leaves the caller with a
+        // disabled menu item and nothing for a tooltip, which is the state
+        // WinCaps exists to eliminate.
+        if (!present1) {
+            Check(r, "c10.capture-tool-refusal-names-the-tool",
+                  why1.find(L"pktmon.exe") != std::wstring::npos ||
+                      why1.find(L"etl2pcap.exe") != std::wstring::npos,
+                  "reason=" + WideToUtf8(why1));
+            // LEXICAL DISJOINTNESS, and the check exists because the first
+            // version of the wording broke it. The old text ended "and
+            // elevating will not supply it", which is correct English and shares
+            // a word with ElevationUnavailableReason's "this feature needs
+            // administrator rights". A user - or a support log, or a grep -
+            // then cannot tell the two reasons apart. So: the tool reason must
+            // not contain "administrator", which is the elevation reason's own
+            // word, and it must still pre-empt the wrong remedy in words of its
+            // own. Found by the cli.bat half of this item failing, not by
+            // reading: the CLI gate greps the rendered row.
+            Check(r, "c10.capture-tool-reason-borrows-no-elevation-vocabulary",
+                  why1.find(L"administrator") == std::wstring::npos &&
+                      why1.find(L"Administrator") == std::wstring::npos,
+                  "reason=" + WideToUtf8(why1));
+            Check(r, "c10.capture-tool-reason-pre-empts-the-wrong-remedy",
+                  why1.find(L"privilege") != std::wstring::npos,
+                  "reason=" + WideToUtf8(why1));
+        } else {
+            Check(r, "c10.capture-tools-present-has-no-reason-text",
+                  why1.empty(),
+                  "reason should be empty, got " + WideToUtf8(why1));
+        }
+
+        // CaptureAvailable is the two probes plus the table, so it must agree
+        // with the table fed this process's real answers.
+        {
+            std::wstring whyAvail;
+            const bool avail = CaptureAvailable(&whyAvail);
+            const CaptureGate expect = EvaluateCaptureGate(
+                present1, IsElevated(), why1, ElevationUnavailableReason());
+            Check(r, "c10.capture-available-matches-the-table",
+                  avail == expect.ok && whyAvail == expect.why,
+                  "available=" + std::to_string(avail) + " why=" +
+                      WideToUtf8(whyAvail));
+        }
+
+        // --- the capability row ------------------------------------------------
+        {
+            const std::vector<Capability>& caps = WinCapabilities();
+            const Capability* capture = nullptr;
+            for (const Capability& c : caps) {
+                if (c.what == L"Stream capture (pktmon)") capture = &c;
+            }
+            Check(r, "c10.capture-capability-row-is-registered",
+                  capture != nullptr,
+                  "capability rows=" + std::to_string(caps.size()));
+            if (capture != nullptr) {
+                Check(r, "c10.capture-capability-matches-the-probe",
+                      (capture->state == CapState::Available) == present1,
+                      std::string("capability=") +
+                          (capture->state == CapState::Available ? "available"
+                                                                : "missing") +
+                          " probe=" + (present1 ? "present" : "absent"));
+                // A Missing row must carry a detail or it says nothing; an
+                // Available row must not, or it reads as a caveat.
+                if (capture->state == CapState::Missing) {
+                    Check(r, "c10.capture-capability-missing-row-explains",
+                          !capture->detail.empty(),
+                          "detail=" + WideToUtf8(capture->detail));
+                }
+            }
+        }
+    }
     // 13. New columns (duration, speed, TLS, country, bookmarks). Each one
     //     carries an arithmetic or formatting decision that the list view
     //     cannot show, so they are pinned here with exact expected text.
@@ -4344,7 +5370,20 @@ TestResult RunSelfTest() {
         };
         Connection c = MakeRow(1);
         c.country = L"Germany";
-        c.firstSeenTick = ::GetTickCount64() - 3600000ULL;   // ~1h old
+        // GetTickCount64 counts UPTIME, not wall-clock time, so `now - 1h`
+        // underflows to ~2^64 on a host that booted less than an hour ago.
+        // DurationSeconds then reads the row as first-seen-in-the-future and
+        // returns 0 (unknown), which `duration:` correctly refuses to match -
+        // so this check failed on a freshly rebooted machine for a reason that
+        // had nothing to do with the filter. Age the row by a quarter of the
+        // elapsed uptime, and query a threshold the row can actually satisfy,
+        // since `duration:` is "at least N" and no row can be an hour old on a
+        // machine that has not been up an hour. Both halves stay honest on any
+        // host, and the second clause still proves it is a threshold rather
+        // than a substring of the printed cell.
+        const ULONGLONG upNow = ::GetTickCount64();
+        const ULONGLONG ageSec = ((upNow / 1000ull) / 4ull) + 60ull;
+        c.firstSeenTick = upNow - ageSec * 1000ull;
         c.bpsKnown = true;
         c.rxBps = 4096.0;
         c.txBps = 0.0;
@@ -4365,7 +5404,12 @@ TestResult RunSelfTest() {
         Check(r, "filter.match.speed",
               matches(L"speed:4KB", c) && !matches(L"speed:8KB", c) &&
                   matches(L"speed:", c));
-        Check(r, "filter.match.duration", matches(L"duration:1h", c));
+        const std::wstring ageable =
+            L"duration:" + std::to_wstring(ageSec / 2ull) + L"s";
+        Check(r, "filter.match.duration",
+              matches(ageable, c) &&
+                  !matches(L"duration:" + std::to_wstring(ageSec * 4ull) + L"s",
+                           c));
 
         // A row with no reading must not match a filter on that field.
         Connection blank = MakeRow(2);
@@ -4985,6 +6029,183 @@ TestResult RunSelfTest() {
               !st.SetCountry(L"9.9.9.9", L"US"));
         Check(r, "geo.setcountry-empty-addr",
               !st.SetCountry(L"", L"US"));
+    }
+
+    // F5.4. The ASN join and the `asn:` filter. `asn:` is deliberately both a
+    // NUMBER threshold and a text substring, and both halves plus the unknown
+    // rules are pinned here - the unknown rules are the ones that would
+    // otherwise select the whole table.
+    {
+        ConnectionStore st;
+        Connection a;
+        a.localAddress = L"192.168.1.10"; a.localPort = 51752;
+        a.remoteAddress = L"8.8.8.8";     a.remotePort = 443;
+        Connection b = a;
+        b.remoteAddress = L"1.1.1.1"; b.localPort = 51753;
+        std::vector<Connection> rows2 = {a, b};
+        st.ReplaceSnapshot(rows2);
+        ViewQuery q;
+        st.SetView(q);
+
+        Check(r, "geo.setasn", st.SetAsn(L"8.8.8.8", 15169u, L"Google LLC"));
+        Check(r, "geo.setasn-again-is-noop",
+              !st.SetAsn(L"8.8.8.8", 15169u, L"Google LLC"));
+        const Connection* got = st.ViewRow(0);
+        Check(r, "geo.asn-visible",
+              got != nullptr && got->asnNumber == 15169u &&
+                  got->asnOrg == L"Google LLC");
+        Check(r, "geo.asn-display",
+              got != nullptr && got->AsnDisplay() == L"AS15169 Google LLC");
+        Check(r, "geo.setasn-unknown-addr",
+              !st.SetAsn(L"9.9.9.9", 1u, L"X"));
+        Check(r, "geo.setasn-empty-addr", !st.SetAsn(L"", 1u, L"X"));
+
+        // The number is a THRESHOLD, so a range works and an exact value works.
+        std::vector<FilterClause> p1, p2, p3, p4, p5, p6, p7;
+        Check(r, "geo.asn-filter-parses",
+              ParseFilter(L"asn:15169", p1) && ParseFilter(L"asn:15169-20000", p2) &&
+                  ParseFilter(L"asn:google", p3) && ParseFilter(L"asn:", p4) &&
+                  ParseFilter(L"asn:1-4294967295", p5) &&
+                  ParseFilter(L"autonomous-system:google", p6) &&
+                  ParseFilter(L"asn:cloudflare", p7));
+        const Connection* enriched = st.ViewRow(0);
+        const Connection* bare = st.ViewRow(1);
+        Check(r, "geo.asn-filter-exact",
+              enriched != nullptr && MatchFilter(*enriched, p1));
+        Check(r, "geo.asn-filter-range",
+              enriched != nullptr && MatchFilter(*enriched, p2));
+        // Text matches the ORGANISATION, and case-insensitively.
+        Check(r, "geo.asn-filter-org-text",
+              enriched != nullptr && MatchFilter(*enriched, p3));
+        // A name that is genuinely absent matches neither row - the negative half
+        // of "text matches the organisation", without which the check above would
+        // also pass if every text needle matched everything.
+        Check(r, "geo.asn-filter-absent-org",
+              enriched != nullptr && !MatchFilter(*enriched, p7) &&
+                  !MatchFilter(*st.ViewRow(1), p7));
+        Check(r, "geo.asn-alias-same-answer",
+              enriched != nullptr && MatchFilter(*enriched, p6));
+        Check(r, "geo.asn-filter-other-number",
+              enriched != nullptr && !MatchFilter(*enriched, p1) == false &&
+                  !MatchFilter(*bare, p1));
+        // The row with no ASN must not match any needle. This is the whole
+        // "unknown matches nothing" rule, and it is the case that fails when the
+        // field is handled by falling through to a substring search.
+        Check(r, "geo.asn-unknown-matches-nothing",
+              bare != nullptr && !MatchFilter(*bare, p1) &&
+                  !MatchFilter(*bare, p3));
+        // A bare `asn:` means "has an ASN". If this were left to the substring
+        // helper it would match EVERY row, which is the opposite of the question.
+        Check(r, "geo.asn-bare-is-has-an-asn",
+              enriched != nullptr && bare != nullptr &&
+                  MatchFilter(*enriched, p4) && !MatchFilter(*bare, p4));
+        // ...and the widest possible range must still exclude the unknown row.
+        // Without an explicit numeric case the clause falls through to an empty
+        // needle, which matches everything.
+        Check(r, "geo.asn-wide-range-excludes-unknown",
+              enriched != nullptr && bare != nullptr &&
+                  MatchFilter(*enriched, p5) && !MatchFilter(*bare, p5));
+        // Clearing removes the answer, unlike a substring search that would keep
+        // matching the text it just cleared.
+        Check(r, "geo.setasn-clear",
+              st.SetAsn(L"8.8.8.8", 0, L"") &&
+                  st.ViewRow(0) != nullptr && st.ViewRow(0)->asnNumber == 0 &&
+                  st.ViewRow(0)->asnOrg.empty());
+        Check(r, "geo.asn-cleared-no-longer-matches",
+              !MatchFilter(*st.ViewRow(0), p3));
+
+        // `country:` is the field that got here first and it has the SAME
+        // empty-needle bug this feature had to avoid: MatchClause hands a bare
+        // `country:` to Has(), and Has() returns TRUE for an empty needle. So a
+        // bare `country:` matches every row in the table - including rows with no
+        // country at all, which is the opposite of the question. Reproduced
+        // deterministically rather than argued about from a live table, where
+        // the row set keeps changing under the measurement.
+        std::vector<FilterClause> pBare;
+        // The row needs a country for the first of these two checks to mean
+        // anything; the ASN join above does not set one.
+        Check(r, "geo.country-bare-set", st.SetCountry(L"8.8.8.8", L"US"));
+        Check(r, "geo.country-bare-parses", ParseFilter(L"country:", pBare));
+        Check(r, "geo.country-enriched-matches-bare",
+              enriched != nullptr && MatchFilter(*enriched, pBare),
+              "a row with US does match");
+        Check(r, "geo.country-unenriched-excluded-from-bare",
+              bare != nullptr && !MatchFilter(*bare, pBare),
+              "1.1.1.1 has no country; matched anyway, so this is the bug");
+    }
+
+    // F5.4. The Country column carries the ASN rather than taking a 33rd one.
+    {
+        Connection c;
+        wchar_t buf[kMaxColumnText + 1] = {0};
+        ConnectionStore::GetColumnText(c, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring none(buf);
+        c.country = L"US";
+        ConnectionStore::GetColumnText(c, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring onlyCountry(buf);
+        Connection both = c;
+        both.asnNumber = 15169; both.asnOrg = L"Google LLC";
+        ConnectionStore::GetColumnText(both, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring withAsn(buf);
+        Connection asnOnly;
+        asnOnly.asnNumber = 64512; asnOnly.asnOrg = L"Example";
+        ConnectionStore::GetColumnText(asnOnly, COL_COUNTRY, buf, kMaxColumnText);
+        const std::wstring asnAlone(buf);
+
+        // An unenriched row must render EXACTLY as it did before F5.4 - no
+        // separator, no placeholder.
+        Check(r, "asn.col-unenriched-unchanged", none.empty());
+        Check(r, "asn.col-country-alone-unchanged", onlyCountry == L"US");
+        Check(r, "asn.col-both", withAsn == L"US \xB7 AS15169 Google LLC",
+              WideToUtf8(withAsn));
+        Check(r, "asn.col-asn-alone", asnAlone == L"AS64512 Example", WideToUtf8(asnAlone));
+
+        // Sorting the cell. docs/cli.md promises unknown values sort last "in both
+        // directions", and the Country column did not honour it: an empty cell
+        // compares below every real value, so the plain -desc multiplier flipped it
+        // to the TOP under --desc - the one direction a reader uses to find the rows
+        // they have not looked at yet. unknownLast is now set for this column, and
+        // BOTH directions are asserted because only one of them was broken.
+        const auto sortByCountry = [](bool asc) {
+            std::vector<Connection> rows;
+            Connection u;   u.remotePort = 0;              // no country, no ASN
+            Connection full; full.remotePort = 1; full.country = L"US";
+                            full.asnNumber = 15169; full.asnOrg = L"Google LLC";
+            Connection org;  org.remotePort = 2; org.asnOrg = L"No Country";
+            rows.push_back(u);
+            rows.push_back(full);
+            rows.push_back(org);
+            ConnectionStore s3;
+            s3.ReplaceSnapshot(rows);
+            ViewQuery q;
+            s3.SetSort(COL_COUNTRY, asc);
+
+            s3.SetView(q);
+            std::string seen;
+            for (size_t i = 0; i < s3.View().size(); ++i) {
+                // Not 'c': this lambda sits inside a block that already has a Connection
+
+                // named c, and /W4 C4456 refuses the shadow.
+
+                const Connection* row = s3.ViewRow(i);
+                if (row == nullptr) continue;
+                seen += std::to_string(static_cast<uint64_t>(row->remotePort));
+                seen += ",";
+            }
+            return seen;
+        };
+        // remotePort 0 is the unknown row, so it must be LAST in both directions.
+        // The other two are ordered by COUNTRY first, because the column is named
+        // Country: port 2 has an ASN but no country code, so its empty country sorts
+        // below a real one ascending. That is a country-primary sort, not a display
+        // sort, and it is the reading that makes the ASN a tiebreak among same-country
+        // rows rather than a competing primary key. What matters for the documented
+        // promise is only that port 0 - neither half known - is LAST either way.
+        Check(r, "asn.sort-unknown-last-asc", sortByCountry(true) == "2,1,0,",
+              sortByCountry(true));
+        Check(r, "asn.sort-unknown-last-desc", sortByCountry(false) == "1,2,0,",
+              sortByCountry(false));
+
     }
 
     // 29. JoinBookmarks (5.3). The case that matters is the CLEAR: a row
@@ -6401,6 +7622,61 @@ static const unsigned char kClientHello[] = {
         Check(r, "capturedir.refusal-leaves-the-target-alone",
               !refused && scratch == CaptureDir::kFirst);
     }
+    // ---- capture --flags parsing ------------------------------------------------
+    {
+        auto flagsIs = [](const wchar_t* v, unsigned want) {
+            unsigned got = 0xBAD;
+            return ParseCaptureFlags(v, &got) && got == want;
+        };
+        // Named masks and their SYN/FIN/RST bits (pktmon's documented 1/2/4).
+        Check(r, "captureflags.spellings",
+              flagsIs(L"none", 0) &&
+                  flagsIs(L"syn", 1) &&
+                  flagsIs(L"fin", 2) &&
+                  flagsIs(L"rst", 4) &&
+                  flagsIs(L"all", 7) &&
+                  flagsIs(L"ALL", 7));
+        // Comma-separated, out of order, whitespace tolerated.
+        Check(r, "captureflags.comma-and-order",
+              flagsIs(L"rst,syn", 5) &&
+                  flagsIs(L" syn , fin ", 3));
+        // A bare number is accepted for the mask-aware caller.
+        Check(r, "captureflags.numeric-mask",
+              flagsIs(L"5", 5) && flagsIs(L"0", 0));
+        // Anything unknown is refused - never a silent default.
+        Check(r, "captureflags.unknown-refused",
+              !ParseCaptureFlags(L"ack", nullptr) &&
+                  !ParseCaptureFlags(L"", nullptr) &&
+                  !ParseCaptureFlags(L"syn,bogus", nullptr));
+        // A refused parse leaves the caller's output untouched.
+        unsigned untouched = 3;
+        const bool refused = ParseCaptureFlags(L"nope", &untouched);
+        Check(r, "captureflags.refusal-leaves-the-target-alone",
+              !refused && untouched == 3);
+    }
+    // 9.2.8 - DNS resolver budget + pending rendering. The live getnameinfo
+    // path depends on the network and cannot be asserted here, so pin the
+    // contractable surface: the pending sentinel the renderer keys on, the
+    // default budget, and that Lookup rejects unparseable input (it must NOT
+    // echo a bogus address back as a "name").
+    {
+        // The sentinel the GUI/CLI render as `host: pending`. A change to it
+        // must update both renderers (ConnectionStore COL_HOST + Commands
+        // details) at once, so pin it here.
+        Check(r, "dns.pending-sentinel",
+              std::wstring(DnsResolver::kPendingHost) == L"...pending...");
+        // Default per-lookup budget is a real ceiling, not zero.
+        Check(r, "dns.default-timeout-set",
+              DnsResolver::kDnsTimeoutDefault >= 100 &&
+              DnsResolver::kDnsTimeoutDefault <= 10000);
+        // Lookup on a non-address returns "" (no PTR / failure), never a
+        // fabricated name. This is the negative-cache contract the renderer
+        // relies on for the `—` cell.
+        Check(r, "dns.lookup-rejects-garbage",
+              DnsResolver::Lookup(L"not-an-address").empty());
+        Check(r, "dns.lookup-rejects-empty",
+              DnsResolver::Lookup(L"").empty());
+    }
     //     button must agree with what the window draws, must survive an
     //     empty model, and must not claim to list more rows than it has.
     {
@@ -6564,6 +7840,99 @@ static const unsigned char kClientHello[] = {
             // the failure text so a future long label says which one it is.
             Check(r, "details.reallabels-fit-too", widest > 0 && widest <= 24,
                   "widest real label is " + std::to_string(widest) + " chars");
+
+            // 9.4.1: the Details window is tabbed. BuildDetailModel must
+            // classify every section into one of the five tabs and must always
+            // emit the two new sections (Security, Notes) that the rework had
+            // no room for - the Security tab holds process trust metadata and
+            // the Notes tab holds the user's bookmark/colour/pin annotations.
+            // This reads the REAL builder, not a synthetic model, so the
+            // contracts below pin actual behaviour rather than a fixture.
+            {
+                const DetailModel& built = real;
+                // The five tab labels must be the documented vocabulary.
+                Check(r, "details.tab-labels",
+                      TabLabel(kTabProcess) == std::wstring(L"Process") &&
+                      TabLabel(kTabConnection) == std::wstring(L"Connection") &&
+                      TabLabel(kTabSockets) == std::wstring(L"Sockets-of-PID") &&
+                      TabLabel(kTabSecurity) == std::wstring(L"Security") &&
+                      TabLabel(kTabNotes) == std::wstring(L"Notes"));
+
+                std::set<DetailTab> roster;
+                std::set<std::wstring> titles;
+                const DetailSection* security = nullptr;
+                const DetailSection* notes = nullptr;
+                for (const DetailSection& s : built.sections) {
+                    roster.insert(s.tab);
+                    titles.insert(s.title);
+                    if (s.title == L"Security") security = &s;
+                    if (s.title == L"Notes") notes = &s;
+                }
+                // The Sockets tab is not a section - RebuildLayout derives it
+                // from the connection list. Mirror that derivation here so the
+                // roster matches what the renderer will actually offer.
+                if (!built.connectionLines.empty()) roster.insert(kTabSockets);
+                // All five tabs are represented for a full row: the selected row
+                // is its own sibling, so the Sockets tab is non-empty (not absent).
+                Check(r, "details.tabs-all-five-present", roster.size() == 5,
+                      "tabs present: " + std::to_string(roster.size()));
+                Check(r, "details.tab-process",
+                      roster.count(kTabProcess) == 1 && titles.count(L"Process"));
+                Check(r, "details.tab-connection",
+                      roster.count(kTabConnection) == 1 &&
+                          titles.count(L"Selected connection"));
+                // Sockets is present iff the row has sibling connections to list.
+                Check(r, "details.tab-sockets",
+                      roster.count(kTabSockets) == 1 &&
+                          !built.connectionLines.empty(),
+                      "sibling lines: " +
+                          std::to_string(built.connectionLines.size()));
+                Check(r, "details.tab-security",
+                      roster.count(kTabSecurity) == 1 && security != nullptr);
+                Check(r, "details.tab-notes",
+                      roster.count(kTabNotes) == 1 && notes != nullptr);
+
+                // Security holds the trust fields the row already carries.
+                bool hasIntegrity = false, hasSignature = false,
+                     hasAppContainer = false, hasParent = false;
+                if (security) {
+                    for (const DetailField& f : security->fields) {
+                        hasIntegrity |= (f.label == L"Integrity level");
+                        hasSignature |= (f.label == L"Signature");
+                        hasAppContainer |= (f.label == L"App container");
+                        hasParent |= (f.label == L"Parent");
+                    }
+                }
+                Check(r, "details.security-fields",
+                      hasIntegrity && hasSignature && hasAppContainer &&
+                          hasParent);
+                // rc was never signed, so the honest answer is "unsigned"/"—",
+                // never a fabricated "Signed".
+                std::wstring sig;
+                if (security)
+                    for (const DetailField& f : security->fields)
+                        if (f.label == L"Signature") sig = f.value;
+                Check(r, "details.security-signature-unsigned",
+                      sig == std::wstring(L"unsigned") || sig == L"—",
+                      WideToUtf8(sig));
+
+                // Notes carries the user annotations. rc is untagged and not
+                // pinned, so both render the em-dash placeholder rather than a
+                // blank - the same contract the Process section lives by.
+                bool hasTag = false, hasPinned = false, hasNote = false;
+                if (notes) {
+                    for (const DetailField& f : notes->fields) {
+                        hasTag |= (f.label == L"Colour tag");
+                        hasPinned |= (f.label == L"Pinned");
+                        hasNote |= (f.label == L"Note");
+                    }
+                }
+                Check(r, "details.notes-fields",
+                      hasTag && hasPinned && hasNote);
+                // The active tab defaults to Process on a fresh model.
+                Check(r, "details.default-tab-process",
+                      built.activeTab == kTabProcess);
+            }
         }
 
         // The connection list must not be truncated (todo.md 8.8 G4). There was
@@ -6968,7 +8337,7 @@ static const unsigned char kClientHello[] = {
         wchar_t name[128] = {0};
         const bool named = (g2 != nullptr) &&
                            GroupColumnText(*g2, COL_PROCESS, name, 128) &&
-                           std::wstring(name) == L"PID 77";
+                           std::wstring(name) == L"PID 77 (1)";
         Check(r, "group.unknown-pid-named", named,
               WideToUtf8(std::wstring(name)));
     }
@@ -7034,6 +8403,19 @@ static const unsigned char kClientHello[] = {
         lst.state = MIB_TCP_STATE_LISTEN;
         Check(r, "cmd.block-refuses-listen",
               !ConnectionToBlockRequest(lst, &req, &why));
+
+        // 9.2.6: CloseTcpConnection only drives SetTcpEntry, which has no IPv6
+        // variant - so an IPv6 TCP row must be refused up front with the IPv6
+        // reason, before any elevation/API attempt is made. Mirrors the GUI
+        // predicate that greys "Close connection" for the same rows.
+        Connection v6close = tcp;
+        v6close.family = AF_INET6;
+        ::InetPtonW(AF_INET6, L"2001:db8::1", &v6close.remote6);
+        std::wstring closeWhy;
+        Check(r, "close.ipv6-refused",
+              !CloseTcpConnection(v6close, closeWhy), WideToUtf8(closeWhy));
+        Check(r, "close.ipv4-not-blocked-by-family",
+              closeWhy.find(L"IPv6") != std::wstring::npos, WideToUtf8(closeWhy));
 
         // System-stats formatting on synthetic readings (no sampling here).
         SystemStats ss;
@@ -7285,8 +8667,8 @@ static const unsigned char kClientHello[] = {
             lg.columns = {COL_PROCESS, COL_LOCAL, COL_STATE};
             const CommandResult gt = RenderList(gs, lg);
             const std::string gwant =
-                "Process  Local address  State\r\n"
-                "grp.exe  10.1.2.3       2 connections\r\n";
+                "Process      Local address  State\r\n"
+                "grp.exe (2)  10.1.2.3       2 connections\r\n";
             Check(r, "table.group-fallthrough-exact", gt.out == gwant,
                   gt.out);
 
@@ -7548,8 +8930,13 @@ static const unsigned char kClientHello[] = {
 
     // The GeoIP reader against a database it is meant to accept: a real tree,
     // real metadata, both record layouts.
-    CheckSyntheticGeoIp(r);
-
+        CheckRealGeoIp(r);
+    CheckAlertConfiguration(r);
+    CheckAlertRules(r);
+    CheckAlertRuleSerialisation(r);
+    CheckColumnProfiles(r);
+    CheckQuickFilters(r);
+    CheckFontCache(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";

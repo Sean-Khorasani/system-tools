@@ -1,4 +1,5 @@
 // TcpReasm.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See TcpReasm.h. The core is a per-direction segment store keyed by
 // sequence number, rendered in order at the end. A sparse-map approach is
 // used rather than appending on arrival so that out-of-order and duplicate

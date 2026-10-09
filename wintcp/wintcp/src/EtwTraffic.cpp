@@ -1,4 +1,5 @@
 // EtwTraffic.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See EtwTraffic.h for the researched event layout. Everything here is
 // defensive: any failure (no elevation, logger already in use, OpenTrace
 // failure) tears the session down and reports a readable reason.

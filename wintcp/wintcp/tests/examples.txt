@@ -21,7 +21,13 @@ geoip info --db GeoLite2-Country.mmdb
 list --db GeoLite2-Country.mmdb --filter "country:US" --columns remote,country,process --limit 3
 list --db GeoLite2-Country.mmdb --filter "country:US" --quiet && echo us-traffic
 list --dns --db GeoLite2-Country.mmdb --traffic --filter "state:estab" --limit 4 --columns remote,host,country,process,nettotal
+geoip info --db GeoLite2-ASN.mmdb
+list --db GeoLite2-Country.mmdb --asn-db GeoLite2-ASN.mmdb --filter "asn:google" --columns remote,country,process --limit 3
+list --db GeoLite2-Country.mmdb --asn-db GeoLite2-ASN.mmdb --filter "asn:15169-20000" --columns remote,country,process --limit 3
+list --db GeoLite2-Country.mmdb --asn-db GeoLite2-ASN.mmdb --filter "asn:" --columns remote,country,process --limit 3
+details --select "process:AnyDesk.exe state:estab" --asn-db GeoLite2-ASN.mmdb
 list --dns --traffic --filter "state:estab" --limit 4 --columns remote,host,process,nettotal
+list --dns --dns-timeout 5000 --filter "state:estab" --limit 4 --columns remote,host,process
 details --select "process:AnyDesk.exe state:estab" --traffic --dns
 list --watch 1 --changes --event appear,state --count 4
 list --watch 2 --changes --filter "proto:tcp" --count 5
@@ -32,6 +38,8 @@ capture --select "pid:22180" --dry-run
 capture --select "proto:tcp state:estab" --dry-run
 capture --select "pid:22180" --text --dir b --dry-run
 capture --select "pid:22180" --out "c:\tmp\stream.pcapng" --dry-run
+capture --select "pid:22180" --bin --out "c:\tmp\stream.bin" --dry-run
+capture --select "pid:22180" --filter 203.0.113.7 --dry-run
 list --filter "state:listen lport:445" --columns process,path,pid,local,state
 list --filter "state:listen exclude:127." --sort lport --columns pid,process,lport,local --limit 8
 list --filter "proto:udp" --columns process,pid,local,lport,proto --limit 5
@@ -102,3 +110,6 @@ version
 help
 help list
 help details
+alert rule list
+alert rule add --rule-name example --rule-address 198.51.100.
+alert rule remove --rule-name example

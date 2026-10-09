@@ -1,4 +1,5 @@
 // ConnectionStore.h
+// SPDX-License-Identifier: Apache-2.0
 // The model: owns all connection rows, computes refresh-to-refresh diffs
 // (stable row ids + appear/disappear/state-change events), applies the
 // active filter (plain text or field expression) and sorting
@@ -69,8 +70,13 @@ struct BookmarkMark {
 //   proto    := "tcp:" | "udp:" | "ipv4:" | "ipv6:"
 //   field    := local|remote|lport|rport|port|pid|process|path|
 //               state|proto|host|service|cpu|mem|disk|rx|tx|net|
-//               duration|speed|tls|country
+//               duration|speed|tls|country|asn
 //   value    := text | number | lo "-" hi   (numeric for port/pid fields)
+// `asn:` is deliberately BOTH: a bare number is a threshold on the AS number
+// (`asn:15169` and the range `asn:15169-20000` work), and anything else is a
+// substring of "AS<n> <org>", so `asn:cloudflare` finds the operator by name. One
+// field, two kinds of value, because "which network is this?" is asked both ways
+// and a user should not have to remember which spelling answers which.
 // The live-stat fields (cpu/mem/disk/rx/tx/net) take a numeric THRESHOLD, not
 // text: a bare number is MB (cpu: %), `K`/`M`/`G` suffixes multiply, a
 // range is "lo-hi", and a bare value is a lower bound. So `mem:100` is "100
@@ -90,7 +96,7 @@ enum class FilterField {
     Any, Local, Remote, LPort, RPort, Port, Pid,
     Process, Path, State, Proto, Host, Service,
     Cpu, Mem, Disk, Rx, Tx, Net,
-    Duration, Speed, Tls, Country, Note,
+    Duration, Speed, Tls, Country, Asn, Note,
     // G6. Rtt/MinRtt/Cwnd/Retrans are thresholds in MILLISECONDS / bytes,
     // matching what the columns show - the microseconds the kernel reports are
     // converted at the sampler boundary (see SocketTcpInfo), so a filter and a
@@ -295,6 +301,14 @@ public:
     size_t CountForPid(DWORD pid) const;
     const RowStats& Stats() const { return stats_; }
 
+    // F5.7: cap on how long a vanished socket is kept as a retained (grey)
+    // ghost, so the table does not grow without bound on a busy host.
+    static constexpr size_t kMaxRetainedGhosts = 500;
+    // The snapshot tick most recently installed by ReplaceSnapshot. The view
+    // uses it to flash a just-vanished socket red for one refresh and keep older
+    // ones as grey ghosts (F5.7).
+    ULONGLONG SnapshotTick() const { return lastSnapshotTick_; }
+
     // 5.1: group the view by process. Rebuilds the view so each entry is one
     // process rather than one connection; the underlying rows are untouched,
     // so SetGrouped(false) restores the flat view exactly.
@@ -354,6 +368,11 @@ public:
     // (4.3). Like SetHostname it updates the lower-case key so the text
     // filter can search a value the column is displaying.
     bool SetCountry(const std::wstring& addr, const std::wstring& country);
+    // F5.4: join an autonomous system onto every row sharing this remote address.
+    // number == 0 with an empty org means "no ASN", and CLEARS a previous answer
+    // - unlike SetCountry, which skips an empty code on the CLI path.
+    bool SetAsn(const std::wstring& addr, uint32_t number,
+                const std::wstring& org);
 
     // 5.3: mark rows whose remote endpoint is bookmarked and apply its colour
     // tag and note. The match is on address AND remote port, because that pair
@@ -458,6 +477,9 @@ private:
     // scanned all rows, which is O(pids x rows) per refresh on the UI
     // thread - ~35M iterations for 700 PIDs and 50k rows.
     void RebuildIndexes();
+    // F5.7: bound the retained-ghost history; evict the oldest beyond
+    // kMaxRetainedGhosts. Operates on the merged vector in place.
+    void TrimRetainedGhosts(std::vector<Connection>& rows);
 
     std::vector<Connection> rows_;          // includes last cycle's ghosts
     std::vector<size_t> viewIndex_;
@@ -475,6 +497,7 @@ private:
     int sortColumn_ = COL_PID;
     bool sortAsc_ = true;
     std::uint64_t nextId_ = 1;
+    ULONGLONG lastSnapshotTick_ = 0;     // F5.7: for SnapshotTick()
 };
 
 }  // namespace wintcp

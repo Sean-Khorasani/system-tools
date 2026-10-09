@@ -46,10 +46,20 @@ call :t "help short flag" "-h" 0 "Usage:"
 call :t "help list" "help list" 0 "--filter F"
 call :t "list --help" "list --help" 0 "Examples:"
 call :t "list help positional" "list help" 0 "Examples:"
+REM 9.3.2: reference listings generated from the parser tables - the markers
+REM come from the column/filter vocabulary itself, so a drift (parser accepts a
+REM name the help omits) is caught by a missing marker.
+call :t "help columns" "help columns" 0 "group-safe"
+call :t "help filters" "help filters" 0 "case-insensitive"
 call :t "help bogus" "help bogus" 2 "unknown command"
 call :t "unknown command" "nonsense" 2 "Try 'wintcp.exe help'"
 call :t "marker ignored" "version --__wintcp-elevated" 0 "WinTCP"
 call :t "version banner" "version" 0 "WinTCP"
+REM 9.3.1: `doctor` is environment diagnostics - always exit 0, and the markers
+REM come from its diagnostic sections (geoip/firewall/capture), which are stable
+REM regardless of what this machine actually has.
+call :t "doctor text" "doctor" 0 "geoip:"
+call :t "doctor json" "doctor --format json" 0 "geoIp"
 call :t "list header" "list --limit 1" 0 "Proto"
 call :t "list json array" "list --format json --limit 1" 0 "["
 call :t "list json columns" "list --format json --columns proto,pid --limit 1" 0 "proto"
@@ -375,6 +385,18 @@ REM --out IS shared with list/export on purpose (same meaning: a file to write),
 REM so it is accepted here rather than refused. Dry run only: a real run starts
 REM pktmon, which the harness must not do unattended.
 call :t "capture accepts out" "capture --select pid:99999999 --out C:\nope.pcapng --dry-run" 1 "no live row"
+REM `capture --bin` (2026-10-08). The allow-list is what the harness can assert:
+REM --bin is capture-only (rejected on `list`), and it is accepted alongside
+REM --out / --dry-run. The --bin-without-out and --bin-with --text refusals
+REM both resolve --select first, so they need a live row and are checked by hand
+REM like the rest of the capture refusals.
+call :t "bin is capture-only" "list --bin" 2 "not a switch of this command"
+call :t "capture accepts bin" "capture --select pid:99999999 --bin --out C:\nope.bin --dry-run" 1 "no live row"
+REM `capture --filter` (9.3.7): an extra pktmon address pin (-i). Accepted as a
+REM switch (an unlisted one would exit 2), validated as an IP BEFORE --select
+REM resolves, so a bad value is exit 2 on any box and a live row is never needed.
+call :t "capture accepts filter" "capture --select pid:99999999 --filter 1.2.3.4 --dry-run" 1 "no live row"
+call :t "capture rejects bad filter" "capture --select pid:99999999 --filter notanip --dry-run" 2 "is not an IPv4 or IPv6"
 call :t "list accepts interval" "list --filter tcp: --interval 1 --count 1 --quiet" 0 "."
 call :t "ps accepts interval" "ps --interval 1 --count 1 --quiet" 0 "."
 call :t "stat accepts interval" "stat --interval 1 --count 1" 0 "."
@@ -422,6 +444,80 @@ call :t "geoip lookup no ip" "geoip lookup --db %JUNKDB%" 2 "is required"
 call :t "geoip lookup junk db" "geoip lookup --db %JUNKDB% 1.2.3.4" 1 "cannot load database"
 call :t "list junk db" "list --db %JUNKDB% --limit 1" 1 "GeoIP:"
 call :t "list junk db + dns" "list --db %JUNKDB% --dns --limit 1" 1 "GeoIP:"
+
+REM F5.4 ASN. Same rejection-only policy as the country database above, for the
+REM same reason - no GeoLite2-ASN.mmdb ships with WinTCP and none is assumed on a
+REM dev box, so the happy path lives in wintcp-tests.exe unit's asn.* checks,
+REM which build a valid .mmdb in memory. What IS asserted here is the contract a
+REM user hits first: the switch is accepted by the verbs that document it, a bad
+REM file is named as the ASN database rather than as the country one, a missing
+REM value is a usage error, and a filter typed without the switch says which
+REM switch to add.
+call :t "asn db junk" "list --asn-db %JUNKDB% --limit 1" 1 "ASN database:"
+call :t "asn db no value" "list --asn-db" 2 "missing value for --asn-db"
+call :t "asn filter advice" "list --filter asn:15169 --limit 1" 0 "add --asn-db"
+call :t "asn filter advice by name" "list --filter asn:google --limit 1" 0 "add --asn-db"
+call :t "help filters knows asn" "help filters" 0 "asn"
+REM details needs a --select before it does anything, so this asserts only that
+REM --asn-db is RECOGNISED by that verb: reaching the "--select is required"
+REM usage error proves the switch was accepted. Asserting "not a switch of this
+REM command" here instead is what caught the verb allow-list being missed.
+call :t "asn db accepted by details" "details --asn-db %JUNKDB%" 2 "--select"
+
+REM doctor. --asn-db was not in this verb's switch list, so `doctor` silently
+REM refused to diagnose the second database - the one `asn:` failures point at, and
+REM the one with no other diagnostic path. doctor DIAGNOSES, which is why these
+REM assert what it says rather than a guessed exit code: like the --db block beside
+REM it, a file it cannot load is reported (exit 0), not turned into a failure,
+REM because answering the question is the point.
+call :t "doctor asn db no value" "doctor --asn-db" 2 "missing value for --asn-db"
+call :t "doctor asn db reports bad file" "doctor --asn-db %JUNKDB%" 0 "not loaded"
+call :t "doctor asn db names the reason" "doctor --asn-db %JUNKDB%" 0 "not a GeoIP database"
+REM geoip lookup answers from whichever kind of database it is handed. An ASN file
+REM has no country records, so before this it answered "-" for every address and
+REM said nothing about why: the file had loaded, the address was valid, and nothing
+REM was wrong. The rejection path is asserted here; the happy path needs a real
+REM .mmdb and is covered by wintcp-tests.exe unit's realdb.* checks.
+call :t "geoip lookup asn db junk" "geoip lookup --db %JUNKDB% 1.1.1.1" 1 "cannot load database"
+
+REM 9.2.11 / F5.6 alerting. The engine was pure, tested and NEVER WIRED - no
+REM persistence, no CLI, no caller. These assert the contract of the new surface:
+REM it reads the store, and a bad or missing value is an ARGUMENT error rather
+REM than a silently-disabled threshold - a typo that reads as "off" is the one
+REM mistake that makes the feature look broken for no visible reason.
+REM
+REM Deliberately NOT asserting a persisted value: these all share the real HKCU
+REM store, so a check depending on what a previous check left behind is a check
+REM that fails on the second run of this file. The round trip is pinned in
+REM wintcp-tests.exe unit, against a throwaway key path.
+call :t "alert reads default" "alert" 0 "muted"
+call :t "alert json shape" "alert --alert-format json" 0 "bpsWarn"
+call :t "alert json has connection count" "alert --alert-format json" 0 "connectionWarn"
+call :t "alert bad rate" "alert --bps-warn not-a-number" 2 "non-numeric"
+call :t "alert missing rate" "alert --bps-warn" 2 "missing"
+call :t "alert missing format" "alert --alert-format" 2 "missing"
+
+REM F5.6 rule sub-commands. Each rule is a registry value, so these DO exercise
+REM the real store - but they are written to be order-independent: every check
+REM adds its own uniquely-named rule and removes it again, so a second run of
+REM this file leaves exactly the state the first one did. The one check that
+REM cannot be order-independent is the "removed" one, which is why it asserts the
+REM failure AFTER a successful remove rather than before.
+set AR=clitest-%RANDOM%
+call :t "rule list empty or not" "alert rule list" 0 "name"
+call :t "rule add works" "alert rule add --rule-name %AR% --rule-address 198.51.100." 0 "added rule"
+call :t "rule add is idempotent" "alert rule add --rule-name %AR% --rule-address 198.51.100." 0 "added rule"
+call :t "rule appears in list" "alert rule list" 0 "%AR%"
+call :t "rule list json shape" "alert rule list --rule-format json" 0 "onNew"
+call :t "rule add needs a name" "alert rule add --rule-address 198.51.100." 2 "--rule-name"
+call :t "rule add refuses match-everything" "alert rule add --rule-name bare-%AR%" 2 "matches every connection"
+call :t "rule add missing address value" "alert rule add --rule-name x --rule-address" 2 "missing value"
+call :t "rule add json" "alert rule add --rule-name %AR%-json --rule-process svchost --rule-format json" 0 "added"
+call :t "rule remove works" "alert rule remove --rule-name %AR%" 0 "removed rule"
+call :t "rule remove twice fails" "alert rule remove --rule-name %AR%" 1 "no rule named"
+call :t "rule remove needs a name" "alert rule remove" 2 "--rule-name"
+call :t "rule unknown action" "alert rule nonsense" 2 "usage is add"
+call :t "rule cleanup json" "alert rule remove --rule-name %AR%-json" 0 "removed"
 
 REM D3: the unenrichable-window hint is ADVISORY and goes to stderr only, so
 REM stdout must stay a clean table that no marker pollutes. Whether the hint
@@ -662,6 +758,72 @@ if "%DLRC%"=="0" (
     set /a FAILS+=1
 )
 rmdir /s /q "%DL_DIR%" >nul 2>&1
+REM 9.2.7 - the capture capability row, and what its refusal is allowed to say.
+REM
+REM The row appears ONLY when a capture tool is missing, so the checks are
+REM conditional by nature: a machine with both pktmon.exe and etl2pcap.exe has
+REM nothing to assert. That is stated in the ok line rather than hidden, because a
+REM gate that passes by doing nothing is worse than no gate.
+REM
+REM Measured while writing this: pktmon.exe IS in System32 on the gate machine
+REM and etl2pcap.exe is NOT, so the interesting branch is the one that runs.
+REM
+REM Asserted when the row IS present:
+REM   1. it names an .exe, so the user is told what to look for;
+REM   2. it borrows none of the elevation reason's vocabulary.
+REM
+REM On (2) - the forbidden word is "administrator", NOT "elevat", and that is the
+REM measured outcome rather than a guess. The first version of this row ended
+REM "and elevating will not supply it", which is correct English, and this check
+REM failed on it - correctly. ElevationUnavailableReason says "this feature needs
+REM administrator rights", so "administrator" is the one word that belongs to
+REM exactly one of the two reasons. The row now says "relaunching with more
+REM privilege will not help", which pre-empts the same wrong remedy without
+REM borrowing the other reason's vocabulary.
+REM
+REM findstr cannot express "not contains", so the negative check matches the
+REM forbidden word and treats a hit as the failure. The pattern is anchored to
+REM the row's own key, so a hit must land on the CAPABILITY line and not on the
+REM report's separate "Administrator  yes" line, which is legitimate on an
+REM elevated run.
+set /a CHECKS+=1
+"%BIN%" version > "%OUT%" 2>&1
+set CAPRC=%ERRORLEVEL%
+findstr /c:"Stream capture (pktmon)" "%OUT%" >nul 2>&1
+if errorlevel 1 goto cap_tools_present
+findstr /r /c:"Stream capture (pktmon).*\.exe" "%OUT%" >nul 2>&1
+if errorlevel 1 (
+    echo FAIL capture capability row does not name an exe [cap]
+    set /a FAILS+=1
+) else (
+    echo ok - capture capability row names the missing exe
+)
+findstr /i /r /c:"Stream capture (pktmon).*administrator" "%OUT%" >nul 2>&1
+if not errorlevel 1 (
+    echo FAIL capture capability row borrows the elevation wording [cap2]
+    set /a FAILS+=1
+) else (
+    echo ok - capture capability row borrows no elevation wording
+)
+set /a CHECKS+=1
+if "%CAPRC%"=="0" (
+    echo ok - version exits 0 with the capture capability missing
+) else (
+    echo FAIL version exits non-zero with the capture capability missing [rc=%CAPRC%]
+    set /a FAILS+=1
+)
+goto cap_done
+:cap_tools_present
+echo ok - capture capability absent, both tools present
+set /a CHECKS+=1
+if "%CAPRC%"=="0" (
+    echo ok - version exits 0 with all capabilities present
+) else (
+    echo FAIL version exits non-zero with all capabilities present [rc=%CAPRC%]
+    set /a FAILS+=1
+)
+:cap_done
+:cap_done
 REM With NO explicit --columns a grouped stream gets a group-answerable
 REM default instead of the flat ten (four of which are per-connection). Assert
 REM the FILE's header, since the header is the schema claim being fixed.

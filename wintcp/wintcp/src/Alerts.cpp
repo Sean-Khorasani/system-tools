@@ -1,4 +1,5 @@
 // Alerts.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Alerts.h.
 
 #include "Alerts.h"
@@ -8,6 +9,11 @@
 #include <tcpmib.h>
 
 #include <cstdio>
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <string>
+#include <vector>
 
 namespace wintcp {
 namespace {
@@ -36,7 +42,83 @@ std::wstring FormatBps(double bps) {
     return buf;
 }
 
+// F5.6. Substring on the process image, exact on the address.
+//
+// The asymmetry is deliberate. An address is a precise token - "203.0.113.9" either
+// appears or it does not - while a process name is typed by a human who may write
+// "chrome", "Chrome.exe" or "chrome.exe (12)". Substring on the name is forgiving
+// where being precise is what people want; substring on the ADDRESS would match
+// "203.0.113.90" when the user meant "203.0.113.9", which is the one mistake a
+// network watch must not make.
+bool AlertRule::Matches(const Connection& c) const {
+    if (!address.empty() &&
+        c.remoteAddress.find(address) == std::wstring::npos) {
+        return false;
+    }
+    if (!process.empty() &&
+        ToLowerW(c.processName).find(ToLowerW(process)) == std::wstring::npos) {
+        return false;
+    }
+    return true;
+}
+
+// F5.6. Two passes, and they have to be separate: "which rules match NOW" is a pure
+// question about this snapshot, and "did anything change" is a question about the
+// previous one. Doing them in one pass is what makes this kind of loop fire twice.
+std::vector<Alert> AlertEngine::EvaluateRules(
+    const std::vector<Connection>& rows, const std::vector<AlertRule>& rules,
+    const AlertSettings& s) {
+    (void)s;   // reserved for onThreshold, which reads the rate from the rows
+    std::vector<Alert> out;
+    if (rules.empty()) return out;
+
+    // Which rules match ANY row right now. A SET, not a count: two matching rows
+    // for one rule is still one condition holding, not two firings.
+    std::set<std::wstring> matchingNow;
+    for (const AlertRule& rule : rules) {
+        if (rule.name.empty()) continue;   // unnamed rules cannot latch; ignore
+        for (const Connection& c : rows) {
+            if (rule.Matches(c)) {
+                matchingNow.insert(rule.name);
+                break;
+            }
+        }
+    }
+
+    for (const AlertRule& rule : rules) {
+        if (rule.name.empty()) continue;
+        const bool now = matchingNow.count(rule.name) != 0;
+        const bool before = ruleLatched_.count(rule.name) != 0;
+        if (now == before) continue;   // no transition - already reported
+
+        Alert a;
+        if (now) {
+            ruleLatched_.insert(rule.name);
+            a.kind = AlertKind::kNewConnection;
+            a.rising = true;
+            a.title = L"alert: " + rule.name;
+            a.text = L"a matching connection is now present";
+            if (rule.onNew) out.push_back(a);
+        } else {
+            ruleLatched_.erase(rule.name);
+            a.kind = AlertKind::kClosed;
+            a.rising = false;
+            a.title = L"cleared: " + rule.name;
+            a.text = L"no matching connection is present any more";
+            // onClose is separate for a reason: the interesting event is usually the
+            // appearance, and a watcher that also fires on every disappearance fires
+            // twice per connection.
+            if (rule.onClose) out.push_back(a);
+        }
+    }
+
+    // Same contract Evaluate() keeps: "nothing appeared" and "it is all already on
+    // fire" are different answers, and only one of them is fine.
+    suppressed_ = ruleLatched_.size();
+    return out;
+}
 void AlertEngine::Reset() {
+    ruleLatched_.clear();
     latched_ = 0;
     sawListener_ = false;
     sawConnection_ = false;
@@ -188,6 +270,109 @@ bool ShowTrayBalloon(NOTIFYICONDATAW* nid, const std::wstring& title,
     ::wcsncpy_s(nid->szInfoTitle, title.c_str(), _TRUNCATE);
     ::wcsncpy_s(nid->szInfo, text.c_str(), _TRUNCATE);
     return ::Shell_NotifyIconW(NIM_MODIFY, nid) != FALSE;
+}
+
+// ---------------------------------------------------------------------------
+// F5.6: the rule store
+// ---------------------------------------------------------------------------
+// One value per rule, keyed by the rule's name. The alternative - one packed blob
+// under a single value - would make deleting one rule a read-modify-write of all of
+// them, and would lose the one property the registry gives for free: enumerating.
+
+std::vector<AlertRule> AlertRuleStore::Load() {
+    std::vector<AlertRule> out;
+    HKEY k = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, kSubKey, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return out;   // nothing saved yet
+    }
+    wchar_t name[256] = {0};
+    unsigned char buf[1024] = {0};
+    for (DWORD i = 0;; ++i) {
+        DWORD nameLen = 256;
+        DWORD bufLen = 1024;
+        DWORD type = 0;
+        const LSTATUS rc = ::RegEnumValueW(k, i, name, &nameLen, nullptr, &type,
+                                           buf, &bufLen);
+        if (rc == ERROR_NO_MORE_ITEMS) break;
+        if (rc != ERROR_SUCCESS || type != REG_SZ) continue;   // skip, not fail
+        AlertRule rule;
+        if (AlertRuleFromValue(name, std::wstring(reinterpret_cast<wchar_t*>(buf),
+                                                  bufLen / sizeof(wchar_t) - 1),
+                               &rule)) {
+            out.push_back(rule);
+        }
+    }
+    ::RegCloseKey(k);
+    std::sort(out.begin(), out.end(),
+              [](const AlertRule& a, const AlertRule& b) { return a.name < b.name; });
+    return out;
+}
+
+bool AlertRuleStore::Save(const AlertRule& rule) {
+    if (rule.name.empty()) return false;   // nothing to key it by
+    HKEY k = nullptr;
+    if (::RegCreateKeyExW(HKEY_CURRENT_USER, kSubKey, 0, nullptr, 0, KEY_WRITE,
+                          nullptr, &k, nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+    const std::wstring v = AlertRuleToValue(rule);
+    const LSTATUS rc = ::RegSetValueExW(
+        k, rule.name.c_str(), 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(v.c_str()),
+        static_cast<DWORD>((v.size() + 1) * sizeof(wchar_t)));
+    ::RegCloseKey(k);
+    return rc == ERROR_SUCCESS;
+}
+
+bool AlertRuleStore::Remove(const std::wstring& name) {
+    if (name.empty()) return false;
+    HKEY k = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, kSubKey, 0, KEY_SET_VALUE, &k) !=
+        ERROR_SUCCESS) {
+        return false;   // never was there
+    }
+    const LSTATUS rc = ::RegDeleteValueW(k, name.c_str());
+    ::RegCloseKey(k);
+    return rc == ERROR_SUCCESS;
+}
+
+// Pipe-separated, and every field is either present or empty. A rule typed by hand
+// in the registry is a rule a human has to be able to read and write, which is the
+// whole reason this is not a blob.
+std::wstring AlertRuleToValue(const AlertRule& rule) {
+    std::wstring v;
+    v += rule.address;   v += L'|';
+    v += rule.process;   v += L'|';
+    v += rule.onNew ? L"1" : L"0";    v += L'|';
+    v += rule.onClose ? L"1" : L"0";  v += L'|';
+    v += rule.onThreshold ? L"1" : L"0";
+    return v;
+}
+
+bool AlertRuleFromValue(const std::wstring& name, const std::wstring& value,
+                        AlertRule* out) {
+    if (out == nullptr || name.empty()) return false;
+    // Split into exactly five fields on the pipe. Four separators, and the fifth
+    // field is whatever is left after the fourth - NOT another iteration of this
+    // loop, which is how it was written first: it stopped after four fields,
+    // found four, and refused a value its own serialiser had just produced.
+    std::vector<std::wstring> f;
+    size_t start = 0;
+    for (int i = 0; i < 4; ++i) {
+        const size_t pipe = value.find(L'|', start);
+        if (pipe == std::wstring::npos) return false;   // too few separators
+        f.push_back(value.substr(start, pipe - start));
+        start = pipe + 1;
+    }
+    f.push_back(value.substr(start));                   // the fifth
+    out->name = name;
+    out->address = f[0];
+    out->process = f[1];
+    out->onNew = f[2] == L"1";
+    out->onClose = f[3] == L"1";
+    out->onThreshold = f[4] == L"1";
+    return true;
 }
 
 }  // namespace wintcp

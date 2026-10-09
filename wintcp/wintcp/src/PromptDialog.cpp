@@ -1,4 +1,5 @@
 // PromptDialog.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See PromptDialog.h.
 
 #include "PromptDialog.h"

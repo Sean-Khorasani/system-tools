@@ -34,6 +34,17 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "E&xit",                IDM_FILE_EXIT
     END
+    POPUP "&Filter"
+    BEGIN
+        MENUITEM "&All connections",   IDM_QFILTER_ALL
+        MENUITEM "&TCP",              IDM_QFILTER_TCP
+        MENUITEM "&UDP",              IDM_QFILTER_UDP
+        MENUITEM "&Listeners",        IDM_QFILTER_LISTEN
+        MENUITEM "&Established",      IDM_QFILTER_ESTAB
+        MENUITEM "M&ine",             IDM_QFILTER_MINE
+        MENUITEM SEPARATOR
+        MENUITEM "&Custom...\tF3",    IDM_QFILTER_CLEAR
+    END
     POPUP "&View"
     BEGIN
         MENUITEM "&Auto-refresh",        IDM_VIEW_AUTOREFRESH
@@ -42,12 +53,22 @@ BEGIN
         MENUITEM "Tray &icon (minimize to tray)", IDM_VIEW_TRAY
         MENUITEM "Per-PID &traffic counters (ETW, admin)", IDM_VIEW_TRAFFIC
         MENUITEM "&GeoIP database (.mmdb)...", IDM_VIEW_GEOIP
+    MENUITEM "ASN &database (.mmdb)...", IDM_VIEW_ASNIP
         MENUITEM "Performa&nce graphs...", IDM_VIEW_CHARTS
         MENUITEM SEPARATOR
         MENUITEM "&Preserve selection on refresh", IDM_VIEW_PRESERVE_SEL
         MENUITEM SEPARATOR
         MENUITEM "&Freeze view\tF6",     IDM_VIEW_FREEZE
         MENUITEM "&Group rows by process\tF7", IDM_VIEW_GROUP
+        POPUP "Column &profile"
+        BEGIN
+            MENUITEM "&Default",         IDM_PROFILE_DEFAULT
+            MENUITEM "Mi&nimal",         IDM_PROFILE_MINIMAL
+            MENUITEM "&Network",         IDM_PROFILE_NETWORK
+            MENUITEM "&Security",        IDM_PROFILE_SECURITY
+            MENUITEM "Per&formance",     IDM_PROFILE_PERFORMANCE
+            MENUITEM "Show &diagnostics", IDM_PROFILE_DIAGNOSTICS
+        END
         POPUP "Col&umns"
         BEGIN
             MENUITEM "&Process",          IDM_COL_PROCESS
@@ -66,7 +87,7 @@ BEGIN
             MENUITEM SEPARATOR
             MENUITEM "D&uration",         IDM_COL_DURATION
             MENUITEM "Speed",             IDM_COL_BANDWIDTH
-            MENUITEM "Proc Speed",        IDM_COL_GROUPRATE
+            MENUITEM "Process rate",        IDM_COL_GROUPRATE
             MENUITEM SEPARATOR
             // The four `ss -i` columns, in the order `ss -i` prints them, and
             // in the same adjacency kDisplayOrder uses: a current RTT beside
@@ -148,8 +169,9 @@ BEGIN
     "A",        IDM_EDIT_SELECTALL,     VIRTKEY, CONTROL
     "F",        IDM_EDIT_FOCUSFILTER,   VIRTKEY, CONTROL
     "E",        IDM_FILE_EXPORT,        VIRTKEY, CONTROL
-    VK_DELETE,  IDM_CTX_KILL_PROCESS,   VIRTKEY
-    VK_ESCAPE,  IDM_EDIT_CLEARFILTER,   VIRTKEY
+     VK_DELETE,  IDM_CTX_KILL_PROCESS,   VIRTKEY
+     VK_ESCAPE,  IDM_EDIT_CLEARFILTER,   VIRTKEY
+     VK_MULTIPLY,IDM_CTX_BOOKMARK,       VIRTKEY ; 9.4.8: asterisk (*) toggles a bookmark on the selected row (5.3)
 END
 
 // Version information shown in Explorer -> Properties -> Details.

@@ -1,4 +1,5 @@
 // Settings.cpp
+// SPDX-License-Identifier: Apache-2.0
 // HKCU\Software\WinTCP registry load/save. Every field is optional: a
 // missing value simply leaves the compiled-in default in place, so the
 // registry can be pruned freely without breaking startup.
@@ -24,7 +25,9 @@ const wchar_t* kValIntervalMs = L"IntervalMs";
 const wchar_t* kValAutoRefresh = L"AutoRefresh";
 const wchar_t* kValResolveHosts = L"ResolveHosts";
 const wchar_t* kValTopMost = L"TopMost";
-const wchar_t* kValTrayEnabled = L"TrayEnabled";
+    const wchar_t* kValTrayEnabled = L"TrayEnabled";
+    // 9.4.6: first-minimize prompt choice (DWORD: 0=never, 1=tray, 2=exit).
+    const wchar_t* kValTrayMinimizeChoice = L"TrayMinimizeChoice";
 const wchar_t* kValTrafficEnabled = L"TrafficEnabled";
 const wchar_t* kValSortCol = L"SortCol";
 const wchar_t* kValSortAsc = L"SortAsc";
@@ -38,6 +41,18 @@ const wchar_t* kValLogPath = L"LogPath";
 const wchar_t* kValLastExportDir = L"LastExportDir";
     // 9.1.5: the picked .mmdb survives a relaunch (gui.md's admitted gap).
     const wchar_t* kValGeoIpPath = L"GeoIpPath";
+// F5.4: the ASN database path.
+const wchar_t* kValAsnIpPath = L"AsnIpPath";
+// 9.2.11: alerting. One value per setting so a missing key leaves the engine
+//'s own default in place, which is what makes an older Settings store load clean.
+const wchar_t* kValAlertEnabled = L"AlertEnabled";
+const wchar_t* kValAlertBpsWarn = L"AlertBpsWarn";
+const wchar_t* kValAlertBpsCritical = L"AlertBpsCritical";
+const wchar_t* kValAlertConnWarn = L"AlertConnWarn";
+const wchar_t* kValAlertOnListener = L"AlertOnNewListener";
+const wchar_t* kValAlertOnConnection = L"AlertOnNewConnection";
+const wchar_t* kValAlertOnRst = L"AlertOnRst";
+const wchar_t* kValAlertOnClosed = L"AlertOnClosed";
 
 bool GetDword(HKEY root, const wchar_t* path, const wchar_t* name, DWORD& out) {
     DWORD value = 0;
@@ -209,6 +224,12 @@ bool Settings::Load() {
     if (GetDword(root, kKeyPath, kValResolveHosts, v)) resolveHosts = (v != 0);
     if (GetDword(root, kKeyPath, kValTopMost, v)) topMost = (v != 0);
     if (GetDword(root, kKeyPath, kValTrayEnabled, v)) trayEnabled = (v != 0);
+    // 9.4.6: the choice is a small enum (0/1/2); any out-of-range DWORD read
+    // silently leaves the default (0), which re-triggers the prompt - the safe
+    // fall-back rather than guessing the user's intent.
+    if (GetDword(root, kKeyPath, kValTrayMinimizeChoice, v)) {
+        if (v <= 2) trayMinimizeChoice = v;
+    }
     if (GetDword(root, kKeyPath, kValTrafficEnabled, v))
         trafficEnabled = (v != 0);
 
@@ -311,6 +332,32 @@ bool Settings::Load() {
     if (!GetSz(root, kKeyPath, kValGeoIpPath, geoIpPath,
                sizeof(geoIpPath) / sizeof(geoIpPath[0])))
         geoIpPath[0] = L'\0';
+    // F5.4. Same shape, same failure handling: an absent or unreadable value
+    // leaves the path empty, which is the same 'nothing picked yet' state.
+    if (!GetSz(root, kKeyPath, kValAsnIpPath, asnIpPath,
+               sizeof(asnIpPath) / sizeof(asnIpPath[0])))
+        asnIpPath[0] = L'\0';
+
+    // 9.2.11 / F5.6. Every value is optional; an absent one leaves the field at the
+    // engine's default, so a half-written store loads as "whatever was there" rather
+    // than failing the whole settings read.
+    DWORD alertDw = 0;
+    if (GetDword(root, kKeyPath, kValAlertEnabled, alertDw))
+        alerts.enabled = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertBpsWarn, alertDw))
+        alerts.bpsWarn = static_cast<double>(alertDw);
+    if (GetDword(root, kKeyPath, kValAlertBpsCritical, alertDw))
+        alerts.bpsCritical = static_cast<double>(alertDw);
+    if (GetDword(root, kKeyPath, kValAlertConnWarn, alertDw))
+        alerts.connectionWarn = static_cast<size_t>(alertDw);
+    if (GetDword(root, kKeyPath, kValAlertOnListener, alertDw))
+        alerts.alertOnNewListener = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertOnConnection, alertDw))
+        alerts.alertOnNewConnection = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertOnRst, alertDw))
+        alerts.alertOnRst = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertOnClosed, alertDw))
+        alerts.alertOnClosed = alertDw != 0;
 
     return true;
 }
@@ -333,6 +380,7 @@ bool Settings::Save() const {
     ok &= SetDword(key, kValResolveHosts, resolveHosts ? 1 : 0);
     ok &= SetDword(key, kValTopMost, topMost ? 1 : 0);
     ok &= SetDword(key, kValTrayEnabled, trayEnabled ? 1 : 0);
+    ok &= SetDword(key, kValTrayMinimizeChoice, trayMinimizeChoice);
     ok &= SetDword(key, kValTrafficEnabled, trafficEnabled ? 1 : 0);
     ok &= SetDword(key, kValSortCol, static_cast<DWORD>(sortCol));
     ok &= SetDword(key, kValSortAsc, sortAsc ? 1 : 0);
@@ -356,6 +404,19 @@ bool Settings::Save() const {
     ok &= SetSz(key, kValLogPath, logPath);
     ok &= SetSz(key, kValLastExportDir, lastExportDir);
     ok &= SetSz(key, kValGeoIpPath, geoIpPath);
+    ok &= SetSz(key, kValAsnIpPath, asnIpPath);
+    ok &= SetDword(key, kValAlertEnabled, alerts.enabled ? 1u : 0u);
+    ok &= SetDword(key, kValAlertBpsWarn,
+                  static_cast<DWORD>(alerts.bpsWarn < 0 ? 0 : alerts.bpsWarn));
+    ok &= SetDword(key, kValAlertBpsCritical,
+                  static_cast<DWORD>(alerts.bpsCritical < 0 ? 0 : alerts.bpsCritical));
+    ok &= SetDword(key, kValAlertConnWarn,
+                  static_cast<DWORD>(alerts.connectionWarn));
+    ok &= SetDword(key, kValAlertOnListener, alerts.alertOnNewListener ? 1u : 0u);
+    ok &= SetDword(key, kValAlertOnConnection,
+                  alerts.alertOnNewConnection ? 1u : 0u);
+    ok &= SetDword(key, kValAlertOnRst, alerts.alertOnRst ? 1u : 0u);
+    ok &= SetDword(key, kValAlertOnClosed, alerts.alertOnClosed ? 1u : 0u);
 
     ::RegCloseKey(key);
     return ok;

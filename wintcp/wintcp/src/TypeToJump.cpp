@@ -1,4 +1,5 @@
 // TypeToJump.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See TypeToJump.h.
 
 #include "TypeToJump.h"

@@ -124,6 +124,21 @@ The file is refreshed on a schedule, so treat it as something you re-fetch rathe
 | CLI | Pass `--db FILE` to `list`, `geoip info` or `geoip lookup`. It covers that run's printed rows only, so the next run needs it again. |
 | GUI | **View → GeoIP database (.mmdb)...** opens a picker filtered to `*.mmdb`, and the column fills immediately rather than at the next refresh. The [GUI guide](docs/gui.md#geoip-in-the-window) covers what happens to that choice across a restart. |
 
+### Autonomous systems (ASN)
+
+The `Country` column also carries the **autonomous system** - the network an address belongs to - rendered alongside the country code as `US · AS15169 Google LLC`. That is a *second, different* MaxMind file: `GeoLite2-ASN.mmdb` has a different record shape from `GeoLite2-Country.mmdb`, so one `--db` cannot supply both.
+
+| Entry point | What you do |
+|---|---|
+| CLI | Pass `--asn-db FILE` alongside (or instead of) `--db FILE`. The two are completely independent. |
+| GUI | **View → ASN database (.mmdb)...** is a separate picker for the separate file. |
+
+Either, both or neither works: the two are loaded independently and neither is required for the other. An address that no database covers leaves the country code alone rather than inventing one, and non-routable addresses never get an ASN at all.
+
+`asn:` then filters on it, in both directions. A bare number is a threshold on the AS number, so `asn:15169` and the range `asn:15169-20000` work; anything else is a case-insensitive substring of the whole cell, so `asn:cloudflare` finds the operator by name. A bare `asn:` means "has an autonomous system", and a row with none never matches whatever you typed.
+
+The full rule is in [filters.md](docs/filters.md).
+
 ### What the commands report
 
 `geoip info --db FILE` prints one line:
@@ -134,7 +149,9 @@ The file is refreshed on a schedule, so treat it as something you re-fetch rathe
 
 The four fields are the file's own `database_type` metadata (for MaxMind's country file, `GeoLite2-Country`), its record count, its search-tree node count and its size on disk. It is the first thing to check when the column is empty, because an empty cell is otherwise ambiguous between "no database attached" and "attached, but no entry for this address".
 
-`geoip lookup --db FILE <ip>` answers a single address with its two-letter code, or `—` when it has none.
+`geoip lookup --db FILE <ip>` answers a single address with its two-letter code, or `-` when it has none.
+
+**Pass a GeoLite2-ASN file and it answers with the autonomous system instead** - `AS13335 Cloudflare, Inc.` - because the verb answers whichever kind of database it was handed rather than only ever looking for a country record. An earlier build printed `-` for every address against an ASN file and gave no hint that the file had loaded perfectly well.
 
 Exit codes are `0` for an answer, `2` for the command being used wrongly (`--db` missing, no address, or an argument that is not an IP), and `1` for a file that was there but would not load — truncated, not an MMDB at all, or declaring a record size this reader refuses. The message says which.
 
@@ -258,6 +275,7 @@ CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. A
 | `Traffic off — needs admin` | No source can run. This is the case on systems without `SIO_TCP_INFO` (before Windows 10 1703). |
 | `host:` filter or `host` column is empty in the CLI | Reverse DNS only runs with `--dns`. Bound it with `--limit`; it is slow. |
 | `country:` filter or column is empty | Pass `--db FILE`. Non-routable addresses never get a country. |
+| `asn:` filter matches nothing, or the country cell never shows an ASN | Pass `--asn-db FILE` - a GeoLite2-ASN file, which is a *different* product from the country one. A row with no ASN never matches, whatever the value. |
 | `tx:`, `rx:`, `duration:`, `rtt:` filters match nothing | Add `--traffic`. Rows that could not be measured match no threshold. |
 | `duration` reads `0s` everywhere | Without `--traffic` there is no age source. |
 | `bandwidth` or `procspeed` show `—` on the first tick | A rate is the difference of two samples. Use `--watch N --count 2` or more. |
@@ -274,7 +292,7 @@ CMake and a Visual Studio project (`wintcp\wintcp.vcxproj`) are also provided. A
 - ETW totals begin when the session starts; fallback totals are lifetime-of-socket. ETW totals are best-effort under extreme load.
 - A socket that does not answer `SIO_TCP_INFO` is skipped for the pass and not retried. Its columns stay `—`, and the GUI reports how many sockets were affected. See [Traffic counters](docs/traffic.md#stalled-sockets).
 - Change feeds are polling-based: the `--watch` interval is the sensitivity, and a socket that opens and closes inside one interval is never seen.
-- `close` supports IPv4 only.
+- `close` supports IPv4 only. The Windows `SetTcpEntry` API has no IPv6 form, so neither the GUI nor the CLI can tear down an IPv6 connection. The GUI greys *Close connection* on IPv6 rows (label: "Close connection (IPv6 - use Block instead...)"); `block` still works family-agnostically via firewall rules and is the supported way to stop an IPv6 conversation.
 - Per-connection rates exist only where a single socket's own counters are available. A per-process total is never divided across its connections to fake one.
 
 ## Contributing

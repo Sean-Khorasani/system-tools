@@ -1,4 +1,5 @@
 // Freeze.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Freeze.h.
 
 #include "Freeze.h"

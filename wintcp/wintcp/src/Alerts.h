@@ -1,4 +1,5 @@
 // Alerts.h
+// SPDX-License-Identifier: Apache-2.0
 // Threshold alerting and change notifications.
 //
 // DESIGN RULE, and the reason this is a separate file: a network viewer that
@@ -32,6 +33,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <set>
 
 #include "ConnectionStore.h"
 
@@ -81,6 +83,28 @@ struct Alert {
     // True if this is the first time the condition has been seen, i.e. the
     // transition, not the steady state.
     bool rising = false;
+
+};
+// F5.6. A rule about ONE connection rather than about the whole table.
+//
+// Empty means "any": a rule with no address and no process watches every row,
+// which is what the whole-table threshold already does. The interesting case is
+// a rule with an address - "tell me when anything talks to 203.0.113.9".
+//
+// Matching is deliberately SUBSTRING and case-insensitive on the process image:
+// that is how people write it, and a rule that silently matches nothing is worse
+// than one that matches slightly more than intended.
+struct AlertRule {
+    std::wstring name;          // the identity: latches and registry keys use it
+    std::wstring address;       // remote address substring; empty = any
+    std::wstring process;       // process image substring; empty = any
+    bool onNew = true;          // a matching row appeared
+    bool onClose = false;        // it went away
+    bool onThreshold = false;   // it crossed the rate threshold in AlertSettings
+
+    // Does this rule match this row? Pure, so the CLI and the GUI agree and both
+    // can be tested without a window.
+    bool Matches(const Connection& c) const;
 };
 
 class AlertEngine {
@@ -91,6 +115,16 @@ public:
     // deduplicating.
     std::vector<Alert> Evaluate(const std::vector<Connection>& rows,
                                 const AlertSettings& s);
+
+    // F5.6. Per-connection rules. A whole-table threshold answers "the machine is
+    // busy"; this answers "the one thing I asked about changed".
+    //
+    // The latch is PER RULE, keyed by NAME rather than by address: two rules
+    // watching the same address are two independent watches, and keying by address
+    // would make the second a silent no-op.
+    std::vector<Alert> EvaluateRules(const std::vector<Connection>& rows,
+                                    const std::vector<AlertRule>& rules,
+                                    const AlertSettings& s);
 
     void Reset();
 
@@ -107,6 +141,8 @@ private:
     bool sawConnection_ = false;
     size_t lastCount_ = 0;
     size_t suppressed_ = 0;
+    // F5.6: rule name -> true while that rule is matching.
+    std::set<std::wstring> ruleLatched_;
 };
 
 // Show a balloon on the tray icon. Returns false if the shell refused it.
@@ -119,4 +155,35 @@ bool ShowTrayBalloon(NOTIFYICONDATAW* nid, const std::wstring& title,
 // Human-readable byte-rate, shared with the status bar.
 std::wstring FormatBps(double bytesPerSecond);
 
+// F5.6. Where rules live. The engine reads a vector; something has to fill it, and
+// the answer cannot be a member of the window or of the CLI - both would be a place
+// the other one does not see.
+//
+// Rules are stored as one registry value PER RULE under
+// HKCU\Software\WinTCP\AlertRules, whose value name is the rule name. Not one packed
+// blob: the registry is already the store, enumerating it is how you list, and
+// deleting one rule must not require rewriting all of them.
+class AlertRuleStore {
+public:
+    // Read every rule. Returns an empty vector when nothing has been saved, which is
+    // a valid and expected state rather than an error.
+    static std::vector<AlertRule> Load();
+
+    // Add or replace a rule by name. Returns false on a write failure.
+    static bool Save(const AlertRule& rule);
+
+    // Remove by name. Returns false when the rule does not exist, so a caller can
+    // tell "removed" from "never was there".
+    static bool Remove(const std::wstring& name);
+
+private:
+    static constexpr const wchar_t* kSubKey = L"WinTCP\\AlertRules";
+};
+
+// Parse/serialise one rule. Pipe-separated because neither an address nor a process
+// name contains one, and because a rule a human wrote by hand in the registry is a
+// rule that has to be readable.
+std::wstring AlertRuleToValue(const AlertRule& rule);
+bool AlertRuleFromValue(const std::wstring& name, const std::wstring& value,
+                        AlertRule* out);
 }  // namespace wintcp

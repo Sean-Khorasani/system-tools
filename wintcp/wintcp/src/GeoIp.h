@@ -1,4 +1,5 @@
 // File: wintcp/src/GeoIp.h (c-header)
+// SPDX-License-Identifier: Apache-2.0
 // GeoIp.h
 // A read-only MaxMind DB (.mmdb) reader: address -> ISO 3166-1 alpha-2
 // country code, for the Country column.
@@ -31,6 +32,31 @@
 #include <vector>
 
 namespace wintcp {
+
+// One autonomous-system answer: the number, and the organisation that owns it.
+//
+// WHY A STRUCT AND NOT A STRING: the two halves are used differently and must
+// be filterable differently. `asn:15169` is a NUMBER comparison, and an org
+// name is a substring comparison - "Google LLC" is not a threshold. Formatting
+// them into one string here would force every filter to re-parse it and would
+// make a numeric range impossible to express.
+//
+// number == 0 means "no answer", which is the honest reading of "not in the
+// database", "this database has no ASN records" (a Country database) and "the
+// record carried an organisation but no number". It is not an error and it is
+// never printed as a number.
+struct AsnInfo {
+    uint32_t number = 0;
+    std::wstring org;
+
+    bool Known() const { return number != 0; }
+    // "AS15169 Google LLC", "AS15169", "Google LLC", or "" - assembled from
+    // whichever halves are present, so a record with only one half still says
+    // something useful. The "AS" prefix is always upper case because that is
+    // how the number is written everywhere it appears, and because matching it
+    // case-insensitively is what `asn:` does anyway.
+    std::wstring Display() const;
+};
 
 class GeoIpDatabase {
 public:
@@ -81,6 +107,16 @@ public:
     // IN6_ADDR / SOCKADDR_IN6.
     std::wstring LookupV6(const unsigned char addr[16]) const;
 
+    // The same two lookups against an ASN database (GeoLite2-ASN.mmdb).
+    //
+    // A Country database has no ASN records, so these return an unknown AsnInfo
+    // against one - that is not a failure, it is the honest answer, and it is
+    // why the two databases are loaded separately and named separately rather
+    // than sniffed apart by database_type. Likewise a record that carries only
+    // an organisation returns number 0 with a non-empty org.
+    AsnInfo LookupAsnV4(uint32_t hostOrderAddr) const;
+    AsnInfo LookupAsnV6(const unsigned char addr[16]) const;
+
     // Metadata, for the About box. All are empty/zero unless the metadata
     // section parsed, which is a valid state: a database that answers lookups
     // is still usable, so nothing here is load-bearing.
@@ -103,8 +139,24 @@ private:
     // place whichever way the flag was read.
     std::wstring LookupBits(const unsigned char bits[16], unsigned bitCount,
                             size_t startNode) const;
+    // Resolve an address to a DATA-SECTION OFFSET, or false when the walk finds
+    // no record for it. Split out of LookupBits so the country and ASN lookups
+    // share ONE tree walk instead of each walking it: the tree is the expensive
+    // part (up to 128 NodeRecord reassemblies), and a caller that wants both
+    // answers from one database would otherwise pay twice.
+    bool ResolveOffset(const unsigned char bits[16], unsigned bitCount,
+                       size_t startNode, size_t* out) const;
+    // An IPv4 host-order address as the 16 network-order bits the walk expects.
+    // Shared by the country and ASN lookups so the byte order is spelled once -
+    // getting it wrong answers for a different address rather than failing.
+    static void AddressBitsV4(uint32_t hostOrderAddr, unsigned char bits[16]);
     // Resolve a data-section offset to a country code, or empty.
     std::wstring CountryAt(size_t dataOffset) const;
+    // Resolve a data-section offset to an autonomous system, or an unknown
+    // AsnInfo. The record keys sit at the TOP level of the map, not under a
+    // wrapper: GeoLite2-ASN records are {autonomous_system_number,
+    // autonomous_system_organization} with no nesting, unlike a country record.
+    AsnInfo AsnAt(size_t dataOffset) const;
     // Read one of a node's two child records. False when the node or the read
     // itself falls outside the mapped tree. Shared by the tree walk and by
     // Load's search for the IPv4 start node, so the 28-bit reassembly - the
@@ -164,5 +216,12 @@ private:
 // Public so the caller can skip the lookup entirely.
 bool IsGlobalUnicastV4(uint32_t hostOrderAddr);
 bool IsGlobalUnicastV6(const unsigned char addr[16]);
+
+// F5.11: the same question, named for what a FILTER means by it. `local:private`
+// is "is this endpoint on a non-routable range", which is the same set GeoIP
+// refuses to assign a country - so the two share one implementation rather than
+// keeping two lists of ranges that could drift apart.
+bool IsPrivateAddrV4(uint32_t hostOrderAddr);
+bool IsPrivateAddrV6(const unsigned char addr[16]);
 
 }  // namespace wintcp

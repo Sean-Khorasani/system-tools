@@ -487,6 +487,135 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         }   // listHasFocus
     }
 
+    // ---- 9.4.8: `/` focuses the filter box (vim-style) -----------------------
+    Mark("slash-focus");
+    {
+        // Establish list focus (mirrors the type-to-jump section's setup so this
+        // is deterministic rather than depending on whatever ran before it).
+        HWND list = ::GetDlgItem(hwnd, IDC_LIST);
+        HWND edit = ::GetDlgItem(hwnd, IDC_EDIT_SEARCH);
+        ::SetFocus(list);
+        Pump(50);
+        if (::GetFocus() != list) {
+            Say("  [skip] 9.4.8 / focus: the list cannot take focus without an "
+                "interactive desktop\n");
+        } else {
+            Check(Of(w, "focusTarget") == "list",
+                  "SMOKE 9.4.8 / focus: filter box is reachable via /",
+                  "list did not hold focus before the keystroke");
+            // `/` while the LIST has focus must move focus to the filter edit,
+            // not be eaten by type-to-jump (which would consume it as a no-op
+            // prefix match).
+            ::SendMessageW(hwnd, WM_CHAR, static_cast<WPARAM>('/'), 1);
+            Pump(50);
+            Check(Of(w, "focusTarget") == "filter",
+                  "SMOKE 9.4.8 / focus: typing / moved focus to the filter",
+                  "focus stayed on the list or moved elsewhere");
+            Check(edit != nullptr && ::GetFocus() == edit,
+                  "SMOKE 9.4.8 / focus: the filter edit really has focus",
+                  "GetFocus() did not land on IDC_EDIT_SEARCH");
+        }
+    }
+
+    // ---- 9.4.8: `*` toggles a bookmark on the selected row -------------------
+    Mark("star-bookmark");
+    {
+        // `*` (VK_MULTIPLY) maps to IDM_CTX_BOOKMARK, the same toggle the
+        // accelerator table dispatches. Driven through the command path (the
+        // accelerator's TranslateAccelerator in the real loop is headless-
+        // unblockable here).
+        //
+        // SAFETY: the ADD path opens a modal note prompt (PromptForText) that
+        // hangs a headless harness, so this section NEVER lets the toggle hit
+        // add. It plants a bookmark for row 0's remote endpoint directly, then
+        // the toggle can only hit remove (no dialog). Mirrors section 11.
+        HWND list = ::GetDlgItem(hwnd, IDC_LIST);
+        LVITEMW sel = {};
+        sel.mask = LVIF_STATE;
+        sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+        sel.state = LVIS_SELECTED | LVIS_FOCUSED;
+        sel.iItem = 0;
+        ::SendMessageW(list, LVM_SETITEMSTATE, 0,
+                       reinterpret_cast<LPARAM>(&sel));
+        Pump(300);
+
+        // Read row 0's remote endpoint through the real owner-data path. Row 0
+        // is not guaranteed to have a remote endpoint (listeners, TIME_WAIT and
+        // wildcard rows don't), so try the first few rows the way a user would:
+        // tab to the next candidate and retry the toggle.
+        int remoteSlot = -1;
+        for (int v = 0; v < 23; ++v) {
+            if (static_cast<int>(Num(w, "visibleCol", std::to_string(v).c_str()))
+                    == COL_REMOTE) {
+                remoteSlot = v;
+                break;
+            }
+        }
+        const std::string remoteArg =    // narrow: Of() takes char*
+            remoteSlot >= 0 ? std::to_string(remoteSlot) : std::string();
+
+        bool planted = false;
+        std::wstring plantedAddr;
+        UINT plantedPort = 0;
+        // Try up to 4 rows for a bookable endpoint. A planted bookmark is the
+        // ONLY safe way to drive the remove path headless (the add path opens
+        // a modal prompt that hangs the harness).
+        for (int tryRow = 0; tryRow < 4 && !planted; ++tryRow) {
+            LVITEMW selR = {};
+            selR.mask = LVIF_STATE;
+            selR.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+            selR.state = LVIS_SELECTED | LVIS_FOCUSED;
+            selR.iItem = tryRow;
+            ::SendMessageW(list, LVM_SETITEMSTATE, tryRow,
+                           reinterpret_cast<LPARAM>(&selR));
+            Pump(80);
+            if (remoteSlot < 0) break;
+            const std::string endpoint =
+                Of(w, "selectedColumnText",
+                   remoteArg.empty() ? nullptr : remoteArg.c_str());
+            const size_t colon = endpoint.rfind(':');
+            std::wstring addr;
+            unsigned port = 0;
+            if (colon != std::string::npos) {
+                addr = Widen(endpoint.substr(0, colon).c_str());
+                const std::wstring digits = Widen(endpoint.substr(colon + 1).c_str());
+                for (wchar_t ch : digits) {
+                    if (ch < L'0' || ch > L'9') break;
+                    port = port * 10 + static_cast<unsigned>(ch - L'0');
+                    if (port > 65535) { port = 0; break; }
+                }
+            }
+            if (!addr.empty() && port > 0 && port <= 65535 &&
+                !Bookmarks::IsBookmarked(addr, static_cast<UINT>(port)) &&
+                Bookmarks::Add(addr, static_cast<UINT>(port))) {
+                planted = true;
+                plantedAddr = addr;
+                plantedPort = static_cast<UINT>(port);
+            }
+        }
+        if (!planted) {
+            Say("  [skip] 9.4.8 * bookmark: no bookable remote endpoint found in "
+                "the first 4 rows; toggle semantics are covered by the bookmark.* "
+                "selftests and the `bookmark` CLI verb\n");
+        } else {
+            const long before = Num(w, "bookmarkCount");
+            Check(before >= 0 && Bookmarks::IsBookmarked(plantedAddr, plantedPort),
+                  "SMOKE 9.4.8 * bookmark: planted bookmark is live",
+                  "registry did not reflect the Add() above");
+            // The toggle now removes the planted one (no dialog on remove).
+            Cmd(hwnd, IDM_CTX_BOOKMARK);
+            Pump(500);
+            const long after = Num(w, "bookmarkCount");
+            std::snprintf(line, sizeof(line),
+                          "SMOKE 9.4.8 * bookmark: toggle removed the planted "
+                          "bookmark (%ld -> %ld)", before, after);
+            Check(after == before - 1, line, "the count did not drop by one");
+            Check(!Bookmarks::IsBookmarked(plantedAddr, plantedPort),
+                  "SMOKE 9.4.8 * bookmark: the planted bookmark is gone",
+                  "registry still lists it after the toggle");
+        }
+    }
+
     // ---- 16 / 7.1 column visibility + order --------------------------------
     Mark("columns");
     {

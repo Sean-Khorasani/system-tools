@@ -1,4 +1,5 @@
 // Elevate.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Elevate.h.
 
 #include "Elevate.h"

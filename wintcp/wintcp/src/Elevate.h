@@ -1,4 +1,5 @@
 // Elevate.h
+// SPDX-License-Identifier: Apache-2.0
 // UAC self-elevation.
 //
 // WHY THIS EXISTS

@@ -1,4 +1,5 @@
 // Commands.h
+// SPDX-License-Identifier: Apache-2.0
 // Abstract command layer: every feature as a pure function over
 // (ConnectionStore, SnapshotSource, ViewState, args). No HWND here and none
 // may be added. Both the CLI and the GUI call these; the GUI only gathers
@@ -169,7 +170,15 @@ struct ListOptions {
     //   signatures: verify each distinct process image (F5.3, "" = off)
     bool traffic = false;
     bool dns = false;
+    // 9.2.8: per-lookup budget (ms) for the CLI --dns one-shot join. A lookup
+    // that exceeds it is shown as `host: pending` instead of stalling the run;
+    // the count of such stalls is reported on stderr. 0 = DnsResolver default.
+    unsigned dnsTimeoutMs = 0;
     std::wstring geoIpPath;
+    // F5.4: the ASN database, which is a SEPARATE file from the country one.
+    // GeoLite2-Country and GeoLite2-ASN are different products with different
+    // record shapes, so one --db cannot supply both; "" = off.
+    std::wstring asnIpPath;
     // F5.3: verify each distinct process image with WinVerifyTrust, so the
     // Signature column and the `signed:` filter have something to report.
     // Opt-in because the trust provider is far too slow to run per pass by
@@ -266,7 +275,13 @@ struct EnrichOptions {
     bool procStats = true;
     bool traffic = false;
     bool dns = false;
+    // 9.2.8: per-lookup budget for --dns (ms). 0 = resolver default.
+    unsigned dnsTimeoutMs = 0;
     std::wstring geoIpPath;
+    // F5.4: the ASN database, which is a SEPARATE file from the country one.
+    // GeoLite2-Country and GeoLite2-ASN are different products with different
+    // record shapes, so one --db cannot supply both; "" = off.
+    std::wstring asnIpPath;
     // F5.3, for `details`, which shares this shape with `list`.
     bool signatures = false;
 };
@@ -433,6 +448,49 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
 CommandResult CmdGeoIpInfo(SnapshotSource& source,
                            const std::wstring& geoIpPath);
 
+// ---- doctor (environment diagnostics) ---------------------------------------
+// `version` shows the build + capability state; `doctor` adds the run-local
+// diagnostics a script or a support call needs to know whether a missing
+// feature is "this build" vs "this machine" vs "this invocation": GeoIP DB, the
+// WinTCP firewall-rule ledger, and capture availability (tools + elevation).
+// Text here reuses AboutText/BuildSummary so `version` and `doctor` can never
+// disagree about process state.
+// 9.2.11 / F5.6. Every field is tri-state: -1 or unset means "leave alone", so a
+// caller can change one switch without restating the whole configuration.
+// Values are in the domain the engine applies them in, so rates are bytes/sec.
+struct AlertFlags {
+    bool enableSet = false;
+    bool enable = false;
+    long long bpsWarn = -1;
+    long long bpsCritical = -1;
+    long long connWarn = -1;
+    bool onListenerSet = false, onListener = false;
+    bool onConnectionSet = false, onConnection = false;
+    bool onRstSet = false, onRst = false;
+    bool onClosedSet = false, onClosed = false;
+    std::string format;
+};
+
+// F5.6. Rule sub-commands: `alert rule add/list/remove`. add is the only one that
+// carries a rule; the rest identify one by name.
+struct AlertRuleFlags {
+    std::wstring name;
+    std::wstring address;
+    std::wstring process;
+    bool onNew = false;        // "tell me when it appears" - the default for a
+                               // hand-built rule too, and set explicitly here so
+    bool onClose = false;      // `add --on-close` is the opt-in, not the default
+    bool onThreshold = false;
+    bool onNewSet = false;
+    bool onCloseSet = false;
+    std::string format;
+};
+
+CommandResult CmdAlertRule(const std::wstring& action, AlertRuleFlags f);
+CommandResult CmdAlert(AlertFlags f);
+CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
+                        const std::wstring& asnDbPath, const std::string& format);
+
 // ---- capture (follow stream) -----------------------------------------------
 //
 // `capture` grew from "print some counters" into the command-line replacement
@@ -453,6 +511,9 @@ struct CaptureOptions {
     // Print the reassembled stream to stdout as a hex dump, one block per
     // direction (or just the one --dir selects).
     bool text = false;
+    // Dump the raw reassembled stream bytes to outPath (binary, no hex/pcapng
+    // framing). Requires outPath; mutually exclusive with text.
+    bool bin = false;
     // Save the capture as pcapng here. Empty = do not keep it.
     std::wstring outPath;
     // R4: the pcapng write is CREATE_ALWAYS, so an existing file at outPath
@@ -461,6 +522,17 @@ struct CaptureOptions {
     bool forceOverwrite = false;
     // Which half --text prints. Parsed by ParseCaptureDir.
     std::wstring dir = L"both";
+    // pktmon `start --flags N` mask (SYN/FIN/RST). 0 = record everything
+    // (the default and the only mode that fully reassembles). Parsed by
+    // ParseCaptureFlags. Named constant lives in StreamCapture.h; the struct
+    // default stays a literal 0 so this header does not need to include it.
+    unsigned eventFlags = 0;
+
+    // 9.3.7: an extra `pktmon filter add -i <ip>` address pin, passed through
+    // verbatim. Empty = do not add one, keeping the default single-connection
+    // filter pktmon derives from the selected row. Validated as an IP in
+    // CmdCapture, so the executor never ships a malformed token to pktmon.
+    std::wstring filter;
 };
 
 CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
@@ -479,6 +551,12 @@ bool ResolveColumnSpec(const std::wstring& spec, std::vector<int>& out);
 
 // ColumnId for a single column name, or -1 when unknown.
 int ColumnIdForName(const std::wstring& name);
+
+// 9.3.2: `help columns` / `help filters` text, generated from the same tables
+// (ColumnTitle, JsonKeyFor, ColumnIsPerConnectionOnly, kColumnSet*) the parser
+// uses, so the reference can never drift from accepted spellings.
+std::string HelpColumnsText();
+std::string HelpFiltersText();
 
 // ---- change events ---------------------------------------------------------
 // Format drained RowChange events as text lines or JSON lines. 'prog'

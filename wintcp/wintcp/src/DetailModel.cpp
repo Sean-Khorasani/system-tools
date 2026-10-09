@@ -1,4 +1,5 @@
 // DetailModel.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See DetailModel.h. The only non-trivial logic here is the plain-text
 // rendering used by the Copy button, which must agree with what the window
 // draws closely enough that a pasted details block is not misleading.
@@ -70,6 +71,22 @@ std::wstring DetailModel::ToPlainText() const {
         }
     }
     return out;
+}
+
+// 9.4.1: tab vocabulary, exposed so the renderer and selftests share one
+// definition and a renamed tab is caught immediately. The order matches the
+// enum - the renderer walks DetailTab in ascending ordinal and skips tabs
+// that have no section, which is how an uncached TLS row simply drops the
+// Security tab instead of showing an empty one.
+const wchar_t* TabLabel(DetailTab t) {
+    switch (t) {
+        case kTabProcess:    return L"Process";
+        case kTabConnection: return L"Connection";
+        case kTabSockets:    return L"Sockets-of-PID";
+        case kTabSecurity:   return L"Security";
+        case kTabNotes:      return L"Notes";
+        default:             return L"—";
+    }
 }
 
 }  // namespace wintcp

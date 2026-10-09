@@ -1,4 +1,5 @@
 // ConnectionStore.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Model implementation: diffing, filtering (expressions), sorting, text.
 
 #include "ConnectionStore.h"
@@ -12,6 +13,8 @@
 
 #include "TcpTable.h"
 #include "Utils.h"
+#include "DnsResolver.h"
+#include "GeoIp.h"   // F5.11: IsPrivateAddrV4/V6   // kPendingHost sentinel for COL_HOST cell rendering
 // F5.1/F5.2/F5.3: the column cells below need the integrity and signature
 // LABELS, and those are defined next to the enums they describe rather than in
 // a presentation header - so the labels and the states cannot drift apart.
@@ -128,6 +131,12 @@ constexpr FilterKeyword kFilterKeywords[] = {
     {FilterField::Tls,      L"ssl"},
     {FilterField::Country,  L"country"},
     {FilterField::Country,  L"geo"},
+    // F5.4. `asn` is the whole name; the alias is there because "as" and "autonomous"
+    // are what people type, and a filter that silently matches nothing is worse
+    // than one that accepts a second spelling. No "asn:" - the vocabulary policy
+    // rejects a colon, and every other field drops it too.
+    {FilterField::Asn,      L"asn"},
+    {FilterField::Asn,      L"autonomous-system"},
     // D26: the bookmark note is joined onto the row, so it is a real,
     // searchable field. `note:` previously did not exist as a field name at
     // all, so `note:corp` degraded to a substring search for the literal text
@@ -417,7 +426,7 @@ int CmpDbl(double a, double b) {
 }
 
 // Saturating add for byte totals (a pathological ETW/IO counter pair must
-// never wrap the displayed or sorted total bac. to ~0).
+// never wrap the displayed or sorted total back to ~0).
 ULONGLONG SatAdd(ULONGLONG a, ULONGLONG b) {
     const ULONGLONG r = a + b;
     return (r < a) ? static_cast<ULONGLONG>(~0ULL) : r;
@@ -517,13 +526,13 @@ std::wstring FormatBpsCell(double rxBps, double txBps, bool known) {
 //
 // Three rules, each of which is a decision rather than a formatting habit:
 //
-//  * SUB-MILLISECOND PRINTS "<1", NOT "0". A loopbac. or same-switch RTT is
+//  * SUB-MILLISECOND PRINTS "<1", NOT "0". A loopback or same-switch RTT is
 //    tens of microseconds, and the sampler rounds it to 0 ms. Printing "0" would
 //    claim the round trip too. no time at all - a physically impossible reading
 //    that a user would reasonably report as a bug. "<1" is what `ss` shows and
 //    it is true.
 //  * WHOLE MILLISECONDS PRINT WITHOUT A DECIMAL. "12" not "12.000": most
-//    RTTs are not fractional, and trailing zeros ma.e the column wide enough to
+//    RTTs are not fractional, and trailing zeros make the column wide enough to
 //    push every other column across the table.
 //  * FRACTIONAL VALUES KEEP ONE DECIMAL, THEN TRIM IT. 12.5 is a real reading
 //    worth seeing exactly; 12.50 is noise.
@@ -670,7 +679,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
         // question and almost never the one meant. Quoting is the standard
         // answer and costs one branch on the token scanner. The quotes are
         // stripped from the value, so `note:"vendor api"` and
-        // `path:"program files"` mean what they loo. li.e.
+        // `path:"program files"` mean what they look like.
         std::wstring t;
         if (i < len && (text[i] == L'"' || text[i] == L'\'')) {
             const wchar_t quote = text[i];
@@ -739,6 +748,20 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             cl.numeric = true;
             cl.lo = lo;
             cl.hi = hi;
+        } else if (cl.field == FilterField::Asn && !value.empty() &&
+                   ParseNumberRange(value, lo, hi)) {
+            // F5.4. A bare number is the AS NUMBER as a threshold, so `asn:15169`
+            // and the range `asn:15169-20000` behave like every other numeric
+            // field. Anything else falls through to the text clause below and
+            // matches the "AS<n> <org>" cell as a substring, which is what makes
+            // `asn:cloudflare` find the operator by name.
+            //
+            // ParseNumberRange and not ParseStatRange: an ASN has no K/M/G
+            // suffixes, and accepting `asn:15169K` as a byte count would be a
+            // joke.
+            cl.numeric = true;
+            cl.lo = lo;
+            cl.hi = hi;
         } else if (cl.field == FilterField::Duration && !value.empty() &&
                    ParseDurationRange(value, &lo, &hi)) {
             // `duration:` is a threshold in SECONDS, not a substring of the
@@ -795,7 +818,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             else if (v == L"udp")  cl.proto = IPPROTO_UDP;
             else if (v == L"4" || v == L"ipv4") cl.family = 4;
             else if (v == L"6" || v == L"ipv6") cl.family = 6;
-            else cl.text = v;    // fall bac. to substring on the proto label
+            else cl.text = v;    // fall back to substring on the proto label
         } else if (value.empty() && cl.proto == 0 && cl.family == 0 &&
                    cl.field == FilterField::Any) {
             continue;            // bare "exclude:" etc. - no-op token
@@ -824,6 +847,13 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
     return true;
 }
 
+// F5.11: is this endpoint on a non-routable range? One helper for both families,
+// so a v6 row is not answered by the v4 predicate - which would call every
+// IPv4-mapped address public.
+bool AddrIsPrivate(const IN_ADDR& v4, const IN6_ADDR& v6, bool isV6) {
+    return isV6 ? IsPrivateAddrV6(reinterpret_cast<const unsigned char*>(&v6))
+                : IsPrivateAddrV4(ntohl(v4.S_un.S_addr));
+}
 bool MatchClause(const Connection& c, const FilterClause& cl) {
     if (cl.proto != 0 && c.protocol != cl.proto) return false;
     if (cl.family != 0) {
@@ -856,8 +886,18 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // NOT handled here - they have a unit-aware comparison further
             // down, so fall through to it rather than reject the row. Any
             // OTHER numeric field is not defined: return false rather than
-            // falling bac. to ports, which made "pid:1-2" match any connection
+            // falling back to ports, which made "pid:1-2" match any connection
             // using a port in 1..2.
+            // F5.4. A row with no ASN is UNKNOWN, and unknown never matches a
+            // threshold. Without this case the clause would fall through to the
+            // text path below with an empty needle, and Has() returns true for
+            // an empty needle - so `asn:1-4294967295` would select the entire
+            // table, every row in it, including the ones with no ASN at all. That
+            // reads like "everything has an ASN" and answers the opposite of the
+            // question.
+            case FilterField::Asn:
+                if (c.asnNumber == 0) return false;
+                return inRange(static_cast<long long>(c.asnNumber));
             case FilterField::Any:
                 if (cl.direction < 0)
                     return inRange(static_cast<long long>(c.localPort));
@@ -865,7 +905,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
                     return inRange(static_cast<long long>(c.remotePort));
                 return inRange(static_cast<long long>(c.localPort)) ||
                        inRange(static_cast<long long>(c.remotePort));
-            default: break;   // -> the live-stat bloc. below
+            default: break;   // -> the live-stat block. below
         }
     }
 
@@ -873,16 +913,49 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
     wchar_t tmp[24] = {0};
     const std::wstring* hay = nullptr;
     switch (f) {
+        // F5.11. `local:private` / `remote:private` and their `global` inverses.
+        //
+        // They live in the Any case because `local:` and `remote:` are consumed as
+        // DIRECTION prefixes before the field is resolved (see the StartsWithCi pair
+        // above), so `local:private` arrives here as field=Any with
+        // direction=-1 - not as field=Local. Putting the check in the Local case
+        // instead compiles, passes every type check, and silently never fires.
+        //
+        // The predicate is the same one GeoIP uses to refuse a country, declared in
+        // GeoIp.h so there is one table of ranges rather than two that could drift.
         case FilterField::Any:
-            // A bare direction restricts a text value to that endpoint;
-            // without one it searches the aggregated key.
+            if ((cl.text == L"private" || cl.text == L"global") &&
+                cl.direction != 0) {
+                const bool v6 = c.family == AF_INET6;
+                const bool priv =
+                    cl.direction < 0
+                        ? AddrIsPrivate(c.local4, c.local6, v6)
+                        : AddrIsPrivate(c.remote4, c.remote6, v6);
+                // Folded into the exclude flag rather than returning early, so
+                // `!local:private` works from the same code.
+                return (priv == (cl.text == L"private")) != cl.exclude;
+            }
             if (cl.direction != 0)
                 hay = (cl.direction < 0) ? &c.lowerLocal : &c.lowerRemote;
             else
                 hay = &c.lowerAll;
             break;
-        case FilterField::Local:   hay = &c.lowerLocal;  break;
-        case FilterField::Remote:  hay = &c.lowerRemote; break;
+        case FilterField::Local:
+            if (cl.text == L"private" || cl.text == L"global") {
+                const bool priv = AddrIsPrivate(c.local4, c.local6,
+                                                c.family == AF_INET6);
+                return (priv == (cl.text == L"private")) != cl.exclude;
+            }
+            hay = &c.lowerLocal;
+            break;
+        case FilterField::Remote:
+            if (cl.text == L"private" || cl.text == L"global") {
+                const bool priv = AddrIsPrivate(c.remote4, c.remote6,
+                                                c.family == AF_INET6);
+                return (priv == (cl.text == L"private")) != cl.exclude;
+            }
+            hay = &c.lowerRemote;
+            break;
         case FilterField::Process: hay = &c.lowerProcess; break;
         case FilterField::Path:    hay = &c.lowerPath;   break;
         case FilterField::Service: hay = &c.lowerService; break;
@@ -1005,8 +1078,8 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // which is a genuinely useful question ("which of these can I even
             // measure?"), rather than a no-op that matches all 300 rows.
             const bool known =
-                (cl.field == FilterField::Rtt)     ? c.rttKnown
-                : (cl.field == FilterField::MinRtt) ? c.rttKnown
+                (cl.field == FilterField::Rtt)     ? c.rttLive
+                : (cl.field == FilterField::MinRtt) ? c.rttEver
                 : (cl.field == FilterField::Cwnd)   ? c.cwndKnown
                 :                                  c.retransKnown;
             if (!known) return false;
@@ -1028,7 +1101,32 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
         case FilterField::Tls:
             return Has(ToLowerW(TlsSummary(c.tls)), cl.text);
         case FilterField::Country:
+            // A bare `country:` means "this row HAS a country" - the useful "show
+            // me everything with a known country" query - and is therefore false for
+            // a row with none.
+            //
+            // This is the empty-needle bug, and it was live: Has() returns TRUE for
+            // an empty needle, so before this guard a bare `country:` matched every
+            // row in the table, including the ones with no country at all. Pinned by
+            // geo.country-unenriched-matches-bare-BUG in the selftest, which failed
+            // until the guard was added. `asn:` never had it.
+            if (cl.text.empty()) return !c.country.empty();
             return Has(ToLowerW(c.country), cl.text);
+        case FilterField::Asn: {
+            // A bare `asn:` means "this row HAS an autonomous system", and is
+            // therefore false for a row with none - an unenriched row, or one
+            // whose address the ASN database does not cover.
+            //
+            // This is handled explicitly rather than left to Has(), which returns
+            // TRUE for an empty needle: an empty `cl.text` would then match every
+            // row in the table, including the ones with no ASN at all. That is
+            // the opposite of the question being asked. `country:` has exactly
+            // that bug today; `asn:` does not inherit it.
+            const bool has = c.asnNumber != 0 || !c.asnOrg.empty();
+            if (cl.text.empty()) return has;
+            if (!has) return false;   // unknown never matches a needle
+            return Has(ToLowerW(c.AsnDisplay()), cl.text);
+        }
         case FilterField::Note:
             // The joined bookmark note. A bare `note:` means "this row HAS a
             // note" - the useful "show me everything I annotated" query -
@@ -1129,6 +1227,7 @@ void ConnectionStore::FinalizeRow(Connection& c) {
 void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
     changes_.clear();
     const ULONGLONG nowTick = ::GetTickCount64();
+    lastSnapshotTick_ = nowTick;
 
     // Map previous (non-ghost) rows by identity key, keeping a QUEUE per key
     // rather than one entry.
@@ -1189,7 +1288,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             f.hostname = p.hostname;         // carry reverse-DNS results
             // State that outlives a single refresh: when the endpoint first
             // appeared, and the user's own annotations. Both are keyed on
-            // the endpoint identity, so a row that vanishes and comes bac.
+            // the endpoint identity, so a row that vanishes and comes back.
             // with the same 4-tuple keeps its age and bookmark.
             f.firstSeenTick = p.firstSeenTick;
             f.pinned = p.pinned;
@@ -1207,7 +1306,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             // arithmetic once the traffic join has written this tick's
             // counters.
             //
-            // WHY NOT HERE. The bps used to be computed inline, which loo.s
+            // WHY NOT HERE. The bps used to be computed inline, which looks
             // right and is not: at this point the fresh row still has
             // perRowBytes == false and trafficRx == 0, because the byte counters
             // are joined onto the row AFTER the snapshot is installed. So the
@@ -1235,7 +1334,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             // overwrites it each tick. The CUMULATIVE parts are protected from
             // going backwards inside ApplySocketTcpInfo, which is where the
             // "a smaller reading means a recycled Socket" rule belongs.
-            f.rttKnown = false;
+            f.rttLive = false;   // no RTT sample yet this tick -> blank until join
             f.cwndKnown = false;
             f.retransKnown = false;
             f.timestampsKnown = false;
@@ -1251,13 +1350,28 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
         merged.push_back(std::move(f));
     }
 
-    // Previous rows that vanished become one-cycle ghosts (red), and only
-    // if they were not already ghosts (ghosts never persist past one cycle).
+    // F5.7: retain vanished sockets instead of dropping them after one cycle.
+    // A socket that vanishes THIS refresh emits exactly one DISAPPEAR event and
+    // becomes a grey ghost; on later refreshes it is carried forward silently (no
+    // event), so a stable snapshot neither re-fires DISAPPEAR nor recreates the
+    // row. The retained set is bounded by TrimRetainedGhosts below.
     for (size_t i = 0; i < rows_.size(); ++i) {
         if (matched[i]) continue;
-        if (rows_[i].flags & kRowRemoved) continue;
-        Connection ghost = rows_[i];
+        Connection& prev = rows_[i];
+        if (prev.flags & kRowRemoved) {
+            // Already a retained ghost: carry it forward unchanged.
+            merged.push_back(std::move(prev));
+            continue;
+        }
+        // Freshly vanished -> one DISAPPEAR, then a ghost carrying the last
+        // sample's counters as its final metrics.
+        Connection ghost = prev;
+        ghost.flags &= ~kRowNew;
+        ghost.flags &= ~kRowChanged;
         ghost.flags |= kRowRemoved;
+        ghost.deathTick = nowTick;
+        ghost.finalRx = prev.trafficRx;
+        ghost.finalTx = prev.trafficTx;
         RowChange ch;
         ch.kind = kChangeDisappear;
         ch.row = ghost;
@@ -1265,8 +1379,40 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
         merged.push_back(std::move(ghost));
     }
 
+    TrimRetainedGhosts(merged);
+
     rows_ = std::move(merged);
     RebuildIndexes();
+}
+
+// F5.7: keep at most kMaxRetainedGhosts grey ghosts, evicting the oldest. The
+// order is by deathTick (earliest-vanished leaves first); id breaks ties for
+// sockets that vanished in the same snapshot, so the eviction is stable.
+void ConnectionStore::TrimRetainedGhosts(std::vector<Connection>& rows) {
+    size_t ghostCount = 0;
+    for (const Connection& r : rows)
+        if (r.flags & kRowRemoved) ++ghostCount;
+    if (ghostCount <= kMaxRetainedGhosts) return;
+
+    struct GhostPos { ULONGLONG deathTick; std::uint64_t id; size_t idx; };
+    std::vector<GhostPos> gp;
+    gp.reserve(ghostCount);
+    for (size_t i = 0; i < rows.size(); ++i)
+        if (rows[i].flags & kRowRemoved)
+            gp.push_back({ rows[i].deathTick, rows[i].id, i });
+    std::sort(gp.begin(), gp.end(),
+              [](const GhostPos& a, const GhostPos& b) {
+                  if (a.deathTick != b.deathTick) return a.deathTick < b.deathTick;
+                  return a.id < b.id;
+              });
+    const size_t drop = ghostCount - kMaxRetainedGhosts;
+    std::vector<bool> kill(rows.size(), false);
+    for (size_t k = 0; k < drop; ++k) kill[gp[k].idx] = true;
+    std::vector<Connection> kept;
+    kept.reserve(rows.size() - drop);
+    for (size_t i = 0; i < rows.size(); ++i)
+        if (!kill[i]) kept.push_back(std::move(rows[i]));
+    rows = std::move(kept);
 }
 
 // Turn this tick's byte counters into a per-connection RATE, now that the
@@ -1337,7 +1483,7 @@ int ConnectionStore::ComputeRates() {
 // WHY THE SUM IS TRUSTWORTHY, and where D20 comes in. Summing is only correct
 // if each Socket is counted exactly once. Before D20 the row key omitted the
 // PID, so 86 mDNS rows collapsed onto 10 identities and a per-key queue was
-// needed to pair duplicates 1:1 - without that wor. a process holding several
+// needed to pair duplicates 1:1 - without that work a process holding several
 // Sockets on the same endpoint would either double-count its own bytes or lose
 // some, and this column would be wrong by an unknown factor. That is why the
 // duplicate-identity fix is load-bearing here and not merely tidy.
@@ -1528,7 +1674,7 @@ size_t ConnectionStore::CountForPid(DWORD pid) const {
 // endpoint is bookmarked, and set its colour tag and note.
 //
 // Called after the snapshot and after any add/remove, not per-row. It reads
-// the registry-bac.ed store once and then wal.s the rows, which is the right
+// the registry-backed store once and then walks the rows, which is the right
 // way round: a registry read per row would be thousands of them on a busy
 // machine.
 //
@@ -1608,9 +1754,34 @@ bool ConnectionStore::SetCountry(const std::wstring& addr,
         if (r.country == country) continue;
         r.country = country;
         // The lower-case copy is what the filter searches. S.ipping it would
-        // ma.e `country:de` fail while the column visibly reads "DE" - a
+        // make `country:de` fail while the column visibly reads "DE" - a
         // filter that ignores a value shown on screen.
         RebuildLowerAll(r);
+        changed = true;
+    }
+    return changed;
+}
+
+// F5.4. Joins by remote address exactly as SetCountry does - one ASN belongs to
+// one network, and a process with twenty connections to it gets the same answer
+// on all twenty rows.
+//
+// Both halves are written even when only one is known, and the CLEARING case
+// matters as much as the setting one: an address whose answer disappears (the
+// database was reloaded with different contents) must stop claiming an ASN, so
+// an all-empty answer clears rather than being skipped. A row that kept a stale
+// AS number after the file changed under it would be worse than a blank cell.
+bool ConnectionStore::SetAsn(const std::wstring& addr, uint32_t number,
+                             const std::wstring& org) {
+    if (addr.empty()) return false;
+    const auto it = addrRows_.find(addr);
+    if (it == addrRows_.end()) return false;
+    bool changed = false;
+    for (size_t i : it->second) {
+        Connection& r = rows_[i];
+        if (r.asnNumber == number && r.asnOrg == org) continue;
+        r.asnNumber = number;
+        r.asnOrg = org;
         changed = true;
     }
     return changed;
@@ -1710,7 +1881,7 @@ int ConnectionStore::ApplySocketBytes(const std::vector<SocketBytes>& bytes) {
 // Per-field assignment rather than all-or-nothing, because the kernel populates
 // these independently: a Socket with TCP timestamps off still has a perfectly
 // real congestion window. A blanketet copy guarded on one `known` would blanket the
-// three fields that did come bac..
+// three fields that did come back..
 int ConnectionStore::ApplySocketTcpInfo(
     const std::vector<SocketTcpInfo>& infos) {
     if (infos.empty()) return 0;
@@ -1735,11 +1906,12 @@ int ConnectionStore::ApplySocketTcpInfo(
                 r.retransBytes = t.retransBytes;
                 r.retransKnown = true;
             }
-            if (t.rttKnown) {
-                if (!r.rttKnown || t.minRttMs < r.minRttMs)
+            if (t.rttLive) {
+                if (!r.rttEver || t.minRttMs < r.minRttMs)
                     r.minRttMs = t.minRttMs;
                 r.rttMs = t.rttMs;
-                r.rttKnown = true;
+                r.rttLive = true;   // sample live on THIS tick
+                r.rttEver = true;   // latches: a real RTT was observed once
             }
             if (t.cwndKnown) {
                 r.cwnd = t.cwnd;
@@ -1758,7 +1930,7 @@ int ConnectionStore::ApplySocketTcpInfo(
 }
 
 // Kernel ages arrive keyed by the 4-tuple in the printable form the rows
-// already carry, so this is a loo.up by identity, not by PID: a process with
+// already carry, so this is a lookup by identity, not by PID: a process with
 // twenty connections reports twenty ages, each belonging to one row.
 int ConnectionStore::ApplyKernelAges(const std::vector<SocketAge>& ages) {
     if (ages.empty()) return 0;
@@ -1780,7 +1952,7 @@ int ConnectionStore::ApplyKernelAges(const std::vector<SocketAge>& ages) {
                 continue;
             if (r.protocol != IPPROTO_TCP) continue;   // TCP_INFO_v0 is TCP only
             // Bac.date only: the kernel's age is authoritative, but a shorter
-            // reading must not ma.e a connection loo. younger than we have
+            // reading must not make a connection look younger than we have
             // already proven it to be.
             if (r.firstSeenTick == 0 || kernelSeen < r.firstSeenTick)
                 r.firstSeenTick = kernelSeen;
@@ -1850,7 +2022,7 @@ const wchar_t* ConnectionStore::ColumnTitle(int column) {
         case COL_MINRTT:   return L"Min RTT";
         case COL_CWND:     return L"Cwnd";
         case COL_RETRANS:  return L"Retrans";
-        case COL_GROUPRATE: return L"Proc Speed";
+        case COL_GROUPRATE: return L"Process rate";
         case COL_NOTE: return L"Note";
         case COL_TLS:     return L"TLS";
         case COL_COUNTRY: return L"Country";
@@ -1898,7 +2070,15 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
                                        static_cast<unsigned long>(c.pid)); break;
         case COL_PROCESS: set(c.processName.empty() ? L"—" : c.processName); break;
         case COL_SERVICE: set(c.serviceName); break;
-        case COL_HOST:    set(c.hostname); break;
+        case COL_HOST:
+            // 9.2.8: empty hostname = no PTR record (render em-dash);
+            // the pending sentinel = a lookup still in flight (render
+            // "pending" so a stale name is distinguishable from a missing
+            // one rather than looking like an empty cell).
+            if (c.hostname.empty()) set(L"—");
+            else if (c.hostname == DnsResolver::kPendingHost) set(L"pending");
+            else set(c.hostname);
+            break;
         case COL_PATH:    set(c.processPath); break;
         case COL_TRAFFIC:
             if (c.trafficRx == 0 && c.trafficTx == 0) {
@@ -1956,15 +2136,19 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
         // readings - the same "one missing value blankets the row" failure the
         // ApplySocketTcpInfo join would otherwise have introduced.
         case COL_RTT:
-            set(c.rttKnown ? FormatRttMs(c.rttMs) : L"—");
+            set(c.rttLive ? FormatRttMs(c.rttMs) : L"—");
             break;
         case COL_MINRTT:
             // Only meaningful alongside a live RTT: without one the "best ever
-            // seen" has no measurement to be the best of. A zero minRtt beside a
-            // real rttMs means the kernel reported an RTT but no running
-            // minimum, so there is genuinely nothing to print.
-            set((c.rttKnown && c.minRttMs != 0) ? FormatRttMs(c.minRttMs)
-                                               : L"—");
+            // seen" has no measurement to be the best of. But Min RTT is a
+            // running minimum, so it latches on `rttEver` rather than the
+            // per-tick `rttLive`: a connection that idles after traffic still
+            // shows its best observed value, while a socket that never produced
+            // one correctly blanks to a dash. A zero minRtt beside a real rttMs
+            // means the kernel reported an RTT but no running minimum, so there
+            // is genuinely nothing to print.
+            set((c.rttEver && c.minRttMs != 0) ? FormatRttMs(c.minRttMs)
+                                              : L"—");
             break;
         case COL_CWND:
             set(c.cwndKnown ? FormatBytes(c.cwnd) : L"—");
@@ -1976,7 +2160,25 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             set(c.retransKnown ? FormatBytes(c.retransBytes) : L"—");
             break;
         case COL_TLS:      set(TlsSummary(c.tls)); break;
-        case COL_COUNTRY:  set(c.country); break;
+        case COL_COUNTRY:
+            // F5.4. The ASN rides in the Country column rather than taking a
+            // 33rd one: 9.1.1 froze the table at 32 columns, and the decision
+            // recorded for a feature in this position was to reuse the slot.
+            //
+            // The two are separated by a middle dot and only when BOTH are known,
+            // so a row with a country alone reads exactly as it did before, and a
+            // row with only an ASN still says something useful. `set` ellipsises
+            // on overflow, so a narrow window truncates the organisation name -
+            // the full value is in `details`, and the AS NUMBER is deliberately
+            // placed before the name so a truncation never hides which network
+            // this is.
+            {
+                const std::wstring asn = c.AsnDisplay();
+                if (c.country.empty())      set(asn);
+                else if (asn.empty())      set(c.country);
+                else                       set(c.country + L" \xB7 " + asn);
+            }
+            break;
         case COL_PINNED:
             // The tag letter only means something next to its colour, which
             // the row itself carries; a pin alone is the default 'P'.
@@ -2128,22 +2330,22 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
         // descending surfaces the slow ones, which is the query someone
         // diagnosing a lag actually wants.
         case COL_RTT: {
-            if (a.rttKnown != b.rttKnown) {
+            if (a.rttLive != b.rttLive) {
                 unknownLast = true;
-                cmp = a.rttKnown ? -1 : 1;
+                cmp = a.rttLive ? -1 : 1;
             } else {
-                cmp = CmpInt(a.rttKnown ? static_cast<long long>(a.rttMs) : 0,
-                             b.rttKnown ? static_cast<long long>(b.rttMs) : 0);
+                cmp = CmpInt(a.rttLive ? static_cast<long long>(a.rttMs) : 0,
+                             b.rttLive ? static_cast<long long>(b.rttMs) : 0);
             }
             break;
         }
         case COL_MINRTT: {
-            if (a.rttKnown != b.rttKnown) {
+            if (a.rttEver != b.rttEver) {
                 unknownLast = true;
-                cmp = a.rttKnown ? -1 : 1;
+                cmp = a.rttEver ? -1 : 1;
             } else {
-                cmp = CmpInt(a.rttKnown ? static_cast<long long>(a.minRttMs) : 0,
-                             b.rttKnown ? static_cast<long long>(b.minRttMs) : 0);
+                cmp = CmpInt(a.rttEver ? static_cast<long long>(a.minRttMs) : 0,
+                             b.rttEver ? static_cast<long long>(b.minRttMs) : 0);
             }
             break;
         }
@@ -2178,7 +2380,32 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             }
             break;
         }
-        case COL_COUNTRY: cmp = CmpStr(a.country, b.country); break;
+                case COL_COUNTRY:
+            // F5.4. Compare what the column PRINTS, so the sort order matches the
+            // screen: country first, then the ASN as a tiebreak. Without the
+            // tiebreak, rows sharing a country - which is most of a table once the
+            // database is loaded - sort arbitrarily against their own ASN.
+            //
+            // unknownLast: a row with neither answer sorts to the END in both
+            // directions, as docs/cli.md promises for unknown values. Without it an
+            // empty cell - which sorts below every real value - rose to the TOP
+            // under --desc, which is the one direction a reader uses to find "the
+            // rows I have not looked at yet".
+            if (a.country.empty() && a.AsnDisplay().empty() &&
+                !(b.country.empty() && b.AsnDisplay().empty())) {
+                unknownLast = true;
+                cmp = 1;
+                break;
+            }
+            if (b.country.empty() && b.AsnDisplay().empty() &&
+                !(a.country.empty() && a.AsnDisplay().empty())) {
+                unknownLast = true;
+                cmp = -1;
+                break;
+            }
+            cmp = CmpStr(a.country, b.country);
+            if (cmp == 0) cmp = CmpStr(a.AsnDisplay(), b.AsnDisplay());
+            break;
         case COL_PINNED: {
             // Pinned first regardless of direction, then by tag, so a
             // bookmarked row never sinks below unbookmarked noise.
@@ -2194,7 +2421,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
         case COL_NOTE: {
             // Annotated rows first, for the same reason bookmarks leads: a
             // note is the reader's own annotation and the rows carrying one are
-            // the ones being loo.ed for. Within those, alphabetical, so
+            // the ones being looked for. Within those, alphabetical, so
             // "everything I wrote about vendor X" sorts together.
             const bool na = !a.note.empty();
             const bool nb = !b.note.empty();

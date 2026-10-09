@@ -1,4 +1,5 @@
 // RefreshEngine.h
+// SPDX-License-Identifier: Apache-2.0
 // Background worker: enumerates endpoints, resolves processes and
 // service names off the UI thread and hands a complete snapshot to a
 // callback running on the worker thread (the UI posts it to itself).

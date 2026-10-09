@@ -1,7 +1,10 @@
 // Commands.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Commands.h. All headless; no HWND, no dialogs, no clipboard.
 
 #include "Commands.h"
+#include "Alerts.h"     // F5.6: AlertRule, AlertRuleStore
+#include "Settings.h"
 
 #include <algorithm>
 #include <cwchar>
@@ -12,6 +15,7 @@
 
 #include "BlockConn.h"
 #include "Bookmarks.h"
+#include "BuildInfo.h"
 #include "ColumnsWin.h"
 #include "DnsResolver.h"
 #include "Elevate.h"
@@ -707,6 +711,134 @@ const char* JsonKeyFor(int column) {
     }
 }
 
+// ---- help reference: columns / filters (9.3.2) -----------------------------
+// `help columns` and `help filters` print the vocabulary from the SAME tables
+// the parser uses (JsonKeyFor above, ColumnTitle, ColumnIsPerConnectionOnly,
+// kColumnSet*), so the reference can never drift from the spellings the rest of
+// the binary accepts. Generated rather than hand-written: a column that the
+// parser knows but this list forgot would be an undocumentable column, and a
+// spelling the parser rejects but this list shows would be a documentation lie.
+
+static const char* ColumnSource(int col) {
+    switch (col) {
+        case COL_HOST:      return "dns (--dns)";
+        case COL_COUNTRY:   return "geoip (--db)";
+        case COL_TLS:       return "etw";
+        case COL_NOTE:
+        case COL_PINNED:    return "bookmarks";
+        case COL_RX:
+        case COL_TX:
+        case COL_NETTOTAL:
+        case COL_TRAFFIC:
+        case COL_BANDWIDTH:
+        case COL_RTT:
+        case COL_MINRTT:
+        case COL_CWND:
+        case COL_RETRANS:
+        case COL_GROUPRATE: return "traffic";
+        default:            return "snapshot";
+    }
+}
+
+static const char* FilterFieldLabel(FilterField f) {
+    switch (f) {
+        case FilterField::Any:       return "any";
+        case FilterField::Local:     return "local";
+        case FilterField::Remote:    return "remote";
+        case FilterField::LPort:     return "lport";
+        case FilterField::RPort:     return "rport";
+        case FilterField::Port:      return "port";
+        case FilterField::Pid:       return "pid";
+        case FilterField::Process:   return "process";
+        case FilterField::Path:      return "path";
+        case FilterField::State:     return "state";
+        case FilterField::Proto:     return "proto";
+        case FilterField::Host:      return "host";
+        case FilterField::Service:   return "service";
+        case FilterField::Cpu:       return "cpu";
+        case FilterField::Mem:       return "mem";
+        case FilterField::Disk:      return "disk";
+        case FilterField::Rx:        return "rx";
+        case FilterField::Tx:        return "tx";
+        case FilterField::Net:       return "net";
+        case FilterField::Duration:  return "duration";
+        case FilterField::Speed:     return "speed";
+        case FilterField::Tls:       return "tls";
+        case FilterField::Country:   return "country";
+        case FilterField::Asn:       return "asn";
+        case FilterField::Note:      return "note";
+        case FilterField::Rtt:       return "rtt";
+        case FilterField::MinRtt:    return "minrtt";
+        case FilterField::Cwnd:      return "cwnd";
+        case FilterField::Retrans:   return "retrans";
+        case FilterField::Ppid:      return "ppid";
+        case FilterField::Parent:    return "parent";
+        case FilterField::Integrity: return "integrity";
+        case FilterField::Signature: return "signature";
+    }
+    return "?";
+}
+
+std::string HelpColumnsText() {
+    std::string out =
+        "columns - every column, its CLI name, its header, the source that "
+        "fills it, and whether it is group-safe. A group is one process, so a "
+        "per-connection column has no honest group answer and is refused by "
+        "`--group`.\r\n"
+        "\r\n"
+        "name | header | source | group-safe\r\n";
+    for (int col = 0; col < COL_COUNT; ++col) {
+        out += JsonKeyFor(col);
+        out += " | ";
+        out += WideToUtf8(ConnectionStore::ColumnTitle(col));
+        out += " | ";
+        out += ColumnSource(col);
+        out += " | ";
+        out += ColumnIsPerConnectionOnly(col) ? "per-connection" : "group-safe";
+        out += "\r\n";
+    }
+    out += "\r\n";
+    out += "Named column sets (--columns SET): default, minimal, full.\r\n";
+    auto dumpSet = [&](const char* setName, const int* cols) {
+        out += "  ";
+        out += setName;
+        out += ": ";
+        const size_t n = CountColumns(cols);
+        for (size_t i = 0; i < n; ++i) {
+            if (i) out += ", ";
+            out += JsonKeyFor(cols[i]);
+        }
+        out += "\r\n";
+    };
+    dumpSet("default", kColsCliDefault);
+    dumpSet("minimal", kColsCliMinimal);
+    dumpSet("full",    kColsCliFull);
+    return out;
+}
+
+std::string HelpFiltersText() {
+    std::string out =
+        "filters - accepted `--select` / `--filter` keywords (case-insensitive "
+        "substrings unless noted). Family prefixes (tcp/udp/ipv4/ipv6) and "
+        "direction (local:/remote:) compose with any keyword.\r\n"
+        "\r\n"
+        "keyword | field | kind\r\n";
+    const FilterKeyword* table = FilterKeywordTable();
+    const size_t n = FilterKeywordCount();
+    for (size_t i = 0; i < n; ++i) {
+        out += WideToUtf8(table[i].spelling);
+        out += " | ";
+        out += FilterFieldLabel(table[i].field);
+        out += " | keyword\r\n";
+    }
+    out += "\r\n";
+    out += "Numeric keywords (pid/lport/rport/port/state/cpu/mem/disk/rx/tx/net/"
+           "duration/speed/rtt/minrtt/cwnd/retrans/ppid) accept ranges: a-b.\r\n";
+    out += "State keywords: estab, time-wait, listen, close-wait, and others.\r\n";
+    out += "Proto keywords: tcp, udp.\r\n";
+    return out;
+}
+
 // 'lines' selects NDJSON over the JSON array - see ListOptions::jsonLines.
 // One renderer for both, because everything else about the two shapes (the
 // keys, the escaping, the limit, the group fall-through) is identical, and
@@ -838,13 +970,21 @@ SocketTrafficSampler& TrafficSampler() {
 }
 
 void JoinDnsAddrs(ConnectionStore& store,
-                  const std::vector<std::wstring>& addrs) {
+                  const std::vector<std::wstring>& addrs,
+                  unsigned timeoutMs /* =0 = resolver default */,
+                  unsigned* stuckOut /* =nullptr */) {
     std::set<std::wstring> seen;
+    unsigned stuck = 0;
     for (const std::wstring& a : addrs) {
         if (a.empty() || !seen.insert(a).second) continue;
-        const std::wstring host = DnsResolver::Lookup(a);
+        const std::wstring host = DnsResolver::Lookup(a, timeoutMs);
         if (!host.empty()) store.SetHostname(a, host);
+        // A stalled lookup is still "" (Lookup is synchronous), so count it:
+        // callers that passed a timeout treat an empty result as "pending or
+        // failed". The CLI emits one stderr line per run via stuckOut.
+        if (timeoutMs != 0 && host.empty()) ++stuck;
     }
+    if (stuckOut) *stuckOut = stuck;
 }
 
 // A remote endpoint plus its family for GeoIP lookup (values, not row
@@ -868,6 +1008,37 @@ bool JoinGeoAddrs(ConnectionStore& store, GeoIpDatabase& db,
             code = db.LookupV4(ntohl(a4.S_un.S_addr));
         }
         if (!code.empty()) store.SetCountry(t.address, code);
+    }
+    return true;
+}
+
+// F5.4. The ASN join, shaped exactly like JoinGeoAddrs so the two read as a pair.
+//
+// Two differences from the country join, both deliberate:
+//
+// - The answer is written even when it is EMPTY. JoinGeoAddrs skips an empty code,
+//   which is right there (a stale country must not be cleared by a database that
+//   simply lacks this range) but wrong here in one specific case: a row whose ASN
+//   was resolved by an earlier pass and is not covered by the file now loaded
+//   should stop claiming an AS number. A stale AS number is a wrong answer;
+//   a blank cell is not.
+// - The parse failure is still a silent skip. An address the row printed but the
+//   parser rejects is not the join's problem to report, and JoinGeoAddrs sets the
+//   precedent.
+bool JoinAsnAddrs(ConnectionStore& store, GeoIpDatabase& db,
+                  const std::vector<GeoTarget>& targets) {
+    for (const GeoTarget& t : targets) {
+        AsnInfo info;
+        if (t.ipv6) {
+            IN6_ADDR a6 = {};
+            if (::InetPtonW(AF_INET6, t.address.c_str(), &a6) != 1) continue;
+            info = db.LookupAsnV6(a6.s6_addr);
+        } else {
+            IN_ADDR a4 = {};
+            if (::InetPtonW(AF_INET, t.address.c_str(), &a4) != 1) continue;
+            info = db.LookupAsnV4(ntohl(a4.S_un.S_addr));
+        }
+        store.SetAsn(t.address, info.number, info.org);
     }
     return true;
 }
@@ -1025,6 +1196,8 @@ struct PrintSelection {
 bool DependsOnEnrichment(FilterField f) {
     return f == FilterField::Rx || f == FilterField::Tx ||
            f == FilterField::Net || f == FilterField::Country ||
+           f == FilterField::Asn ||
+           f == FilterField::Asn ||
            f == FilterField::Host || f == FilterField::Duration ||
            f == FilterField::Rtt || f == FilterField::MinRtt ||
            f == FilterField::Cwnd || f == FilterField::Retrans ||
@@ -1087,13 +1260,15 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt) {
     if (!opt.filter.empty()) {
         std::vector<FilterClause> all;
         ParseFilter(opt.filter, all);
-        bool needDns = false, needGeo = false, needTraffic = false;
+        bool needDns = false, needGeo = false, needAsn = false, needTraffic = false;
         for (const FilterClause& cl : all) {
             if (!DependsOnEnrichment(cl.field)) continue;
             if (cl.field == FilterField::Host) {
                 if (!opt.dns) needDns = true;
             } else if (cl.field == FilterField::Country) {
                 if (opt.geoIpPath.empty()) needGeo = true;
+            } else if (cl.field == FilterField::Asn) {
+                if (opt.asnIpPath.empty()) needAsn = true;
             } else if (cl.field != FilterField::Duration) {
                 if (!opt.traffic) needTraffic = true;
             }
@@ -1104,6 +1279,9 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt) {
         if (needGeo)
             out += "filter: \"country:\" matches GeoIP codes; add --db "
                    "<path to a .mmdb database>.\r\n";
+        if (needAsn)
+            out += "filter: \"asn:\" matches autonomous systems; add --asn-db "
+                   "<path to a GeoLite2-ASN .mmdb>.\r\n";
         if (needTraffic) {
             // Name the fields the user actually typed where possible. A bare
             // "add --traffic" for `rtt:100` would be true but unhelpful - the
@@ -1207,9 +1385,20 @@ std::string ColumnEnrichmentAdvice(const ListOptions& opt) {
         out += "column: \"host\" without --dns: reverse DNS never ran, so the "
                "cell stays empty; add --dns (blocking; resolves every "
                "candidate remote).\r\n";
-    if (colGeo && opt.geoIpPath.empty())
+    // F5.4. The country cell half-comes from --db and half from --asn-db, so
+    // "the cell stays empty" is FALSE whenever either is loaded: an ASN database
+    // fills the same cell with "AS15169 Google LLC" and no country code. The
+    // message used to claim the cell stayed empty in that case, which is both
+    // wrong and the opposite of helpful - the user is looking at a populated cell
+    // while being told it is blank. Say precisely which HALF is missing.
+    if (colGeo && opt.geoIpPath.empty() && opt.asnIpPath.empty()) {
         out += "column: \"country\" without --db: GeoIP never ran, so the cell "
                "stays empty; add --db <path to a .mmdb database>.\r\n";
+    } else if (colGeo && opt.geoIpPath.empty()) {
+        out += "column: \"country\" without --db: the ASN half is filled from "
+               "--asn-db, but no country code is, so the cell shows only "
+               "\"AS<n> <org>\"; add --db for the code.\r\n";
+    }
     if (colSig && !opt.signatures)
         out += "column: \"signature\" without --signatures: WinVerifyTrust was "
                "never called, so the cell is \"—\" rather than a verdict; add "
@@ -1396,9 +1585,31 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
     // Missing-switch advice first: it must fire even when NO join runs below
     // (that early return is exactly the case it exists for).
     if (advice != nullptr) *advice = MissingEnrichmentAdvice(opt);
-    if (!opt.dns && !opt.traffic && opt.geoIpPath.empty()) return true;
+    if (!opt.dns && !opt.traffic && opt.geoIpPath.empty() &&
+        opt.asnIpPath.empty()) {
+        return true;
+    }
     const PrintSelection sel = SelectedForPrint(store, opt);
-    if (opt.dns) JoinDnsAddrs(store, sel.remotes);
+    if (opt.dns) {
+        unsigned stuck = 0;
+        // 9.2.8: when --dns-timeout is set, stale/empty answers from lookups
+        // that exceeded the budget are reported as pending via the stall
+        // count rather than silently rendered as `—`. Lookup itself is
+        // synchronous (getnameinfo is uncancellable), so a genuinely wedged
+        // resolver still blocks the CLI - but the advisory tells the user how
+        // many names were affected, and the GUI worker (Run) gets the real
+        // per-tick budget.
+        JoinDnsAddrs(store, sel.remotes, opt.dnsTimeoutMs, &stuck);
+        if (opt.dnsTimeoutMs != 0 && stuck > 0 && err != nullptr) {
+            const std::string note =
+                "note: " + std::to_string(stuck) + " reverse-DNS "
+                "lookup(s) exceeded --dns-timeout "
+                + std::to_string(opt.dnsTimeoutMs)
+                + " ms and show as pending; re-run with a larger value or "
+                "against a reachable resolver.\r\n";
+            *err += Utf8ToWide(note.c_str());
+        }
+    }
     if (!opt.geoIpPath.empty()) {
         GeoIpDatabase db;
         std::wstring loadErr;
@@ -1407,6 +1618,19 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
             return false;
         }
         JoinGeoAddrs(store, db, sel.geoTargets);
+    }
+    // F5.4. A separate block, not a second Load inside the one above: the two
+    // databases are different files, and a user may legitimately supply either or
+    // both. The error prefix says ASN so a bad path is attributable - the same
+    // message twice with different files behind it is not an error message.
+    if (!opt.asnIpPath.empty()) {
+        GeoIpDatabase asnDb;
+        std::wstring loadErr;
+        if (!asnDb.Load(opt.asnIpPath.c_str(), &loadErr)) {
+            if (err != nullptr) *err = L"ASN database: " + loadErr;
+            return false;
+        }
+        JoinAsnAddrs(store, asnDb, sel.geoTargets);
     }
     if (opt.traffic) {
         // A failed pass is named explicitly, and BEFORE the unenrichable-window
@@ -1748,6 +1972,7 @@ DetailModel BuildDetailModel(const Connection& c,
     };
     DetailSection proc;
     proc.title = L"Process";
+    proc.tab = kTabProcess;
     add(proc, L"Name", c.processName);
     add(proc, L"PID", std::to_wstring(c.pid));
     add(proc, L"Path", c.processPath);
@@ -1854,6 +2079,7 @@ DetailModel BuildDetailModel(const Connection& c,
                 }
             }
             thr.note = note;
+            thr.tab = kTabProcess;
             m.sections.push_back(std::move(thr));
         } else if (c.pid == 0) {
             // An ownerless row (TIME_WAIT) has no process and therefore no
@@ -1861,6 +2087,7 @@ DetailModel BuildDetailModel(const Connection& c,
             DetailSection thr;
             thr.title = L"Threads";
             thr.note = L"this row has no owning process.";
+            thr.tab = kTabProcess;
             m.sections.push_back(std::move(thr));
         }
         // c.pid != 0, nothing published yet, empty: the first sample is still in
@@ -1871,6 +2098,7 @@ DetailModel BuildDetailModel(const Connection& c,
 
     DetailSection live;
     live.title = L"Live stats (this refresh)";
+    live.tab = kTabProcess;
     if (c.cpuPct >= 0.0) {
         wchar_t cpu[32] = {0};
         ::swprintf_s(cpu, L"%.1f %%", c.cpuPct);
@@ -1917,6 +2145,7 @@ DetailModel BuildDetailModel(const Connection& c,
     if (c.tls.known) {
         DetailSection tls;
         tls.title = L"TLS";
+        tls.tab = kTabSecurity;
         if (c.tls.secure) {
             add(tls, L"Protocol", TlsProtocolName(c.tls.protocol));
             add(tls, L"Cipher suite",
@@ -1932,14 +2161,55 @@ DetailModel BuildDetailModel(const Connection& c,
         m.sections.push_back(std::move(tls));
     }
 
+    // 9.4.1: a Security section for process-level trust metadata that the row
+    // already carries (fetched with the process name) but the Details window
+    // never surfaced. Integrity level is the single thing that answers "could
+    // this process have written to HKLM"; signature state disambiguates
+    // "unsigned" (honest, many binaries) from "BAD SIG" (tampered) from
+    // "sig?" (could not be checked); app-container marks a sandboxed process;
+    // the parent link is what makes the process tree navigable. All four are
+    // only meaningful when actually known, so each renders an em-dash when
+    // the resolver never filled it - never a fabricated default.
+    if (c.pid != 0) {
+        DetailSection sec;
+        sec.title = L"Security";
+        sec.tab = kTabSecurity;
+        add(sec, L"Integrity level",
+            std::wstring(IntegrityLabel(static_cast<IntegrityLevel>(c.integrity))));
+        add(sec, L"App container", c.appContainer ? L"yes" : L"—");
+        add(sec, L"Signature",
+            std::wstring(SignatureLabel(static_cast<SignatureState>(c.signature))));
+        std::wstring parent;
+        if (c.ppidKnown && c.parentName.empty())
+            parent = std::to_wstring(c.ppid);
+        else if (c.ppidKnown)
+            parent = c.parentName + L" (PID " + std::to_wstring(c.ppid) + L")";
+        add(sec, L"Parent", parent);
+        m.sections.push_back(std::move(sec));
+    }
+
     DetailSection conn;
     conn.title = L"Selected connection";
-    add(conn, L"Protocol", c.protoLabel);
+    conn.tab = kTabConnection;
     add(conn, L"Local", c.localEndpoint);
     add(conn, L"Remote", c.remoteEndpoint);
     add(conn, L"State", c.stateLabel);
     add(conn, L"Hostname", c.hostname);
     if (!c.country.empty()) add(conn, L"Country", c.country);
+    // F5.4. Its own rows rather than being folded into Country: the two answers
+    // come from different database files, and "which country" and "which network"
+    // are two questions. An org with no number still gets a row, because the name
+    // is the part a reader recognises.
+    if (!c.asnOrg.empty()) add(conn, L"AS organisation", c.asnOrg);
+    if (c.asnNumber != 0)
+        add(conn, L"AS number", L"AS" + std::to_wstring(c.asnNumber));
+    // F5.4. Its own row rather than being folded into Country: the two come from
+    // different database files, and "which country and which network" are two
+    // questions. An org with no number still gets a row, because the name is the
+    // part a reader recognises.
+    if (!c.asnOrg.empty()) add(conn, L"AS organisation", c.asnOrg);
+    if (c.asnNumber != 0)
+        add(conn, L"AS number", L"AS" + std::to_wstring(c.asnNumber));
     if (c.firstSeenTick != 0)
         add(conn, L"Duration", FormatDuration(DurationSeconds(c)));
     m.sections.push_back(std::move(conn));
@@ -1971,9 +2241,32 @@ DetailModel BuildDetailModel(const Connection& c,
         std::wstring line = row.protoLabel + L"  " + row.localEndpoint +
                             L"   " + row.remoteEndpoint + L"  (" +
                             row.stateLabel + L")";
-        if (!row.hostname.empty()) line += L"  @ " + row.hostname;
+        if (!row.hostname.empty()) {
+            // 9.2.8: a pending lookup renders as "pending" (not the raw
+            // kPendingHost sentinel) so the details view is legible.
+            if (row.hostname == DnsResolver::kPendingHost)
+                line += L"  @ pending";
+            else
+                line += L"  @ " + row.hostname;
+        }
         m.connectionLines.push_back(std::move(line));
     }
+
+    // 9.4.1: the Notes section carries the user's annotations on the row -
+    // the colour tag and the free-text note, both applied through the
+    // bookmarking verbs. A plain ("") note and an untagged row render their
+    // em-dashes, which is the honest answer for "nothing was ever set" and
+    // also avoids the "is this a blank field or just unknown?" ambiguity
+    // that the Process section already taught us to fear.
+    DetailSection notes;
+    notes.title = L"Notes";
+    notes.tab = kTabNotes;
+    add(notes, L"Colour tag",
+        std::wstring(BookmarkTagLabel(c.tag)));
+    add(notes, L"Pinned", c.pinned ? L"yes" : L"—");
+    add(notes, L"Note", c.note);
+    m.sections.push_back(std::move(notes));
+
     return m;
 }
 
@@ -2036,7 +2329,8 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
     // Enrich exactly the chosen row (values, then join: joins mutate).
     const Connection chosen = store.Rows()[idx];
     if (eo.dns && !chosen.remoteAddress.empty()) {
-        const std::wstring host = DnsResolver::Lookup(chosen.remoteAddress);
+        const std::wstring host = DnsResolver::Lookup(chosen.remoteAddress,
+                                                       eo.dnsTimeoutMs);
         if (!host.empty()) store.SetHostname(chosen.remoteAddress, host);
     }
     if (!eo.geoIpPath.empty()) {
@@ -2051,6 +2345,19 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
         t.address = chosen.remoteAddress;
         t.ipv6 = (chosen.family == AF_INET6);
         JoinGeoAddrs(store, db, std::vector<GeoTarget>(1, t));
+    }
+    if (!eo.asnIpPath.empty()) {
+        GeoIpDatabase asnDb;
+        std::wstring loadErr;
+        if (!asnDb.Load(eo.asnIpPath.c_str(), &loadErr)) {
+            r.exitCode = kExitFail;
+            r.err = "ASN database: " + WideToUtf8(loadErr) + "\r\n";
+            return r;
+        }
+        GeoTarget at;
+        at.address = chosen.remoteAddress;
+        at.ipv6 = (chosen.family == AF_INET6);
+        JoinAsnAddrs(store, asnDb, std::vector<GeoTarget>(1, at));
     }
     if (eo.traffic) {
         // Reported here for the same reason as in the list path: a failed pass
@@ -2531,6 +2838,411 @@ CommandResult CmdBlocks() {
     return r;
 }
 
+// ---- alert (9.2.11 / F5.6) -------------------------------------------------
+// The engine has been pure and tested since it was written; what it lacked was a
+// persistence layer and a surface to set the thresholds. Both are here.
+//
+// Everything is expressed in the SAME domain the threshold is applied in - the
+// engine reads bytes/sec, so the switch takes bytes/sec. A KB/MB suffix would be
+// friendlier to type and one more place for a unit to be misread, and the numbers
+// are small enough that "1000000" is not a burden.
+// ---- alert (9.2.11 / F5.6) -------------------------------------------------
+// The engine has been pure and tested since it was written; what it lacked was a
+// persistence layer and a surface to set the thresholds. Both are here.
+//
+// Rates are in the SAME domain the engine applies them in - bytes/sec - because a
+// KB/MB suffix would be friendlier to type and one more place for a unit to be
+// misread, and the numbers are small enough that "1000000" is not a burden.
+//
+// AlertFlags is tri-state so a caller can change one switch without restating the
+// whole configuration; the engine's own defaults are what "unset" leaves alone.
+// 9.2.11. A threshold stored as a double but typed as a whole number of bytes/sec.
+// std::to_string on a double gives "2000000.000000", which is correct and
+// unreadable; printing the two halves separately would print "2e+06" for the same
+// value on a different compiler. Round, and only show a fraction when there is one.
+std::string NumberNoTrailingZeros(double v) {
+    const long long whole = static_cast<long long>(v < 0 ? v - 0.5 : v + 0.5);
+    if (static_cast<double>(whole) == v) return std::to_string(whole);
+    char buf[64] = {0};
+    ::snprintf(buf, sizeof(buf), "%.3f", v);
+    std::string s(buf);
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s;
+}
+
+CommandResult CmdAlert(AlertFlags f) {
+    CommandResult r;
+    Settings s;
+    if (!s.Load()) {
+        // A Settings store that will not read is not fatal here: the engine works
+        // from the struct's defaults, which are the muted ones. Say so rather than
+        // failing, because a user asking to SEE the configuration should get an
+        // answer rather than a refusal.
+        r.err = "note: settings could not be read; showing and writing defaults.\r\n";
+    }
+
+    // MUTED BY DEFAULT is a design rule, not an unfinished state, and it is
+    // asserted here as well as in the engine: a network viewer that raises a
+    // balloon on every refresh is one the user switches off, and then it is useless
+    // for the one event that mattered.
+    bool changed = false;
+    if (f.enableSet)         { s.alerts.enabled = f.enable; changed = true; }
+    if (f.bpsWarn >= 0)      { s.alerts.bpsWarn = static_cast<double>(f.bpsWarn); changed = true; }
+    if (f.bpsCritical >= 0)  { s.alerts.bpsCritical = static_cast<double>(f.bpsCritical); changed = true; }
+    if (f.connWarn >= 0)     { s.alerts.connectionWarn = static_cast<size_t>(f.connWarn); changed = true; }
+    if (f.onListenerSet)     { s.alerts.alertOnNewListener = f.onListener; changed = true; }
+    if (f.onConnectionSet)   { s.alerts.alertOnNewConnection = f.onConnection; changed = true; }
+    if (f.onRstSet)          { s.alerts.alertOnRst = f.onRst; changed = true; }
+    if (f.onClosedSet)       { s.alerts.alertOnClosed = f.onClosed; changed = true; }
+
+    if (changed && !s.Save()) {
+        r.exitCode = kExitFail;
+        r.err += "alert: could not write settings to the registry.\r\n";
+        return r;
+    }
+
+    if (f.format == "json") {
+        std::string out = "{";
+        out += "\n  \"enabled\": " + std::string(s.alerts.enabled ? "true" : "false") + ",";
+        out += "\n  \"bpsWarn\": " + NumberNoTrailingZeros(s.alerts.bpsWarn) + ",";
+        out += "\n  \"bpsCritical\": " + NumberNoTrailingZeros(s.alerts.bpsCritical) + ",";
+        out += "\n  \"connectionWarn\": " + std::to_string(s.alerts.connectionWarn) + ",";
+        out += "\n  \"onNewListener\": " +
+               std::string(s.alerts.alertOnNewListener ? "true" : "false") + ",";
+        out += "\n  \"onNewConnection\": " +
+               std::string(s.alerts.alertOnNewConnection ? "true" : "false") + ",";
+        out += "\n  \"onRst\": " + std::string(s.alerts.alertOnRst ? "true" : "false") + ",";
+        out += "\n  \"onClosed\": " +
+               std::string(s.alerts.alertOnClosed ? "true" : "false");
+        out += "\n}\n";
+        r.out = out;
+        return r;
+    }
+
+    std::wstring o;
+    o += L"alerting      : " +
+         std::wstring(s.alerts.enabled ? L"enabled" : L"muted") + L"\r\n";
+    o += L"rate warning  : " +
+
+
+         (s.alerts.bpsWarn > 0
+              ? Utf8ToWide(NumberNoTrailingZeros(s.alerts.bpsWarn).c_str()) + L" bytes/sec"
+              : L"off") + L"\r\n";
+    o += L"rate critical : " +
+         (s.alerts.bpsCritical > 0
+              ? Utf8ToWide(NumberNoTrailingZeros(s.alerts.bpsCritical).c_str()) + L" bytes/sec"
+              : L"off") + L"\r\n";
+
+    o += L"new listener  : " +
+         std::wstring(s.alerts.alertOnNewListener ? L"yes" : L"no") + L"\r\n";
+    o += L"new connection: " +
+         std::wstring(s.alerts.alertOnNewConnection ? L"yes" : L"no") + L"\r\n";
+    o += L"reset seen    : " +
+         std::wstring(s.alerts.alertOnRst ? L"yes" : L"no") + L"\r\n";
+    o += L"closed seen   : " +
+         std::wstring(s.alerts.alertOnClosed ? L"yes" : L"no") + L"\r\n";
+    if (!s.alerts.enabled) {
+        o += L"note: alerting is muted by default. Set --enable to turn it on.\r\n";
+    }
+    r.out = WideToUtf8(o);
+    return r;
+}
+
+
+// ---- F5.6: alert rule sub-commands -----------------------------------------
+// The engine and the store landed first; this is the surface that fills them.
+//
+// `add` is deliberately idempotent by name: the same rule name twice is one rule,
+// which is what the registry already does and what a user retyping a command
+// expects. It is NOT upsert-by-content - editing a rule means adding it again with
+// the same name, which is the smallest number of concepts.
+CommandResult CmdAlertRule(const std::wstring& action, AlertRuleFlags f) {
+    CommandResult r;
+
+    if (action == L"list") {
+        const std::vector<AlertRule> rules = AlertRuleStore::Load();
+        if (f.format == "json") {
+            if (rules.empty()) { r.out = "[]\n"; return r; }
+            std::string out = "[";
+            bool first = true;
+            for (const AlertRule& rule : rules) {
+                if (!first) out += ",";
+                first = false;
+                out += "\n  {\"name\":\"" + WideToUtf8(rule.name) + "\",";
+                out += "\"address\":\"" + WideToUtf8(rule.address) + "\",";
+                out += "\"process\":\"" + WideToUtf8(rule.process) + "\",";
+                out += "\"onNew\":" + std::string(rule.onNew ? "true" : "false") + ",";
+                out += "\"onClose\":" + std::string(rule.onClose ? "true" : "false") + "}";
+            }
+            out += "\n]\n";
+            r.out = out;
+            return r;
+        }
+        if (rules.empty()) {
+            r.out = "no alert rules. add one with: alert rule add --rule-name NAME [--rule-address A.B.C.D] [--rule-process IMAGE]\r\n";
+            return r;
+        }
+        // Fixed widths, truncated rather than wrapped. The previous version
+        // padded by eye, which produced a table whose columns only lined up when
+        // every field happened to be the same length.
+        std::wstring o;
+        const auto cell = [](const std::wstring& v, size_t w) {
+            if (v.size() > w - 1) return v.substr(0, w - 1);
+            return v + std::wstring(w - v.size(), L' ');
+        };
+        o += cell(L"name", 22) + cell(L"address", 18) + cell(L"process", 18) +
+             L"new  close" + L"\r\n";
+        for (const AlertRule& rule : rules) {
+            o += cell(rule.name, 22);
+            o += cell(rule.address.empty() ? L"(any)" : rule.address, 18);
+            o += cell(rule.process.empty() ? L"(any)" : rule.process, 18);
+            o += rule.onNew ? L"yes" : L"no";
+            o += L"  ";
+            o += rule.onClose ? L"yes" : L"no";
+            o += L"\r\n";
+        }
+        r.out = WideToUtf8(o);
+        return r;
+        return r;
+    }
+
+    if (action == L"remove") {
+        if (f.name.empty()) {
+            r.exitCode = kExitArgs;
+            r.err = "alert rule remove: --rule-name NAME is required.\r\n";
+            return r;
+        }
+        if (!AlertRuleStore::Remove(f.name)) {
+            // "removed" and "never was there" are different answers, and a caller
+            // that cannot tell them cannot tell whether it needs to retry.
+            r.exitCode = kExitFail;
+            r.err = "alert rule remove: there is no rule named '" +
+                    WideToUtf8(f.name) + "'.\r\n";
+            return r;
+        }
+        r.out = "removed rule '" + WideToUtf8(f.name) + "'\r\n";
+        return r;
+    }
+
+    if (action == L"add") {
+        if (f.name.empty()) {
+            r.exitCode = kExitArgs;
+            r.err = "alert rule add: --rule-name NAME is required.\r\n";
+            return r;
+        }
+        if (f.address.empty() && f.process.empty()) {
+            // A rule matching everything is legal but a mistake nine times out of
+            // ten, so it is refused rather than created silently.
+            r.exitCode = kExitArgs;
+            r.err = "alert rule add: give --address or --process, otherwise the "
+                    "rule matches every connection.\r\n";
+            return r;
+        }
+        AlertRule rule;
+        rule.name = f.name;
+        rule.address = f.address;
+        rule.process = f.process;
+        rule.onNew = f.onNewSet ? f.onNew : true;    // default: on
+        rule.onClose = f.onCloseSet ? f.onClose : false;
+        rule.onThreshold = f.onThreshold;
+        if (!AlertRuleStore::Save(rule)) {
+            r.exitCode = kExitFail;
+            r.err = "alert rule add: could not write the rule to the registry.\r\n";
+            return r;
+        }
+        if (f.format == "json") {
+            r.out = "{\"added\":\"" + WideToUtf8(rule.name) + "\"}\n";
+        } else {
+            r.out = "added rule '" + WideToUtf8(rule.name) + "'\r\n";
+        }
+        return r;
+    }
+
+    r.exitCode = kExitArgs;
+    r.err = "alert rule: usage is add | list | remove\r\n";
+    return r;
+}
+// A database's own record_count metadata, phrased honestly.
+//
+// Real files very often OMIT this field - every DBIP edition does - so 0 means
+// "the file does not say", NOT "the file holds no records". Printing a bare "0
+// records" told a user looking at an 8 MB, fully-populated database that it was
+// empty, and sent them off to check for a corrupted download. The JSON form is
+// null for the same reason: an absent fact is not the number zero.
+std::string RecordsText(uint64_t n) {
+    return n == 0 ? "record count not stated" : std::to_string(n) + " records";
+}
+std::string RecordsJson(uint64_t n) {
+    return n == 0 ? "null" : std::to_string(n);
+}
+
+
+CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
+                         const std::wstring& asnDbPath, const std::string& format) {
+    CommandResult r;
+    // doctor reuses the SAME BuildSummary assembly the `version` verb uses
+    // (handles/GDI/USER, traffic fallback) so the two verbs can never disagree
+    // about process state. See BuildSummary/AboutText for why each field is
+    // probed rather than hard-coded - notably the handle count, where 0 is a
+    // real answer and must not be hidden.
+    BuildSummary s;
+    s.elevated = IsElevated();
+    s.presetsAvailable = true;
+    s.totalColumnCount = COL_COUNT;
+    s.visibleColumnCount = 0;
+    s.columnCountKnown = false;
+    {
+        SocketTrafficSampler probe;
+        s.trafficFallback = !s.elevated && probe.Supported();
+        if (const SocketTrafficSampler* live = ActiveTrafficSampler()) {
+            s.trafficScanRan = true;
+            s.trafficTimeouts = live->TimeoutCount();
+            s.trafficScanFailures = live->ScanFailureCount();
+        }
+    }
+    {
+        DWORD handles = 0;
+        s.resourceCountsKnown =
+            ::GetProcessHandleCount(::GetCurrentProcess(), &handles) != FALSE;
+        s.handleCount = handles;
+        s.gdiCount = ::GetGuiResources(::GetCurrentProcess(), GR_GDIOBJECTS);
+        s.userCount = ::GetGuiResources(::GetCurrentProcess(), GR_USEROBJECTS);
+    }
+
+    // GeoIP: an optional one-off --db probe. A fresh Load() here (not the
+    // process-wide store), so a bad path is reported by doctor instead of
+    // surfacing later as an empty Country column.
+    bool geoOk = false;
+    std::wstring geoPath, geoVersion, geoError;
+    uint64_t geoRecords = 0;
+    size_t geoSize = 0;
+    if (geoDbPath.empty()) {
+        geoError = L"no --db given";
+    } else {
+        GeoIpDatabase db;
+        if (db.Load(geoDbPath, &geoError)) {
+            geoOk = true;
+            geoPath = db.SourcePath();
+            geoVersion = db.DatabaseVersion();
+            geoRecords = db.RecordCount();
+            geoSize = db.FileSize();
+        }
+    }
+
+    // F5.4. The same probe for the ASN file, which is a DIFFERENT database and was
+    // previously undiagnosable: --asn-db was not in this verb's switch list, so a
+    // user whose asn: filter matched nothing had no way to ask doctor whether the
+    // file it was given was even an ASN database. Reported as its own block, with
+    // its own "not given"/"not loaded" state, because "which database is wrong" is
+    // the question this is answering.
+    bool asnOk = false;
+    std::wstring asnPath, asnVersion, asnError;
+    uint64_t asnRecords = 0;
+    size_t asnSize = 0;
+    if (asnDbPath.empty()) {
+        asnError = L"no --asn-db given";
+    } else {
+        GeoIpDatabase adb;
+        if (adb.Load(asnDbPath, &asnError)) {
+            asnOk = true;
+            asnPath = adb.SourcePath();
+            asnVersion = adb.DatabaseVersion();
+            asnRecords = adb.RecordCount();
+            asnSize = adb.FileSize();
+        }
+    }
+
+    // Firewall: the WinTCP rule ledger. CountWinTcpRules returns the count with
+    // the reason in fwError when the ledger cannot be read with confidence.
+    std::wstring fwError;
+    const int fwRules = CountWinTcpRules(&fwError);
+
+    // Capture: the same tools + elevation question EvaluateCaptureGate answers,
+    // reported as capability text rather than a go/no-go.
+    std::wstring capWhy;
+    const bool capOk = CaptureAvailable(&capWhy);
+
+    if (format == "json") {
+        std::string out = "{";
+        out += "\n  \"elevation\": " + std::string(s.elevated ? "true" : "false") + ",";
+        out += "\n  \"handles\": " +
+               (s.resourceCountsKnown ? std::to_string(s.handleCount) : "null") + ",";
+        out += "\n  \"gdiObjects\": " + std::to_string(s.gdiCount) + ",";
+        out += "\n  \"userObjects\": " + std::to_string(s.userCount) + ",";
+        out += "\n  \"traffic\": {";
+        out += "\n    \"fallback\": " + std::string(s.trafficFallback ? "true" : "false") + ",";
+        out += "\n    \"scanned\": " + std::to_string(s.trafficScanRan ? 1 : 0) + ",";
+        out += "\n    \"timeouts\": " + std::to_string(s.trafficTimeouts) + ",";
+        out += "\n    \"failures\": " + std::to_string(s.trafficScanFailures);
+        out += "\n  },";
+        out += "\n  \"geoIp\": {";
+        out += "\n    \"loaded\": " + std::string(geoOk ? "true" : "false") + ",";
+        out += "\n    \"path\": \"" + JsonEscapeA(geoPath) + "\",";
+        out += "\n    \"version\": \"" + JsonEscapeA(geoVersion) + "\",";
+        out += "\n    \"records\": " + RecordsJson(geoRecords) + ",";
+        out += "\n    \"size\": " + std::to_string(geoSize);
+        if (!geoError.empty())
+            out += ",\n    \"error\": \"" + JsonEscapeA(geoError) + "\"";
+        out += "\n  },";
+        // F5.4. Same shape as "geoIp", so a consumer parsing doctor's JSON does
+        // not need a special case for the second database.
+        out += "\n  \"asnIp\": {";
+        out += "\n    \"loaded\": " + std::string(asnOk ? "true" : "false") + ",";
+        out += "\n    \"path\": \"" + JsonEscapeA(asnPath) + "\",";
+        out += "\n    \"version\": \"" + JsonEscapeA(asnVersion) + "\",";
+        out += "\n    \"records\": " + RecordsJson(asnRecords) + ",";
+        out += "\n    \"size\": " + std::to_string(asnSize);
+        if (!asnError.empty())
+            out += ",\n    \"error\": \"" + JsonEscapeA(asnError) + "\"";
+        out += "\n  },";
+        out += "\n  \"firewall\": {";
+        out += "\n    \"rules\": " + std::to_string(fwRules);
+        if (!fwError.empty())
+            out += ",\n    \"error\": \"" + JsonEscapeA(fwError) + "\"";
+        out += "\n  },";
+        out += "\n  \"capture\": {";
+        out += "\n    \"available\": " + std::string(capOk ? "true" : "false") + ",";
+        out += "\n    \"why\": \"" + JsonEscapeA(capWhy) + "\"";
+        out += "\n  }";
+        out += "\n}\n";
+        r.out = out;
+        return r;
+    }
+
+    // Text: the About box (version + capabilities) then a diagnostic section.
+    r.out = WideToUtf8(AboutText(s, verbose));
+    if (!r.out.empty() && r.out.back() != '\n') r.out += "\r\n";
+    r.out += "\r\n--- Environment diagnostics\r\n";
+    if (geoOk) {
+        r.out += "geoip: " + WideToUtf8(geoPath) + " (version " +
+                 WideToUtf8(geoVersion) + ", " + RecordsText(geoRecords) +
+                 ", " + std::to_string(geoSize) + " bytes)\r\n";
+    } else {
+        r.out += "geoip: not loaded (" + WideToUtf8(geoError) + ")\r\n";
+    }
+    // F5.4. Its own block, with its own not-given / not-loaded state. Which of the
+    // two databases is wrong is the question a user arrives with, and until now
+    // there was no way to ask it - --asn-db was not even accepted here.
+    if (asnOk) {
+        r.out += "asn:   " + WideToUtf8(asnPath) + " (version " +
+                 WideToUtf8(asnVersion) + ", " + RecordsText(asnRecords) +
+                 ", " + std::to_string(asnSize) + " bytes)\r\n";
+    } else {
+        r.out += "asn:   not loaded (" + WideToUtf8(asnError) + ")\r\n";
+    }
+    if (fwError.empty()) {
+        r.out += "firewall: " + std::to_string(fwRules) + " WinTCP rules\r\n";
+    } else {
+        r.out += "firewall: " + std::to_string(fwRules) +
+                 " WinTCP rules (ledger unreadable: " +
+                 WideToUtf8(fwError) + ")\r\n";
+    }
+    r.out += "capture: " + std::string(capOk ? "available" :
+             ("unavailable (" + WideToUtf8(capWhy) + ")")) + "\r\n";
+    return r;
+}
+
 CommandResult CmdBookmarkList(const std::string& format) {
     CommandResult r;
     size_t unreadable = 0;
@@ -2776,6 +3488,9 @@ CommandResult CmdPresetApply(SnapshotSource& source, const std::wstring& name,
         opt.traffic = overrides->traffic;
         opt.dns = overrides->dns;
         opt.geoIpPath = overrides->geoIpPath;
+        // F5.4: carried alongside, for the same reason. A preset that pinned the
+        // ASN database must not silently lose it on the view that applies it.
+        opt.asnIpPath = overrides->asnIpPath;
     }
     if (appliedView != nullptr) *appliedView = opt;
     ConnectionStore store;
@@ -2997,16 +3712,27 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
     IN_ADDR a4 = {};
     IN6_ADDR a6 = {};
     std::wstring code;
+    AsnInfo asn;
     if (::InetPtonW(AF_INET, ip.c_str(), &a4) == 1) {
         code = db.LookupV4(ntohl(a4.S_un.S_addr));
+        asn = db.LookupAsnV4(ntohl(a4.S_un.S_addr));
     } else if (::InetPtonW(AF_INET6, ip.c_str(), &a6) == 1) {
+        char a6s[64] = {0};
+        ::InetNtopA(AF_INET6, &a6, a6s, sizeof(a6s));
         code = db.LookupV6(a6.s6_addr);
+        asn = db.LookupAsnV6(a6.s6_addr);
     } else {
         r.exitCode = kExitArgs;
         r.err = "geoip lookup: '" + WideToUtf8(ip) + "' is not an IP.\r\n";
         return r;
     }
-    r.out = WideToUtf8(code.empty() ? std::wstring(L"—") : code) + "\r\n";
+    // F5.4. A GeoLite2-ASN file has no country records, so before this the verb
+    // answered "-" for every address and gave the reader nothing to go on: the
+    // database had loaded, the address was fine, and nothing was wrong. An answer
+    // is whichever the file actually holds, so an ASN file answers with its ASN
+    // and a country file answers with its code.
+    std::wstring answer = code.empty() ? asn.Display() : code;
+    r.out = WideToUtf8(answer.empty() ? std::wstring(L"-") : answer) + "\r\n";
     return r;
 }
 
@@ -3025,12 +3751,24 @@ CommandResult CmdGeoIpInfo(SnapshotSource& /*source*/,
         r.err = "geoip: cannot load database: " + WideToUtf8(err) + "\r\n";
         return r;
     }
+    // The record count is the database's own metadata, and most real files omit
+    // it (every DBIP edition does), so 0 must read as "not stated" rather than as
+    // an empty database. `swprintf_s` with %llu cannot say that, and the buffer is
+    // sized for the shorter, honest form.
+    const uint64_t recs = db.RecordCount();
     wchar_t buf[256] = {0};
-    ::swprintf_s(buf, L"%ls, %llu records, %llu nodes, %zu bytes",
-                 db.DatabaseVersion().c_str(),
-                 static_cast<unsigned long long>(db.RecordCount()),
-                 static_cast<unsigned long long>(db.NodeCount()),
-                 db.FileSize());
+    if (recs == 0) {
+        ::swprintf_s(buf, L"%ls, record count not stated, %llu nodes, %zu bytes",
+                     db.DatabaseVersion().c_str(),
+                     static_cast<unsigned long long>(db.NodeCount()),
+                     db.FileSize());
+    } else {
+        ::swprintf_s(buf, L"%ls, %llu records, %llu nodes, %zu bytes",
+                     db.DatabaseVersion().c_str(),
+                     static_cast<unsigned long long>(recs),
+                     static_cast<unsigned long long>(db.NodeCount()),
+                     db.FileSize());
+    }
     r.out = WideToUtf8(buf) + "\r\n";
     return r;
 }
@@ -3282,6 +4020,21 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         r.err = "capture: --select <filter> is required.\r\n";
         return r;
     }
+    // 9.3.7: --filter is an extra pktmon address pin, so it must be a bare IP.
+    // Cheap format check BEFORE the snapshot, so a typo is rc 2 on any box and
+    // not rc 1 "no live row" hiding behind a dead selector.
+    if (!co.filter.empty()) {
+        IN_ADDR a4 = {};
+        IN6_ADDR a6 = {};
+        if (::InetPtonW(AF_INET, co.filter.c_str(), &a4) != 1 &&
+            ::InetPtonW(AF_INET6, co.filter.c_str(), &a6) != 1) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = "capture: --filter '" + WideToUtf8(co.filter) +
+                    "' is not an IPv4 or IPv6 address.\r\n";
+            return r;
+        }
+    }
     ConnectionStore store;
     std::wstring err;
     if (!BuildStoreSnapshot(source, store, /*procStats=*/false,
@@ -3313,6 +4066,24 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
                 " is not a direction. Use both, first (a) or second (b).\r\n";
         return r;
     }
+    // --bin writes raw bytes and has nowhere to go but --out, and concatenating
+    // hex framing onto binary output would be a silent corruption. Checked here
+    // (after dir resolution, before any target work) so the parser and the verb
+    // agree on what a valid --bin invocation looks like.
+    if (co.bin) {
+        if (co.text) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = "capture: --bin and --text are mutually exclusive.\r\n";
+            return r;
+        }
+        if (co.outPath.empty()) {
+            CommandResult r;
+            r.exitCode = kExitArgs;
+            r.err = "capture: --bin writes binary bytes, so it needs --out FILE.\r\n";
+            return r;
+        }
+    }
     // One builder for both front ends (see StreamCapture.h): binary fields,
     // never the display strings that carry the port.
     const CaptureTarget t = MakeCaptureTarget(c);
@@ -3340,8 +4111,16 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
     // --text run's own framing lines arrive looking like payload, and a reader
     // piping it somewhere would capture them too.
     if (co.text) plan += "mode: print the reassembled stream to stdout\r\n";
+    if (co.bin) plan += "mode: write the raw reassembled stream to " +
+                        WideToUtf8(co.outPath) + " (binary, not hex)\r\n";
     if (!co.outPath.empty())
         plan += "saving the capture to " + WideToUtf8(co.outPath) + "\r\n";
+    if (co.eventFlags != kCaptureFlagsDefault)
+        plan += "pktmon flags: capture events SYN/FIN/RST mask "
+                + std::to_string(co.eventFlags) + "\r\n";
+    if (!co.filter.empty())
+        plan += "pktmon address filter: -i " + WideToUtf8(co.filter) +
+                " (extra address pin)\r\n";
     if (mo.dryRun) {
         CommandResult r;
         r.out = plan;
@@ -3358,7 +4137,7 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         return r;
     }
     std::wstring serr;
-    if (!StartCapture(t, &serr)) {
+    if (!StartCapture(t, co.eventFlags, co.filter, &serr)) {
         CommandResult r;
         r.exitCode = kExitFail;
         r.err = "capture start failed: " + WideToUtf8(serr) + "\r\n";
@@ -3465,6 +4244,37 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
             emit(L"to first endpoint", cr.dir1Label, cr.toServer);
         if (dir == CaptureDir::kBoth || dir == CaptureDir::kSecond)
             emit(L"from first endpoint", cr.dir2Label, cr.toClient);
+    }
+    if (co.bin) {
+        // Raw stream bytes, no hex/pcapng framing. kBoth concatenates dir1 then
+        // dir2 with no separator; kFirst -> toServer; kSecond -> toClient.
+        std::string blob;
+        if (dir == CaptureDir::kBoth || dir == CaptureDir::kFirst)
+            blob.append(cr.toServer.bytes);
+        if (dir == CaptureDir::kBoth || dir == CaptureDir::kSecond)
+            blob.append(cr.toClient.bytes);
+        HANDLE h = CreateFileW(co.outPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) {
+            CommandResult r2;
+            r2.exitCode = kExitFail;
+            r2.err = "capture: cannot open " + WideToUtf8(co.outPath) +
+                     " for writing (" + WideToUtf8(FormatSystemError(::GetLastError())) + ").\r\n";
+            return r2;
+        }
+        DWORD written = 0;
+        BOOL ok = WriteFile(h, blob.data(), static_cast<DWORD>(blob.size()), &written, nullptr);
+        CloseHandle(h);
+        if (!ok || written != blob.size()) {
+            CommandResult r2;
+            r2.exitCode = kExitFail;
+            r2.err = "capture: wrote " + std::to_string(written) + " of " +
+                     std::to_string(blob.size()) + " bytes to " +
+                     WideToUtf8(co.outPath) + ".\r\n";
+            return r2;
+        }
+        r.out += "wrote " + std::to_string(blob.size()) + " raw bytes to " +
+                 WideToUtf8(co.outPath) + "\r\n";
     }
     return r;
 }

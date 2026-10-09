@@ -1,4 +1,5 @@
 // DetailsDialog.h
+// SPDX-License-Identifier: Apache-2.0
 // Modeless "Details" window.
 //
 // Previously this was a header STATIC plus one read-only multiline EDIT fed
@@ -81,7 +82,13 @@ private:
     // two columns separated by a dotted leader.
     struct Line {
         enum Kind { SectionHeader, SectionNote, FieldRow, FieldValue,
-                    Connection, Blank };
+                    Connection, Blank,
+                    // 9.4.1: a tab-bar slot. Painted in the fixed header region
+                    // (does not scroll), unlike every other line which is part
+                    // of the scrolled body. `text` is the tab label; `section`
+                    // carries the DetailTab ordinal so OnPaint can distinguish
+                    // active from inactive and OnMouseDown can switch.
+                    Tab };
         Kind kind = FieldValue;
         std::wstring text;
         // The value column, for FieldRow only. Empty for every other kind,
@@ -91,10 +98,21 @@ private:
         // Section index, or -1 for a line that belongs to no section (the
         // title block, the connection list). Signed on purpose: -1 is a
         // meaningful "none" and is compared directly against hotSection_.
+        // For a Tab line, this is the DetailTab ordinal.
         int section = -1;
         int indent = 0;                // in logical pixels
         int height = 0;                // in logical pixels, incl. leading
         bool monospace = false;
+        // For a Tab line, the measured width of the slot in logical px: the
+        // paint path and the OnMouseDown hit test must agree on the slot size,
+        // so it is measured once in RebuildLayout and reused for both. Zero
+        // for every other kind.
+        int width = 0;
+        // True for the title/subtitle block and the tab bar: these are fixed
+        // at the top of the window and never scroll, so a reader always sees
+        // which process and which tab they're in. Only the section body
+        // scrolls.
+        bool pinned = false;
     };
 
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam,
@@ -103,6 +121,11 @@ private:
     void OnCommand(WORD id);
     void Layout(int cx, int cy);
     void OnPaint();
+    // 9.4.1: factored row painter. `withLeaders` is false for the pinned header
+    // (the title/tab bar never draw a dotted leader); `fieldInSection` drives
+    // the alternating-row shading and is advanced by the body loop in OnPaint.
+    void PaintLine(HDC mem, const Line& l, int y, int lh, int cx, int m,
+                   int ruleX, bool withLeaders, int fieldInSection = 0);
     void OnMouseDown(int x, int y);
     void RebuildLayout();
     void ScrollBy(int lines);
@@ -110,6 +133,11 @@ private:
     void CopyTextToClipboard();
     void CenterOnOwner(HWND owner);
     void ApplyColors();
+    // True when the system high-contrast scheme is active. Under HC the
+    // system palette is already chosen for maximum contrast, so the dark_
+    // flag is bypassed in ApplyColors() and the window defers to the
+    // system's own colors. Mirrors MainWindow::HighContrastActive().
+    static bool HighContrastActive();
     // Logical (96 dpi) -> physical for this window's monitor.
     int S(int px96) const;
 
@@ -125,7 +153,11 @@ private:
     std::vector<Line> lines_;
     int totalContentHeight_ = 0;
     int scrollPos_ = 0;                  // in logical pixels
-    int viewHeight_ = 0;
+    int viewHeight_ = 0;                 // scrollable body height
+    // Height of the fixed header (title + subtitle + tab bar) in logical px.
+    // The body scrolls beneath it; it is recomputed in RebuildLayout so the
+    // tab bar never overlaps the content.
+    int headerHeight_ = 0;
 
     HFONT font_ = nullptr;               // borrowed from MainWindow
     HFONT headerFont_ = nullptr;         // bold, owned
@@ -144,10 +176,11 @@ private:
     COLORREF clrDim_ = RGB(0x80, 0x80, 0x80);
     COLORREF clrHeader_ = RGB(0, 0, 0);
 
-    // Which section the pointer is over, and which fields are collapsed.
-    // Collapse state is per-window and never persisted: the model is
-    // rebuilt every refresh, so persisting it would fight the rebuild.
+    // Which section the pointer is over, which tab it hovers, and which fields
+    // are collapsed. Collapse state is per-window and never persisted: the
+    // model is rebuilt every refresh, so persisting it would fight the rebuild.
     int hotSection_ = -1;
+    int hotTab_ = -1;
     std::vector<unsigned char> collapsed_;
 
     static const wchar_t* kClassName;

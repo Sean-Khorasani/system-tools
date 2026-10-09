@@ -1,4 +1,5 @@
 // MainWindow.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Main window implementation: controls, virtual ListView (LVS_OWNERDATA),
 // worker-thread refresh plumbing, filter (debounced, expression-aware),
 // sort (with header indicators), selection preservation, export.
@@ -7,6 +8,7 @@
 
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>            // SHGetStockIconInfo: SIID_SHIELD (9.2.5)
 #include <tcpmib.h>
 #include <windowsx.h>
 
@@ -26,6 +28,8 @@
 #include "Freeze.h"        // FrozenAgeMs (5.5)
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
+#include "FontCache.h"
+#include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
 
 namespace wintcp {
@@ -230,6 +234,92 @@ HMENU FindColumnsMenu(HMENU mainMenu) {
 bool IsTrafficColumn(int col) {
     return col == COL_TRAFFIC || col == COL_RX || col == COL_TX ||
            col == COL_NETTOTAL;
+}
+
+// 9.2.5: the admin-required actions (Block connection, ETW traffic counters)
+// get the standard UAC shield glyph so a click reads as "this needs elevation"
+// before the consent dialog appears. The icon is loaded once from the system
+// via SHGetStockIconInfo (SIID_SHIELD); like every other shell32 call in this
+// file it is skipped when shell32 is delay-load unavailable, and skipped under
+// high contrast - HC already provides its own high-contrast palette and a
+// custom bitmap there would be drawn over it illegibly.
+//
+// The shield is shown only when the action is actually elevation-gated AND the
+// current process is not already elevated. A standard account that cannot
+// elevate at all gets NO shield: there is nothing the glyph could promise, so
+// clicking the item shows ElevationUnavailableReason() instead (see the
+// OnCommand handlers for IDM_BLOCK_CONNECTION / IDM_VIEW_TRAFFIC).
+HICON g_shieldIcon = nullptr;   // owned; never destroyed (leak == exit)
+bool  g_shieldTried = false;    // attempted load once
+
+HICON LoadShieldIcon() {
+    // shell32.dll is delay-loaded (WinCaps.cpp); gate before touching it so
+    // the absence is a clean no-shield rather than an import crash.
+    if (!DllAvailable("shell32.dll")) return nullptr;
+    SHSTOCKICONINFO sii = {};
+    sii.cbSize = sizeof(sii);
+    if (::SHGetStockIconInfo(SIID_SHIELD, SHGFI_ICON | SHGFI_SMALLICON, &sii)
+            != S_OK || sii.hIcon == nullptr)
+        return nullptr;
+    return sii.hIcon;
+}
+
+HICON ShieldIcon() {
+    if (!g_shieldTried) {
+        g_shieldTried = true;
+        g_shieldIcon = LoadShieldIcon();
+    }
+    return g_shieldIcon;
+}
+
+// True when the current process lacks an elevated token but its user still has
+// a linked Administrators token - i.e. elevation is possible via UAC and the
+// shield glyph is meaningful.
+bool ElevationPossibleForUser() {
+    return !IsElevated() && IsAdminMember();
+}
+
+// Put/take the shield glyph on a single menu item. `on == false` clears it.
+// Draws (or clears) the UAC shield glyph on one menu item. `on` already folds
+// in every precondition - the caller's HighContrastActive() result, and
+// ElevationPossibleForUser() - so this function just owns the bitmap plumbing.
+// No-op when there is no shield icon to draw (shell32 delay-loaded away, or
+// the stock-icon query failed).
+void SetMenuItemShield(HMENU menu, UINT id, bool on) {
+    if (menu == nullptr) return;
+    const HICON icon = ShieldIcon();
+    if (icon == nullptr) return;               // no shell / icon unavailable
+    MENUITEMINFO mii = {};
+    mii.cbSize   = sizeof(mii);
+    mii.fMask    = MIIM_BITMAP;
+    mii.dwTypeData = nullptr;                  // not used with MIIM_BITMAP
+    mii.hbmpItem = on ? reinterpret_cast<HBITMAP>(icon) : nullptr;
+    ::SetMenuItemInfoW(menu, id, FALSE, &mii);
+}
+
+// 9.2.5: the bar-menu ETW item (View > Per-PID traffic counters). Its submenu
+// is found by scanning for the item, so this fails closed if the menu layout
+// in wintcp.rc changes rather than asserting a wrong submenu index.
+// `highContrast` is supplied by the caller (MainWindow::HighContrastActive)
+// because this is a free function and cannot call that member.
+void ApplyTrafficShield(HMENU bar, bool highContrast) {
+    if (bar == nullptr) return;
+    const bool showShield = !highContrast && ElevationPossibleForUser();
+    const int pops = ::GetMenuItemCount(bar);
+    for (int i = 0; i < pops; ++i) {
+        HMENU sub = ::GetSubMenu(bar, i);
+        if (sub == nullptr) continue;
+        const int subCount = ::GetMenuItemCount(sub);
+        for (int j = 0; j < subCount; ++j) {
+            MENUITEMINFO sm = {};
+            sm.cbSize = sizeof(sm);
+            sm.fMask = MIIM_ID;
+            if (::GetMenuItemInfoW(sub, static_cast<UINT>(j), TRUE, &sm) &&
+                sm.wID == IDM_VIEW_TRAFFIC) {
+                SetMenuItemShield(sub, IDM_VIEW_TRAFFIC, showShield);
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -571,6 +661,21 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"trayShown") == 0) {
         return trayIconShown_ ? L"1" : L"0";
     }
+    // 9.4.8: which child control holds keyboard focus, so the harness can prove
+    // the `/` shortcut moved focus to the filter box. "list", "filter", or ""
+    // (neither - the window or another control has it).
+    if (::wcscmp(op, L"focusTarget") == 0) {
+        const HWND fg = ::GetFocus();
+        if (fg == hwndList_) return L"list";
+        if (fg == hwndSearchEdit_) return L"filter";
+        if (fg == hwnd_) return L"window";
+        return L"";
+    }
+    // 9.4.8: the live bookmark count, so the harness can prove `*` toggled one.
+    if (::wcscmp(op, L"bookmarkCount") == 0) {
+        ::swprintf_s(buf, L"%zu", Bookmarks::List().size());
+        return buf;
+    }
     if (::wcscmp(op, L"topMost") == 0) {
         return topMost_ ? L"1" : L"0";
     }
@@ -635,6 +740,18 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         // the interval combo are ordinary text entry, and stealing their
         // keystrokes would break typing a filter.
         case WM_CHAR:
+            // 9.4.8: `/` focuses the filter box (vim-style). It is consumed
+            // here only when the LIST holds focus - otherwise it falls through
+            // to the filter edit, where it is ordinary text input. The keystroke
+            // is NOT passed to OnTypeJumpChar, which would consume it as a
+            // matching step (`/` is not a prefix of any process name, so it does
+            // nothing visible but still eats the key).
+            if (hwndList_ != nullptr &&
+                ::GetFocus() == hwndList_ &&
+                static_cast<wchar_t>(wParam) == L'/') {
+                FocusFilterBox();
+                return 0;
+            }
             if (hwndList_ != nullptr &&
                 ::GetFocus() == hwndList_) {
                 if (OnTypeJumpChar(static_cast<wchar_t>(wParam)))
@@ -657,6 +774,13 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         case WM_APP_DNS_RESULT:
             OnDnsResult(reinterpret_cast<DnsResolver::Result*>(lParam));
+            return 0;
+        case WM_APP_DNS_STALLED:
+            // 9.2.8: wParam = count of lookups abandoned as stalled this session.
+            // Append a hint to the status bar; the pending rows already paint
+            // the `pending` cell inline.
+            dnsStalledHint_ = L"DNS slow - some hosts show \"pending\"";
+            UpdateStatusBar(lastError_);
             return 0;
         case WM_APP_TRAY: {
             // Classic (non-V4) tray callback: wParam = icon id, lParam =
@@ -685,10 +809,29 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         case WM_SYSCOMMAND:
             // Minimize-to-tray while the tray icon is enabled.
-            if ((wParam & 0xFFF0) == SC_MINIMIZE && trayEnabled_ &&
-                trayIconShown_) {
-                ::ShowWindow(hwnd_, SW_HIDE);
-                return 0;
+            if ((wParam & 0xFFF0) == SC_MINIMIZE) {
+                // 9.4.6: when the tray icon is off and the user has not yet
+                // answered, offer the one-shot "tray or exit" choice before
+                // minimizing to the taskbar. ResolveMinimize enables the tray
+                // when the user picks it.
+                if (!trayEnabled_) {
+                    switch (ResolveMinimize()) {
+                        case MinimizeTarget::kTray:
+                            // trayEnabled_ + trayIconShown_ are now set; fall
+                            // through to the hide below.
+                            break;
+                        case MinimizeTarget::kExit:
+                            ::DestroyWindow(hwnd_);
+                            return 0;
+                        case MinimizeTarget::kTaskbar:
+                            // Unchanged default: stay in the taskbar.
+                            break;
+                    }
+                }
+                if (trayEnabled_ && trayIconShown_) {
+                    ::ShowWindow(hwnd_, SW_HIDE);
+                    return 0;
+                }
             }
             break;
         case WM_INITMENUPOPUP:
@@ -758,6 +901,16 @@ void MainWindow::OnCreate() {
             ApplyView();
         }
     }
+    // F5.4. Same best-effort, silent contract for the ASN database - see the
+    // comment above. Loaded independently of the country one, so either, both or
+    // neither survives a relaunch.
+    if (settings_.asnIpPath[0] != L'\0') {
+        std::wstring asnErr;
+        if (asnGeo_.Load(settings_.asnIpPath, &asnErr)) {
+            OfferAsnForAllRows();
+            ApplyView();
+        }
+    }
 
     visibleCols_ = settings_.colVisible;
     if (settings_.colWidthsValid) {
@@ -777,6 +930,7 @@ void MainWindow::OnCreate() {
     dnsEnabled_ = settings_.resolveHosts;
     topMost_ = settings_.topMost;
     trayEnabled_ = settings_.trayEnabled;
+    trayMinimizeChoice_ = settings_.trayMinimizeChoice;
     store_.SetSort(settings_.sortCol, settings_.sortAsc);
 
     dpi_ = QueryDpiForWindow(hwnd_);
@@ -840,6 +994,11 @@ void MainWindow::OnCreate() {
     if (!etw_.Running() && AnyTrafficColVisible()) EnsureTrafficCounters();
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAFFIC, etw_.Running());
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_CHARTS, charts_.IsVisible());
+
+    // 9.2.5: draw the UAC shield on the elevation-gated "Per-PID traffic
+    // counters" item (shown when the user is an admin who is not currently
+    // elevated; cleared if already elevated or under high contrast).
+    ApplyTrafficShield(::GetMenu(hwnd_), HighContrastActive());
 
     StartWorker();
     StartDnsWorker();
@@ -956,6 +1115,17 @@ void MainWindow::StartWorker() {
 void MainWindow::StartDnsWorker() {
     const std::shared_ptr<WorkerSink> sink = Sink();
     sink->hwnd = hwnd_;
+    // 9.2.8: a per-lookup budget so a wedged resolver stalls at most one tick
+    // instead of the whole queue. The GUI renders `pending` for the rows still
+    // in flight; a status-bar hint fires on stalls.
+    dns_.SetTimeoutMs(DnsResolver::kDnsTimeoutDefault);
+    dns_.SetStallSink([sink](unsigned pending, unsigned /*ms*/) {
+        // Post a status hint; the row cells already show `pending`. Guarded so
+        // a late fire during shutdown does not dereference a torn-down window.
+        if (sink->hwnd != nullptr && !sink->shuttingDown)
+            ::PostMessageW(sink->hwnd, WM_APP_DNS_STALLED,
+                           static_cast<WPARAM>(pending), 0);
+    });
     dns_.Start([sink](std::unique_ptr<DnsResolver::Result> r) {
         DnsResolver::Result* raw = r.release();
         bool registered = false;
@@ -1047,6 +1217,39 @@ void MainWindow::OfferGeoIpForAllRows() {
     }
 }
 
+// F5.4. The ASN pass. Separate from OfferGeoIpForAllRows rather than folded into
+// it, because the two databases are independent: either may be loaded without
+// the other, and a row must be able to carry a country with no ASN or an ASN with
+// no country.
+//
+// It also has to run even when the COUNTRY database is absent - which is the
+// case that would otherwise silently do nothing, since the country function
+// returns early when its own database is not loaded.
+void MainWindow::OfferAsnForAllRows() {
+    if (!asnGeo_.Loaded()) return;
+    std::unordered_set<std::wstring> seen;
+    seen.reserve(store_.Rows().size());
+    for (const Connection& r : store_.Rows()) {
+        if (r.remoteAddress.empty()) continue;
+        if (!seen.insert(r.remoteAddress).second) continue;
+        AsnInfo info;
+        if (r.family == AF_INET) {
+            in_addr v4 = {};
+            if (::InetPtonW(AF_INET, r.remoteAddress.c_str(), &v4) != 1)
+                continue;
+            info = asnGeo_.LookupAsnV4(ntohl(v4.S_un.S_addr));
+        } else {
+            IN6_ADDR v6 = {};
+            if (::InetPtonW(AF_INET6, r.remoteAddress.c_str(), &v6) != 1)
+                continue;
+            info = asnGeo_.LookupAsnV6(reinterpret_cast<const unsigned char*>(&v6));
+        }
+        // Written even when empty: that clears a stale AS number when the file is
+        // reloaded with different contents, exactly as the CLI path does.
+        store_.SetAsn(r.remoteAddress, info.number, info.org);
+    }
+}
+
 void MainWindow::OnRefreshResult(RefreshResult* payload) {
     if (payload == nullptr) return;
     {
@@ -1073,6 +1276,9 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     reportErrorsNextResult_ = false;
     lastError_.clear();
     lastRefreshTime_ = result->timeText;
+    // 9.2.8: a completed refresh clears the stale stall hint; the next
+    // stalled lookup re-posts WM_APP_DNS_STALLED if it recurs.
+    dnsStalledHint_.clear();
     // Monotonic stamp for the status bar's age / next-refresh countdown.
     lastRefreshTick_ = ::GetTickCount64();
 
@@ -1147,6 +1353,10 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     RefreshBookmarkMarks();
     ApplyViewWith(ids, focusedId, topIdx);
     RefreshDetailsWindow();              // live stats stay fresh
+    // F5.6. AFTER the view is rebuilt, so a balloon names rows the user can
+    // actually look at - evaluated earlier it would answer about a table
+    // that is about to be replaced.
+    RunAlerts();
 }
 
 void MainWindow::Refresh(bool reportErrors) {
@@ -1397,6 +1607,242 @@ void MainWindow::SyncColumnMenuChecks() {
     }
 }
 
+// ---- F5.6: the alert engine's only production caller ------------------------
+// The engine has existed, pure and tested, with no caller at all. This is it.
+//
+// Three rules it must obey, and one it must NOT:
+//
+//   * The tray icon is OPTIONAL. Balloons need it; without one the alert still
+//     fires, it just lands on the status bar rather than silently vanishing - an
+//     alert that does nothing is worse than no alert at all.
+//   * The engine latches. A condition already active is suppressed until it
+//     clears, so a connection sitting above the threshold does not re-notify on
+//     every refresh. That is the engine's job, not this function's.
+//   * Settings are re-read FRESH each tick, because another process running
+//     `wintcp.exe alert` can change them between two refreshes and the window
+//     must not be the only thing that does not know.
+//   * It must NOT hold a row pointer across the balloon call - a modal pumps
+//     messages and a refresh can reallocate the store underneath. Everything
+//     below is copied by value.
+void MainWindow::RunAlerts() {
+    Settings s;
+    if (!s.Load()) return;              // no store, no alerting - say nothing
+    alertHint_.clear();
+    suppressedAlerts_ = 0;
+    if (!s.alerts.enabled) {
+        // Reset on disable: a stale latch would fire the instant alerting is
+        // turned back on, for a condition the user never saw happen.
+        alertEngine_.Reset();
+        return;
+    }
+    const std::vector<Connection> rows = store_.Rows();   // a copy, on purpose
+    // F5.6. The rules are read here, per tick, for the same reason the settings are:
+    // `alert rule add` from another process has to reach a running window without a
+    // restart. One list, so the CLI and the window cannot disagree about what is
+    // being watched.
+    const std::vector<AlertRule> rules = AlertRuleStore::Load();
+
+    const std::vector<Alert> fired = alertEngine_.Evaluate(rows, s.alerts);
+    const std::vector<Alert> ruleFired =
+        alertEngine_.EvaluateRules(rows, rules, s.alerts);
+    for (const Alert& a : fired) RaiseAlert(a);
+    for (const Alert& a : ruleFired) RaiseAlert(a);
+    // Surfaced, not hidden: "nothing appeared" and "it is all already on fire" are
+    // different answers and only one of them is fine.
+    suppressedAlerts_ = alertEngine_.SuppressedCount();
+    UpdateStatusBar(lastError_);
+}
+
+// F5.6. One balloon per alert, whichever source it came from.
+void MainWindow::RaiseAlert(const Alert& a) {
+    if (trayIconShown_) {
+        // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for the
+        // duration of the call; szInfo is cleared first so a shorter previous message
+        // cannot leave its tail behind.
+        ::ZeroMemory(&trayNid_.szInfo, sizeof(trayNid_.szInfo));
+        ::ZeroMemory(&trayNid_.szInfoTitle, sizeof(trayNid_.szInfoTitle));
+        ::wcsncpy_s(trayNid_.szInfo, a.text.c_str(), _TRUNCATE);
+        ::wcsncpy_s(trayNid_.szInfoTitle, a.title.c_str(), _TRUNCATE);
+        trayNid_.uFlags = NIF_INFO;
+        trayNid_.dwInfoFlags = NIIF_WARNING;
+        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+        trayNid_.uFlags = 0;
+    } else {
+        if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
+        alertHint_ += a.title;
+    }
+}
+
+// ---- 9.4.2 empty states -----------------------------------------------------
+// A blank cell answers the wrong question. "No rows", "no country database
+// loaded" and "traffic never ran" are three DIFFERENT reasons a column is empty,
+// and on screen they are identical - so each gets one sentence that says what to
+// do about it.
+//
+// Three deliberate choices:
+//
+// - It is recomputed, never stored. Nothing here is remembered between calls, so
+//   no code path can leave a stale hint on screen. OnTimer already re-runs
+//   UpdateStatusBar every second and ApplyViewWith calls this on every view
+//   change, which is every path that can change any of the predicates.
+// - Order is NO ROWS > DATABASE > TRAFFIC. With no rows at all the other two are
+//   noise: telling someone their Country column is empty while the table is empty
+//   is answering a question they did not ask.
+// - Each message names the menu item that fixes it, because "add --db" is not
+//   something a GUI user can act on and "pick one in View > GeoIP database" is.
+void MainWindow::UpdateEmptyState() {
+    emptyStateHint_.clear();
+
+    if (store_.View().empty() && !store_.Rows().empty()) {
+        // The table has traffic but the FILTER matches nothing - the case a user
+        // reads as "the tool is broken". An empty table with no traffic at all is
+        // normal and needs no banner.
+        emptyStateHint_ = L"no rows match this filter - clear it to see everything";
+        return;
+    }
+
+    // A country-bearing column with no database behind it. Both databases count,
+    // because either fills the cell.
+    const bool countryShown = (visibleCols_ & (1u << COL_COUNTRY)) != 0;
+    if (countryShown && !geo_.Loaded() && !asnGeo_.Loaded()) {
+        emptyStateHint_ = L"no GeoIP database loaded - pick one in View > GeoIP "
+                          L"database to fill Country";
+        return;
+    }
+
+    // A traffic column with nothing measuring it. AnyTrafficColVisible already
+    // answers "does the user care", and the two sources are exactly the two
+    // states UpdateStatusBar distinguishes - so this adds no new predicate.
+    if (AnyTrafficColVisible() && !etw_.Running() && !fallbackFlag_->load()) {
+        emptyStateHint_ = L"traffic not being measured - View > Per-PID traffic "
+                          L"counters (needs admin)";
+        return;
+    }
+}
+// ---- 9.4.4 column profiles -------------------------------------------------
+// A profile is a named COLUMN MASK, nothing else. That is a deliberate narrowing:
+// a preset (File > Save view as preset) is a full ViewState - filter, sort,
+// grouping, sources and mask - and these must not become a second, weaker preset
+// that drifts from the real one. They also must not be persisted as preset
+// entries; the visible mask is already persisted in settings_.colVisible.
+//
+// The masks are computed from the live ColumnId bits rather than hard-coded, so a
+// future 33rd column cannot be silently missing from every profile.
+UINT32 MainWindow::ColumnProfileMask(int profileId) const {
+    switch (profileId) {
+        case IDM_PROFILE_MINIMAL:
+            return kMinimalProfileCols;
+        case IDM_PROFILE_NETWORK:
+            return kNetworkProfileCols;
+        case IDM_PROFILE_SECURITY:
+            return kSecurityProfileCols;
+        case IDM_PROFILE_PERFORMANCE:
+            return kPerformanceProfileCols;
+        case IDM_PROFILE_DIAGNOSTICS:
+            // Show diagnostics ORs the five G6/G5 readings onto whatever is
+            // visible now, rather than replacing it: "show me the diagnostics
+            // TOO" is the question, and a user who has hidden CPU would not
+            // expect clicking this to bring it back.
+            {
+                const UINT32 diagnostics =
+                    (1u << COL_RTT) | (1u << COL_MINRTT) | (1u << COL_CWND) |
+                    (1u << COL_RETRANS) | (1u << COL_GROUPRATE);
+                return visibleCols_ | diagnostics;
+            }
+        case IDM_PROFILE_DEFAULT:
+        default:
+            return kDefaultVisibleCols;
+    }
+}
+
+void MainWindow::ApplyColumnProfile(int profileId) {
+    RebuildColumns();                        // harvest widths before the swap
+    visibleCols_ = ClampVisibleCols(ColumnProfileMask(profileId));
+    settings_.colVisible = visibleCols_;
+    RebuildColumns();
+    SyncColumnMenuChecks();
+    SyncColumnProfileChecks();
+    ApplyView();
+}
+
+void MainWindow::SyncColumnProfileChecks() {
+    const HMENU view = ::GetSubMenu(::GetMenu(hwnd_), 1);   // View popup
+    if (view == nullptr) return;
+    for (int id = IDM_PROFILE_DEFAULT; id <= IDM_PROFILE_DIAGNOSTICS; ++id) {
+        // A profile is checked when the mask equals it EXACTLY. "Show diagnostics"
+        // is the exception: it ors onto the current set, so it is checked when all
+        // five of its bits are present, which survives the user hiding a column
+        // afterwards without lying about what is on screen.
+        const UINT32 mask = ColumnProfileMask(id);
+        const bool on = (id == IDM_PROFILE_DIAGNOSTICS)
+                            ? (visibleCols_ & mask) == mask
+                            : visibleCols_ == mask;
+        ::CheckMenuItem(view, id, MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+    }
+}
+
+// ---- F5.11 quick filters ---------------------------------------------------
+// One click writes an expression into the filter box and lets the existing
+// debounce apply it, so the expression is VISIBLE and EDITABLE - the whole point
+// of "one click builds the filter" rather than "one click filters".
+void MainWindow::ApplyQuickFilter(int commandId) {
+    const wchar_t* expr = L"";
+    switch (commandId) {
+        case IDM_QFILTER_TCP:    expr = L"proto:tcp";        break;
+        case IDM_QFILTER_UDP:    expr = L"proto:udp";        break;
+        case IDM_QFILTER_LISTEN: expr = L"state:listen";    break;
+        case IDM_QFILTER_ESTAB:  expr = L"state:estab";     break;
+        case IDM_QFILTER_MINE:
+            // The ticket says "Mine" without defining it, and the filter grammar
+            // cannot OR two terms - so "listening OR established" is not
+            // expressible. What IS expressible, and what the name means:
+            // connections whose LOCAL endpoint is on a non-routable range, i.e.
+            // this machine talking to its own network rather than to the internet.
+            expr = L"local:private";
+            break;
+        case IDM_QFILTER_ALL:
+        default:                 expr = L"";                break;
+    }
+    if (hwndSearchEdit_ != nullptr && CurrentSearchText() != expr) {
+        ::SetWindowTextW(hwndSearchEdit_, expr);
+    }
+    // Re-arm the debounce explicitly, exactly as ClearFilterBox does: a
+    // programmatic SetWindowText does not guarantee EN_CHANGE, and without the
+    // re-arm a box that already held the same text would not re-apply.
+    ::KillTimer(hwnd_, kFilterTimerId);
+    ::SetTimer(hwnd_, kFilterTimerId, kFilterDebounceMs, nullptr);
+    SyncQuickFilterChecks();
+}
+
+void MainWindow::SyncQuickFilterChecks() {
+    const HMENU bar = ::GetMenu(hwnd_);
+    if (bar == nullptr) return;
+    const wchar_t* want = nullptr;
+    {
+        const std::wstring cur = CurrentSearchText();
+        if (cur == L"proto:tcp") want = L"proto:tcp";
+        else if (cur == L"proto:udp") want = L"proto:udp";
+        else if (cur == L"state:listen") want = L"state:listen";
+        else if (cur == L"state:estab") want = L"state:estab";
+        else if (cur == L"local:private") want = L"local:private";
+        else if (cur.empty()) want = L"";
+    }
+    const int ids[] = {IDM_QFILTER_ALL,   IDM_QFILTER_TCP,    IDM_QFILTER_UDP,
+                       IDM_QFILTER_LISTEN, IDM_QFILTER_ESTAB, IDM_QFILTER_MINE};
+    for (int id : ids) {
+        bool on = false;
+        switch (id) {
+            case IDM_QFILTER_ALL:     on = (want != nullptr && *want == L'\0'); break;
+            case IDM_QFILTER_TCP:     on = (want != nullptr && ::wcscmp(want, L"proto:tcp") == 0); break;
+            case IDM_QFILTER_UDP:     on = (want != nullptr && ::wcscmp(want, L"proto:udp") == 0); break;
+            case IDM_QFILTER_LISTEN:  on = (want != nullptr && ::wcscmp(want, L"state:listen") == 0); break;
+            case IDM_QFILTER_ESTAB:   on = (want != nullptr && ::wcscmp(want, L"state:estab") == 0); break;
+            case IDM_QFILTER_MINE:    on = (want != nullptr && ::wcscmp(want, L"local:private") == 0); break;
+            default: break;
+        }
+        ::CheckMenuItem(bar, id, MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+    }
+}
 void MainWindow::ToggleColumn(int columnId) {
     if (columnId < 0 || columnId >= COL_COUNT) return;
     RebuildColumns();                     // harvests current widths first
@@ -1461,20 +1907,12 @@ void MainWindow::EnsureTrafficCounters() {
 }
 
 void MainWindow::RecreateFont() {
-    if (font_ != nullptr) {
-        ::DeleteObject(font_);
-        font_ = nullptr;
-    }
-    LOGFONTW lf = {};
-    lf.lfHeight = -::MulDiv(9, static_cast<int>(dpi_), 72);   // 9pt
-    lf.lfWeight = FW_NORMAL;
-    lf.lfCharSet = DEFAULT_CHARSET;
-    lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
-    lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-    lf.lfQuality = CLEARTYPE_QUALITY;
-    lf.lfPitchAndFamily = DEFAULT_PITCH;
-    ::wcscpy_s(lf.lfFaceName, L"Segoe UI");
-    font_ = ::CreateFontIndirectW(&lf);
+    // F5.15. No handle is created or destroyed here any more. The cache owns every
+    // font the process uses, so a DPI change is one call to OnDpiChanged and the
+    // next Get() is correct by construction - instead of three windows each
+    // releasing their own handles and one of them chasing a copy held elsewhere.
+    FontCache::Get().OnDpiChanged();
+    font_ = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, dpi_);
     ApplyFontToChildren();
     // The details window is a separate top-level window holding a copy of
     // this handle; it must receive the replacement too (its header font is
@@ -1637,6 +2075,12 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     // re-reading the box.
     v.ApplyTo(&store_, &filterProgram_);
 
+    // 9.4.2. Recomputed here rather than only at startup because this is the
+    // single funnel every path goes through: startup, a refresh result, a column
+    // toggle, a preset, a GeoIP pick and a freeze all end here, and at this point
+    // the row count, the column mask and both database states are simultaneously
+    // valid.
+    UpdateEmptyState();
     const size_t count = store_.View().size();
     ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, static_cast<WPARAM>(count),
                    LVSICF_NOINVALIDATEALL);
@@ -1790,13 +2234,40 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         (socketTraffic_ != nullptr) ? socketTraffic_->ScanFailureCount() : 0u;
     const unsigned staleGaps =
         (socketTraffic_ != nullptr) ? socketTraffic_->TimeoutCount() : 0u;
-    const std::wstring right =
+    // 9.2.1: name the traffic source in the status bar. "Ready" alone does not
+    // distinguish a full ETW session (TCP+UDP, kernel-level) from a socket
+    // fallback (TCP only, per-socket ioctl) - two very different fidelity levels
+    // that the rest of the pane already distinguishes (see fallbackActive).
+    std::wstring right =
         !errorText.empty()      ? (L"Error: " + errorText)
         : scanGaps != 0         ? L"Traffic FAILED"
         : staleGaps != 0        ? L"Traffic stale"
         : fallbackActive        ? L"TCP only - UDP needs admin"
         : trafficBlocked        ? L"Traffic off - needs admin"
-                               : L"Ready";
+                                 : etw_.Running()        ? L"Ready (ETW)"
+                                : L"Ready";
+    // 9.2.8: append the DNS-stall hint so a user knows some Host cells show
+    // `pending` rather than `—`.
+    // 9.4.2: the empty-state strip. One sentence per case, and the sentence is the
+    // ACTION rather than a description of a blank - "no country database loaded -
+    // pick one in View > GeoIP database", not "Country: empty".
+    //
+    // Recomputed from live state every second by OnTimer through this same
+    // function, so there is no timer to write and nothing to clean up. That is
+    // the shape dnsStalledHint_ already uses and the only time-scoped message
+    // channel the window has: there is no toolbar and no WM_PAINT hook in this
+    // window, so a banner over the list would be new chrome rather than a reuse.
+    // F5.6. Same channel and same shape as the empty-state hint beside it, and
+    // deliberately NOT stored: nothing about an alert survives a refresh, so a
+    // cleared alert stops being reported without anyone removing it.
+    if (!alertHint_.empty()) {
+        if (!right.empty()) right += L"  \xB7  ";
+        right += alertHint_;
+    }    if (!emptyStateHint_.empty()) {
+        if (!right.empty()) right += L"  ";
+        right += emptyStateHint_;
+    }
+
     // 5.5: while frozen, pane 2 must say so AND say how stale it is. Showing
     // the pre-freeze "Updated: 14:32:05" on its own would be a lie - it reads
     // as current, and the user has no way to tell the list is not updating.
@@ -2039,6 +2510,18 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
         //     ShowSelectedProcessProperties();
         //     break;
         case IDM_BLOCK_CONNECTION:
+            // 9.2.5: BlockSelectedConnection() writes firewall rules, which need
+            // an elevated token. If the user is an admin who is not elevated,
+            // hand off to Reelevate() (this call exits the old process) - now a
+            // live caller. If the account cannot elevate at all, show why and
+            // do not attempt the block (it would fail inside BlockConn anyway).
+            if (!IsElevated()) {
+                if (IsAdminMember() && Reelevate(L"Block connection")) return;
+                const std::wstring reason = ElevationUnavailableReason();
+                ::MessageBoxW(hwnd_, reason.c_str(), L"WinTCP - Blocked requires elevation",
+                              MB_OK | MB_ICONINFORMATION);
+                return;
+            }
             BlockSelectedConnection();
             break;
         case IDM_TRAY_UNBLOCK_ALL:
@@ -2055,6 +2538,33 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             preserveSelection_ = !preserveSelection_;
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PRESERVE_SEL,
                          preserveSelection_);
+            break;
+        case IDM_VIEW_ASNIP:
+            LoadAsnDatabase();
+            break;
+        // F5.11. The quick filters write the box and let the debounce do the
+        // work, so there is exactly one code path from a click to a filtered
+        // view - the same one typing uses. Going straight to ApplyView here
+        // would skip the EN_CHANGE path and leave the two able to disagree.
+        case IDM_QFILTER_ALL:
+        case IDM_QFILTER_TCP:
+        case IDM_QFILTER_UDP:
+        case IDM_QFILTER_LISTEN:
+        case IDM_QFILTER_ESTAB:
+        case IDM_QFILTER_MINE:
+            ApplyQuickFilter(static_cast<int>(id));
+            break;
+        case IDM_QFILTER_CLEAR:
+            FocusFilterBox();
+            break;
+        // 9.4.4.
+        case IDM_PROFILE_DEFAULT:
+        case IDM_PROFILE_MINIMAL:
+        case IDM_PROFILE_NETWORK:
+        case IDM_PROFILE_SECURITY:
+        case IDM_PROFILE_PERFORMANCE:
+        case IDM_PROFILE_DIAGNOSTICS:
+            ApplyColumnProfile(static_cast<int>(id));
             break;
         case IDM_VIEW_GEOIP:
             LoadGeoIpDatabase();
@@ -2103,6 +2613,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
         case IDM_VIEW_TRAY:
             trayEnabled_ = !trayEnabled_;
             settings_.trayEnabled = trayEnabled_;
+    settings_.trayMinimizeChoice = trayMinimizeChoice_;
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, trayEnabled_);
             if (trayEnabled_) TrayAdd(); else TrayRemove();
             break;
@@ -2122,6 +2633,19 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
                 store_.ClearTraffic();
                 ApplyView();
             } else {
+                // 9.2.5: starting a full ETW session needs elevation. If the user
+                // is an admin who is not currently elevated, hand off to Reelevate()
+                // (this call exits the old process - the new, elevated one resumes
+                // here from settings_.trafficEnabled) rather than letting Start()
+                // fail noisily below. A standard account shows the reason instead.
+                if (!IsElevated()) {
+                    if (IsAdminMember() && Reelevate(L"Traffic counters")) return;
+                    const std::wstring reason = ElevationUnavailableReason();
+                    ::MessageBoxW(hwnd_, reason.c_str(),
+                                  L"WinTCP - Traffic counters require elevation",
+                                  MB_OK | MB_ICONINFORMATION);
+                    return;
+                }
                 std::wstring etwError;
                 if (etw_.Start(etwError)) {
                     settings_.trafficEnabled = true;
@@ -2243,7 +2767,10 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
                     // this?" is the question the compact form raises.
                     add(L"Received", FormatBytes(c->trafficRx));
                     add(L"Sent", FormatBytes(c->trafficTx));
-                    if (!c->hostname.empty()) add(L"Host", c->hostname);
+                    if (c->hostname == DnsResolver::kPendingHost)
+                        add(L"Host", L"(resolving...)");
+                    else if (!c->hostname.empty())
+                        add(L"Host", c->hostname);
                     break;
                 case COL_BANDWIDTH:
                     if (c->bpsKnown) {
@@ -2261,8 +2788,12 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
                     else add(L"Path", L"(not available)");
                     break;
                 case COL_HOST:
-                    if (!c->hostname.empty()) add(L"Host", c->hostname);
-                    else add(L"Host", L"(not resolved)");
+                    if (c->hostname == DnsResolver::kPendingHost)
+                        add(L"Host", L"(resolving...)");
+                    else if (!c->hostname.empty())
+                        add(L"Host", c->hostname);
+                    else
+                        add(L"Host", L"(not resolved)");
                     break;
                 case COL_CPU:
                     if (c->cpuPct >= 0.0) {
@@ -2621,14 +3152,27 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     // could free it. A copy would also be harmless but would copy a row whose
     // only use is four boolean reads.
     const Connection* row = FirstSelectedRow();
-    const bool closable = (row != nullptr && row->protocol == IPPROTO_TCP &&
-                           row->state != MIB_TCP_STATE_LISTEN &&
-                           row->state != 0);
+    // 9.2.6: "Close connection" only works for IPv4 - SetTcpEntry has no IPv6
+    // variant (TcpTable.cpp:262 refuses it with a clear error). Disable the item
+    // for IPv6 rows rather than letting the user invoke it and read the error,
+    // and call the reason in the label the same way "End process..." does, so a
+    // greyed item is not a silent mystery (see the D29 note above). The Block
+    // item stays enabled: firewall rules are family-agnostic and stop the
+    // connection from coming back, which is the right outcome for IPv6.
+    const bool isV4Tcp = (row != nullptr && row->protocol == IPPROTO_TCP &&
+                          row->family == AF_INET &&
+                          row->state != MIB_TCP_STATE_LISTEN &&
+                          row->state != 0);
+    const bool isV6Tcp = (row != nullptr && row->protocol == IPPROTO_TCP &&
+                          row->family != AF_INET &&
+                          row->state != MIB_TCP_STATE_LISTEN &&
+                          row->state != 0);
+    const bool closable = isV4Tcp;
     ::AppendMenuW(menu, MF_STRING | gray, IDM_CTX_DETAILS, L"&Details...");
     ::AppendMenuW(menu, MF_STRING | gray, IDM_CTX_COPY_SELECTED, L"&Copy selected");
     ::AppendMenuW(menu, MF_STRING, IDM_CTX_COPY_ALL, L"Copy &all");
     ::AppendMenuW(menu, MF_STRING | gray, IDM_CTX_EXPORT_SELECTION,
-                  L"&Export selection...");
+                   L"&Export selection...");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     // REMOVED 2026-10-05 (todo.md 8.7 G2). Both menu entries that used to live here
     // are gone; the capability was moved to the CLI rather than dropped.
@@ -2672,11 +3216,23 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     //               IDM_PROCESS_PROPERTIES, L"Process &properties...");
     ::AppendMenuW(menu, MF_STRING | (row != nullptr && row->protocol == IPPROTO_TCP
                                          ? MF_ENABLED : MF_GRAYED),
-                  IDM_BLOCK_CONNECTION, L"&Block this connection...");
+                   IDM_BLOCK_CONNECTION, L"&Block this connection...");
+    // 9.2.5: "Block this connection..." adds Windows Firewall rules, which need
+    // an elevated token. Show the UAC shield when the user is an admin who is
+    // not currently elevated (ElevationPossibleForUser). A standard account gets
+    // no shield: the glyph means "can be elevated", and a click on that item
+    // instead shows ElevationUnavailableReason() from the OnCommand handler.
+    if (!HighContrastActive() && ElevationPossibleForUser())
+        SetMenuItemShield(menu, IDM_BLOCK_CONNECTION, true);
+    // Note on "Close connection": SetTcpEntry on a connection the current user
+    // owns does NOT require elevation, so it deliberately takes no shield -
+    // showing one would mislead users into thinking the action is privileged.
 
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING | (closable ? MF_ENABLED : MF_GRAYED),
-                  IDM_CTX_CLOSE_CONNECTION, L"&Close connection...");
+    ::AppendMenuW(menu, MF_STRING | (isV6Tcp ? MF_GRAYED : (closable ? MF_ENABLED : MF_GRAYED)),
+                   IDM_CTX_CLOSE_CONNECTION,
+                   isV6Tcp ? L"&Close connection (IPv6 - use Block instead...)"
+                           : L"&Close connection...");
     // D29: "End process..." was unconditionally enabled, so it was clickable on
     // a wintcp.exe row - and wintcp.exe is a network tool, so it has its own
     // rows. Clicking it ended WinTCP. The item is now greyed when the row's PID
@@ -2866,7 +3422,14 @@ void MainWindow::DoExport(bool selectionOnly) {
     if (lastSep != std::wstring::npos && lastSep < MAX_PATH)
         ::wcsncpy_s(settings_.lastExportDir, p.substr(0, lastSep).c_str(),
                     _TRUNCATE);
-    ::MessageBoxW(hwnd_, L"Export completed.", L"WinTCP",
+    // 9.4.7: surface the row count the export actually wrote, so a user
+    // exporting a 3000-row snapshot gets a confirmation that names the volume
+    // rather than a bare "Export completed." The count is authoritative: it
+    // is the number of rows fed to the serializer, which is exactly what
+    // landed in the file.
+    std::wstring msg = L"Exported " + std::to_wstring(rows.size()) +
+                       L" rows to " + p + L".";
+    ::MessageBoxW(hwnd_, msg.c_str(), L"WinTCP",
                   MB_OK | MB_ICONINFORMATION);
 }
 
@@ -3172,7 +3735,7 @@ void MainWindow::CloseSelectedConnection() {
                       L"WinTCP - Close failed", MB_OK | MB_ICONWARNING);
         return;
     }
-    Refresh(false);   // the row disappears (and flashes red as a ghost)
+    Refresh(false);   // the row vanishes, flashes red, then lingers as a grey F5.7 ghost
 }
 
 void MainWindow::RemoveAllWinTcpBlocks() {
@@ -3239,8 +3802,8 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             // needed for sub-item draw stages this list does not use.
             return CDRF_NOTIFYITEMDRAW;
         case CDDS_ITEMPREPAINT: {
-            // Change highlighting: green = new, yellow = state
-            // changed, red = removed this refresh (ghost row). The colors
+            // Change highlighting: green = new, yellow = state changed, red =
+            // vanished THIS refresh (then a grey F5.7 retained ghost). The colors
             // are chosen from the active theme: on a dark theme the pastel
             // fills would glare, so a darker background and a light
             // foreground are used instead.
@@ -3257,12 +3820,27 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             if (HighContrastActive()) return CDRF_DODEFAULT;
             const bool dark = ThemeIsDark();
             if (c->flags & kRowRemoved) {
-                if (dark) {
-                    cd->clrTextBk = RGB(0x4A, 0x1F, 0x1F);
-                    cd->clrText = RGB(0xFF, 0xB4, 0xB4);
+                // F5.7: a socket that vanished THIS refresh flashes red once,
+                // then settles to a muted grey retained ghost for the rest of its
+                // life (up to kMaxRetainedGhosts). deathTick is touched only at
+                // vanishing, so it equals this snapshot's tick for the flashing row.
+                const bool justDied = (c->deathTick == store_.SnapshotTick());
+                if (justDied) {
+                    if (dark) {
+                        cd->clrTextBk = RGB(0x4A, 0x1F, 0x1F);
+                        cd->clrText = RGB(0xFF, 0xB4, 0xB4);
+                    } else {
+                        cd->clrTextBk = RGB(0xF8, 0xC8, 0xC8);
+                        cd->clrText = RGB(0x7A, 0x1F, 0x1F);
+                    }
                 } else {
-                    cd->clrTextBk = RGB(0xF8, 0xC8, 0xC8);
-                    cd->clrText = RGB(0x7A, 0x1F, 0x1F);
+                    if (dark) {
+                        cd->clrTextBk = RGB(0x2B, 0x2B, 0x2B);
+                        cd->clrText = RGB(0xC0, 0xC0, 0xC0);
+                    } else {
+                        cd->clrTextBk = RGB(0xEA, 0xEA, 0xEA);
+                        cd->clrText = RGB(0x5A, 0x5A, 0x5A);
+                    }
                 }
                 return CDRF_NEWFONT;
             }
@@ -3569,7 +4147,11 @@ PresetView MainWindow::CurrentPresetView() const {
     if (dnsEnabled_) sources |= kPresetSourceHosts;
     if (etw_.Running() || fallbackFlag_->load(std::memory_order_relaxed))
         sources |= kPresetSourceEtw;
-    if (geo_.Loaded()) sources |= kPresetSourceGeoIp;
+    // F5.4: the ASN database shares the GeoIP bit rather than taking a new one.
+    // It is the same enrichment applied from a second file, and kPresetSourceAll
+    // is a four-bit mask - adding a fifth bit would be a schema change to a
+    // persisted value for no distinction a user can act on.
+    if (geo_.Loaded() || asnGeo_.Loaded()) sources |= kPresetSourceGeoIp;
     // Widget reads stay here (search box, column mask, sort); the ViewState
     // assembly lives in the abstract layer so the CLI builds the same type.
     return CurrentPresetViewFor(CurrentSearchText(), visibleCols_,
@@ -3981,6 +4563,45 @@ void MainWindow::LoadGeoIpDatabase() {
     UpdateStatusBar(std::wstring());
 }
 
+// F5.4. The ASN picker. A near-copy of LoadGeoIpDatabase, and deliberately so:
+// the two differ only in which member they load, which settings key they write
+// and the words in the message boxes. Factoring the shared half would mean
+// threading a "which database" enum through the error strings for no gain, and
+// the two will diverge anyway - this one names ASN in every message so a user
+// who picked the wrong file can tell which half is unhappy.
+void MainWindow::LoadAsnDatabase() {
+    wchar_t file[MAX_PATH] = {0};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = L"MaxMind ASN databases (*.mmdb)\0*.mmdb\0"
+                      L"All files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    // Naming the expected product in the title: GeoLite2-Country is the file
+    // most people already have, and picking it here produces an ASN column that
+    // is always empty for a reason no message would otherwise explain.
+    ofn.lpstrTitle = L"Open a GeoLite2-ASN .mmdb database";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!DelayLoadGuard(hwnd_, "comdlg32.dll")) return;
+    if (!::GetOpenFileNameW(&ofn)) return;   // cancelled: not an error
+
+    std::wstring error;
+    if (!asnGeo_.Load(file, &error)) {
+        ::MessageBoxW(hwnd_, error.c_str(),
+                      L"ASN database not loaded (expected GeoLite2-ASN)",
+                      MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    ::wcsncpy_s(settings_.asnIpPath, file, _TRUNCATE);
+    PersistSettings("asn path picked");
+
+    OfferAsnForAllRows();
+    ApplyView();
+    UpdateStatusBar(std::wstring());
+}
+
 // ---- settings ---------------------------------------------------
 
 void MainWindow::SaveSettings() {
@@ -4004,6 +4625,7 @@ void MainWindow::SaveSettings() {
     settings_.resolveHosts = dnsEnabled_;
     settings_.topMost = topMost_;
     settings_.trayEnabled = trayEnabled_;
+    settings_.trayMinimizeChoice = trayMinimizeChoice_;
     settings_.trafficEnabled = etw_.Running();
     const std::wstring filter = CurrentSearchText();
     ::wcsncpy_s(settings_.filter, filter.c_str(), _TRUNCATE);
@@ -4016,6 +4638,12 @@ void MainWindow::SaveSettings() {
     // overwrote the first regardless.
     ::wcsncpy_s(settings_.geoIpPath,
                 geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
+                _TRUNCATE);
+    // F5.4: the ASN path is remembered on the same terms - whatever is actually
+    // loaded - so a database the user cleared does not come back on the next
+    // launch. Same single PersistSettings call below; do not add another.
+    ::wcsncpy_s(settings_.asnIpPath,
+                asnGeo_.Loaded() ? asnGeo_.SourcePath().c_str() : L"",
                 _TRUNCATE);
     PersistSettings("shutdown");
 }
@@ -4351,6 +4979,76 @@ void MainWindow::ShowTrayMenu() {
     if (cmd != 0) {
         ::SendMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(cmd, 0), 0);
     }
+}
+
+MainWindow::MinimizeTarget MainWindow::ResolveMinimize() {
+    // 9.4.6: the prompt only fires when the tray icon is OFF. With the tray on,
+    // the existing SC_MINIMIZE handler hides the window to the tray directly.
+    if (trayEnabled_) return MinimizeTarget::kTray;
+
+    // kTrayMinimizeChoice: 0 = never asked, 1 = remembered tray, 2 = remembered exit.
+    if (trayMinimizeChoice_ == 1) return MinimizeTarget::kTray;
+    if (trayMinimizeChoice_ == 2) return MinimizeTarget::kExit;
+
+    // First minimize without a remembered choice: prompt. A TaskDialog gives us a
+    // checkbox for "don't ask again" with no template to maintain, and is
+    // available on every Windows version this tool supports (Vista+).
+    //
+    // comdlg32.dll (TaskDialogIndirect) is delay-loaded; if it is absent the
+    // prompt cannot be shown, so fall back to the plain taskbar minimize the
+    // user asked for.
+    if (!DelayLoadGuard(hwnd_, "comdlg32.dll")) return MinimizeTarget::kTaskbar;
+
+    TASKDIALOGCONFIG tc = {};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = hwnd_;
+    tc.dwFlags = TDF_USE_HICON_MAIN | TDF_ALLOW_DIALOG_CANCELLATION;
+    tc.hMainIcon = ::LoadIconW(nullptr, IDI_QUESTION);
+    tc.pszWindowTitle = L"WinTCP";
+    tc.pszMainInstruction =
+        L"Minimize to tray hides WinTCP in the notification area instead of "
+        L"keeping a taskbar button, and adds a tray icon you can right-click.";
+    tc.pszContent =
+        L"How do you want WinTCP to behave when you minimize it?";
+    tc.pszVerificationText = L"&Don't ask me again (applies to both options)";
+
+    enum { kBtnTray = 100, kBtnExit };
+    TASKDIALOG_BUTTON btns[2] = {
+        { kBtnTray, L"&Minimize to tray" },
+        { kBtnExit, L"C&lose WinTCP (exit)" },
+    };
+    tc.pButtons = btns;
+    tc.cButtons = 2;
+    tc.nDefaultButton = kBtnTray;          // tray is the safer, more useful default
+
+    int which = 0;
+    int radio = 0;
+    BOOL checked = FALSE;
+    HRESULT hr = ::TaskDialogIndirect(&tc, &which, &radio, &checked);
+    if (hr != S_OK || which == kBtnExit) {
+        // A cancel / close (X) or explicit exit: treat as exit so the window
+        // does not vanish into a hidden state with no icon to restore it.
+        trayMinimizeChoice_ = 2;
+        settings_.trayMinimizeChoice = 2;
+        if (checked) settings_.Save();
+        return MinimizeTarget::kExit;
+    }
+
+    // "Don't ask again" checkbox. When set, remember the chosen target so the
+    // prompt never returns. When not set, leave choice = 0 and the dialog will
+    // fire again next time - the user has not consented to a permanent decision.
+    if (checked) {
+        trayMinimizeChoice_ = 1;           // remember: tray
+        settings_.trayMinimizeChoice = 1;
+    }
+    // Enable the tray icon so the chosen behaviour takes effect on the next
+    // minimize and the icon survives this session.
+    trayEnabled_ = true;
+    settings_.trayEnabled = true;
+    settings_.Save();
+    SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, true);
+    TrayAdd();
+    return MinimizeTarget::kTray;
 }
 
 }  // namespace wintcp

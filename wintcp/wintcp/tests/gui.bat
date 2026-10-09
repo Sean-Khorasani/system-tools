@@ -121,8 +121,21 @@ REM   3. High contrast: enable a high-contrast scheme. Every highlight colour
 REM      must come from COLOR_HIGHLIGHT / COLOR_WINDOW, not a hard-coded one.
 REM   4. DPI: drag the window between a 100% and a 150% monitor. Widths and
 REM      font re-derive on WM_DPICHANGED; nothing truncates or overlaps.
-REM   5. Tray: minimise to tray, then double-click the icon to restore. The
-REM      tray menu's always-on-top toggle works and persists.
+REM  5. Tray: minimise to tray, then double-click the icon to restore. The
+REM     tray menu's always-on-top toggle works and persists.
+REM  12. First-minimize prompt (9.4.6): with the tray icon OFF, minimise and
+REM     confirm the "Minimize to tray or exit?" dialog appears; pick "Minimize
+REM     to tray" with "Don't ask again", then minimise again - the window should
+REM     hide without prompting. Relaunch and repeat picking "Close WinTCP".
+REM  13. `/` filter focus (9.4.8): with the LIST focused, type `/`. Focus must
+REM     jump to the filter box without starting a type-to-jump. Type `*` with a
+REM     row that has a remote endpoint selected: it must toggle that row's
+REM     bookmark (View > Bookmarks) on, and again to remove it.
+REM  14. Screen reader (NVDA): tab to the list, read the focused row. NVDA must
+REM     announce the process name and state (e.g. "chrome.exe, TCP,
+REM     ESTABLISHED, 4 connections, column 3 of 16"). A custom accDescription
+REM     is NOT yet wired (9.4.8), so the per-row description is whatever the
+REM     standard ListView MSAA provides from the cells.
 REM   6. Traffic columns: enable them, generate known traffic, and confirm the
 REM      numbers MOVE. This is the one manual check that overlaps D2 - if the
 REM      status bar reports timed-out scans, the columns are partial by design

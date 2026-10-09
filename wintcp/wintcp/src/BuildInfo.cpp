@@ -1,4 +1,5 @@
 // BuildInfo.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See BuildInfo.h.
 
 #include "BuildInfo.h"
@@ -71,7 +72,7 @@ std::wstring ShortcutsText() {
     return out;
 }
 
-std::wstring AboutText(const BuildSummary& s) {
+std::wstring AboutText(const BuildSummary& s, bool verbose) {
     std::wstring out;
     out += L"WinTCP 1.0.0\r\n\r\n";
     out += L"A live view of every TCP and UDP endpoint on this machine "
@@ -79,6 +80,30 @@ std::wstring AboutText(const BuildSummary& s) {
            L"IP Helper API (GetExtendedTcpTable / GetExtendedUdpTable).\r\n";
     out += L"Plain Win32 API and the common controls. No MFC, ATL or Qt.\r\n";
     out += L"\r\n";
+
+    // 9.2.4: --verbose adds diagnostic detail for troubleshooting. The base
+    // output is the capability summary; verbose adds the internal state that
+    // explains WHY a capability is missing or a counter is zero.
+    if (verbose) {
+        out += L"Verbose diagnostics\r\n";
+        out += PadKeys(L"ETW running") +
+               (s.etwRunning ? L"yes" : L"no") + L"\r\n";
+        out += PadKeys(L"Socket fallback") +
+               (s.trafficFallback ? L"yes" : L"no") + L"\r\n";
+        out += PadKeys(L"GeoIP loaded") +
+               (s.geoIpLoaded ? L"yes" : L"no") + L"\r\n";
+        out += PadKeys(L"Presets") +
+               (s.presetsAvailable ? L"available" : L"unavailable") + L"\r\n";
+        out += PadKeys(L"Column count") +
+               std::to_wstring(s.totalColumnCount) + L"\r\n";
+        if (s.trafficScanRan) {
+            out += PadKeys(L"Traffic timeouts") +
+                   std::to_wstring(s.trafficTimeouts) + L"\r\n";
+            out += PadKeys(L"Traffic failures") +
+                   std::to_wstring(s.trafficScanFailures) + L"\r\n";
+        }
+        out += L"\r\n";
+    }
 
     // The capability block. This is the part 7.5 is actually for: a user
     // wondering why a column is empty should be able to find the answer
@@ -127,10 +152,14 @@ std::wstring AboutText(const BuildSummary& s) {
         }
         out += PadKeys(L"Traffic gaps") + lost + L"\r\n";
     }
+    // "empty", not "—": the cell is filled with an empty string when no database
+    // is loaded, so that is what a user sees. The em-dash here was a documented
+    // lie - it described a rendering the code never produced, and a reader who
+    // went looking for a dash in their table would not find one.
     out += PadKeys(L"GeoIP database") +
            std::wstring(s.geoIpLoaded
                             ? L"loaded"
-                            : L"not loaded (Country column shows —)") +
+                            : L"not loaded (Country column is empty)") +
            L"\r\n";
     out += PadKeys(L"Saved presets") +
            std::wstring(s.presetsAvailable ? L"available" : L"unavailable") +

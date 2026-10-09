@@ -1,4 +1,5 @@
 // DetailModel.h
+// SPDX-License-Identifier: Apache-2.0
 // The structured content of the Details window.
 //
 // The window used to be a single flat wstring built by string concatenation
@@ -40,8 +41,29 @@ struct DetailField {
     bool monospace = false;
 };
 
+// The Details window's tab set is derived from the model's sections: each tab
+// that has at least one section is shown, in tab-ordinal order, so a row with
+// no TLS session simply has no Security tab instead of an empty one.
+enum DetailTab : unsigned {
+    kTabProcess = 0,     // Process, Threads, Live stats
+    kTabConnection,      // Selected connection
+    kTabSockets,         // Sibling connections (Sockets-of-PID)
+    kTabSecurity,        // TLS + integrity/signature
+    kTabNotes,           // Bookmarks, pins, user note
+    kTabCount
+};
+
+// Display label for a tab, used by the renderer and pinned by selftests so the
+// vocabulary cannot drift silently.
+const wchar_t* TabLabel(DetailTab t);
+
 // A titled group of fields. Sections are collapsible; the collapsed state is
 // the user's, not the data's, and is never persisted.
+//
+// `tab` classifies the section into one of the Details window's tabs (see
+// DetailTab), so the renderer can show only the active tab's sections - which
+// is how a row with no TLS session simply drops the Security tab instead of
+// showing an empty one.
 struct DetailSection {
     std::wstring title;
     std::vector<DetailField> fields;
@@ -49,6 +71,7 @@ struct DetailSection {
     // hint lines ("enable View > Per-PID traffic counters") and for the
     // connection list, which the renderer lays out as its own block.
     std::wstring note;
+    DetailTab tab = kTabProcess;
 };
 
 // Everything the Details window shows. Building this is pure; rendering it
@@ -63,6 +86,10 @@ struct DetailModel {
     // rather than a label/value row.
     std::vector<std::wstring> connectionLines;
     size_t connectionTotal = 0;   // may exceed connectionLines.size()
+    // The tab currently shown by the window. Defaults to Process so a
+    // freshly opened Details lands on the process identity first - the thing
+    // a reader usually wants to confirm before the endpoints.
+    DetailTab activeTab = kTabProcess;
 
     // Plain-text rendering, used by the Copy button. Produces the same
     // content the window shows, in a form that pastes cleanly anywhere.

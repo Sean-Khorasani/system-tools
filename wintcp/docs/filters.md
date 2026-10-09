@@ -47,7 +47,11 @@ A `--select` selector must resolve to **exactly one live row**; see [Selectors](
 | `path:` | Executable path | `path:c:\bin`, `path:"program files"`. |
 | `host:` | Reverse-DNS name | CLI: needs `--dns`. |
 | `proto:` | Protocol or family | `proto:udp`, `proto:tcp`, `proto:ipv6`. |
-| `country:` | GeoIP country code | `country:de`. CLI: needs `--db` — where to get a database and what `--db` does is in [GeoIP database](../README.md#geoip-database). |
+| `country:` | GeoIP country code | `country:de`. CLI: needs `--db` - where to get a database and what `--db` does is in [GeoIP database](../README.md#geoip-database). |
+
+Alerting is not a filter. wintcp.exe alert sets thresholds and wintcp.exe alert reads them back; a filter narrows the table, an alert reacts to it. The two share no switches.
+
+| `asn:` | Autonomous system (F5.4) | **Both kinds of value.** A bare number is a threshold on the AS number, so `asn:15169` and `asn:15169-20000` work and accept ranges. Anything else is a case-insensitive substring of the cell `AS15169 Google LLC`, so `asn:google` finds the operator by name. A bare `asn:` means "has an autonomous system"; a row with no ASN never matches, whatever the value. CLI: needs `--asn-db`, which is a GeoLite2-ASN file and is separate from `--db`. |
 | `tls:` | TLS summary | **Matches nothing** - the column is never populated. See [the note in the CLI reference](cli.md). |
 | `note:` | A bookmark's note | `note:vendor`. A bare `note:` means "has a note". |
 | `ppid:` | Parent process ID | `ppid:1588`. Accepts ranges: `ppid:1000-2000`. An exact number, not a substring. |
@@ -101,6 +105,7 @@ endpoint can outlive the refresh that asked for it — not a silent gap.
 | Form | Meaning |
 |---|---|
 | `local:10.` | The local **address** contains `10.`. |
+| `local:private` / `local:global` | Whether the local endpoint is on a **non-routable** range; `remote:private` is the same question about the peer. `local:private` is what the GUI's **Mine** quick filter writes. Negates as `exclude:local:private`. |
 | `remote:203` | The remote address contains `203`. |
 | `local:port:80` | The **port**, restricted to the local side. It cannot match a connection *to* a remote port 80. |
 | `remote:port:443` | The port, restricted to the remote side. |
@@ -160,6 +165,7 @@ Each of these exists because the opposite behavior returns a plausible but wrong
    |---|---|
    | `host:` | `--dns` |
    | `country:` | `--db FILE` |
+   | `asn:` | `--asn-db FILE` |
    | `rx:` `tx:` `net:` `duration:` `speed:` `rtt:` `minrtt:` `cwnd:` `retrans:` | `--traffic` |
 
    Without the switch the column stays unmeasured and the filter can only answer "no match". Every filter in the table except `duration:` names the missing switch in a `note:` on stderr; `duration:` stays silent on purpose, because a one-shot already prints the `0s` the filter is failing on, so the column itself shows why nothing matched. Advice is advisory: never fatal, never on stdout, and never under `--quiet`, where silence is the contract. But a `--quiet` gate on an enrichment *filter* without its switch would turn "unanswerable" into "no match", which no exit code can distinguish from a real one — so the CLI **refuses it** (exit `2`, naming the switch) instead of answering wrongly. Columns are exempt: `--quiet`'s answer is about the filter, and a requested column cannot change it. Either way, add the switch.

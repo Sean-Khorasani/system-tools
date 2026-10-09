@@ -1,4 +1,5 @@
 // ChartExport.cpp
+// SPDX-License-Identifier: Apache-2.0
 // chart series serialisation and per-panel zoom reset.
 // See ChartExport.h for the API contract. Nothing here touches a HWND, so
 // every decision in this file is assertable from a plain main().

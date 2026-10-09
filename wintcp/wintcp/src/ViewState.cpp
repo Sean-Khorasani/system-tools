@@ -1,4 +1,5 @@
 // ViewState.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See ViewState.h.
 
 #include "ViewState.h"

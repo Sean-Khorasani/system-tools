@@ -1,4 +1,5 @@
 // Connection.h
+// SPDX-License-Identifier: Apache-2.0
 // Core data model: one network endpoint row (TCP or UDP, IPv4 or IPv6).
 // Produced by TcpTable enumeration, enriched by ProcessResolver / service
 // map / reverse-DNS, diffed and filtered by ConnectionStore.
@@ -204,7 +205,12 @@ struct Connection {
     // Per-field, because the kernel populates some of these and not others:
     // RTT is meaningless without TCP timestamps, so a socket can report a real
     // cwnd and no RTT at all. One blanket flag would hide the half that works.
-    bool rttKnown = false;
+    bool rttLive = false;  // an RTT sample is live on THIS tick
+    // `rttLive` is reset every snapshot; `rttEver` latches once true so the
+    // Min RTT column can show a "best ever" even while a live sample is absent
+    // (a connection idling after traffic) without confusing "ever seen" with
+    // "live on this tick". `minRttMs` is only meaningful alongside `rttEver`.
+    bool rttEver = false;
     bool cwndKnown = false;
     bool retransKnown = false;
     bool tcpTimestamps = false;
@@ -217,6 +223,16 @@ struct Connection {
     // *connection* has existed, not how long WinTCP has watched it. 0 means
     // unknown (e.g. a row that appeared before this field existed).
     ULONGLONG firstSeenTick = 0;
+
+    // --- ghost retention (F5.7) ---------------------------------------------
+    // firstSeenTick is the row's birth; deathTick is the snapshot tick at which
+    // the socket left the table, set once when the row is first marked kRowRemoved.
+    // finalRx/finalTx freeze the last byte counters at the moment of death, so a
+    // retained ghost keeps its final traffic reading instead of being zeroed by the
+    // next rate pass. 0 == deathTick means the row is still live.
+    ULONGLONG deathTick = 0;
+    ULONGLONG finalRx = 0;
+    ULONGLONG finalTx = 0;
 
     // --- user annotations (bookmarks / colour tags) ------------------------
     bool pinned = false;             // survives refreshes and restarts
@@ -232,6 +248,28 @@ struct Connection {
     // --- enrichment (filled lazily; empty until a source runs) ------------
     TlsInfo tls;
     std::wstring country;            // GeoIP, empty when no database loaded
+
+    // F5.4 ASN. Two fields rather than one formatted string, because the two
+    // halves are filtered differently: `asn:15169` is a number comparison and
+    // `asn:google` a substring one. Deliberately plain rather than an
+    // AsnInfo - that type belongs to GeoIp.h, and Connection.h must not have to
+    // pull in a database reader to describe a row. asnNumber == 0 means unknown,
+    // which is also what a Country database (no ASN records) produces.
+    uint32_t asnNumber = 0;
+    std::wstring asnOrg;
+
+    // "AS15169 Google LLC", or whichever half is present, or empty. Built here
+    // rather than stored so the two halves cannot disagree with it.
+    std::wstring AsnDisplay() const {
+        if (asnNumber == 0 && asnOrg.empty()) return std::wstring();
+        std::wstring s;
+        if (asnNumber != 0) { s = L"AS"; s += std::to_wstring(asnNumber); }
+        if (!asnOrg.empty()) {
+            if (!s.empty()) s += L' ';
+            s += asnOrg;
+        }
+        return s;
+    }
 
     // --- per-process live stats (sampled on the worker every
     // refresh and joined by PID like the traffic counters above) ---------
@@ -350,7 +388,7 @@ struct SocketTcpInfo {
     ULONGLONG cwnd = 0;         // congestion window, bytes
     ULONGLONG retransBytes = 0; // cumulative bytes retransmitted
 
-    bool rttKnown = false;
+    bool rttLive = false;  // an RTT sample is present in this join input
     bool cwndKnown = false;
     bool retransKnown = false;
     // Whether the peer negotiated TCP timestamps. It is what makes an RTT

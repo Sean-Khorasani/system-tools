@@ -1,4 +1,5 @@
 // ChartsWindow.h
+// SPDX-License-Identifier: Apache-2.0
 // Performance graphs window: four live line charts (CPU %,
 // memory used %, disk read/write B/s, network receive/send B/s) sampled
 // once per second with a 120-sample history. Modeless, owned by the main

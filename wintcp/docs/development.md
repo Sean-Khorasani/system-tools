@@ -30,6 +30,61 @@ cmake -S . -B build-cmake && cmake --build build-cmake --config Release
 
 All three produce the same two binaries: `wintcp.exe` and `build\tests\wintcp-tests.exe`.
 
+### Development build (incremental, not a gate)
+
+`build.bat` recompiles everything on every run because the project is small enough that a clean
+rebuild is fast *once*; what it is not fast at is the edit-compile-test loop when you are
+hunting a defect and want to recompile only the one file you touched.
+
+```bat
+fast-build.bat            :: build-fast\wintcp.exe   (only stale files, 8 in parallel)
+fast-build.bat -Test      :: build + smoke + unit    (the whole loop in one shot)
+fast-build.bat -TestOnly  :: run the gate against the existing build-fast output
+fast-build.bat -Force     :: ignore timestamps / state hash; rebuild everything
+fast-build.bat -Clean     :: delete build-fast\ and exit
+```
+
+`-Test` is the normal dev call: it compiles only stale translation units (a `.cpp` newer than its
+`.obj`, plus anything reachable through the `#include "..."` closure), relinks what changed, then
+runs the **same** 13 CLI smoke checks, the harness self-check, and `wintcp-tests.exe unit` that
+`cli.bat` does. Exit codes: `0` ok, `1` build/test failed, `2` checks failed, `3` setup error
+(missing toolchain, lock held, source-set problem). The `fast-build\` directory is the only output
+location; nothing in `wintcp\`, `build\`, or the source tree is written. `temp/` is not touched
+either.
+
+There is also `fast-build.ps1` (what `fast-build.bat` invokes); invoke it directly if you want to
+run inside an already-configured Native Tools Prompt without the wrapper:
+`powershell -NoProfile -ExecutionPolicy Bypass -File fast-build.ps1 -Test`.
+
+**Intended difference, not drift. `fast-build` is a developer aid, `build.bat` is the gate.**
+`fast-build` deliberately diverges from `build.bat` so a dev loop can be cheap and debuggable, and
+the divergence is *named* in `fast-build.ps1`'s header:
+
+- **`/FS`** is added on the `cl` line because `fast-build` runs up to 8 `cl.exe` instances at once
+  and `/Zi` makes them all write `vc140.pdb`; without `/FS` they race and fail with `C1041`. A
+  single `cl` (`build.bat`) never needed it.
+- **`/Zi` + `/DEBUG` + `/PDB`** produce `build-fast\wintcp.pdb` so a crash in a dev build has
+  symbols and a stack trace. `build.bat` links `/DEBUG:NONE` on purpose; treating this difference
+  as an "improvement" to copy back would be wrong.
+- **`/Gy /GL /LTCG` are off.** Whole-program optimization is a shipping concern (it is why
+  `build.bat` carries `/LTCG`), not a dev-loop concern; turning it on would make every incremental
+  build a full link.
+- **`/I wintcp\src`** is given to the three test translation units so `#include "Connection.h"`
+  resolves from `wintcp\tests\` the same way `build.bat`'s test line does.
+
+The smoke gate inside `fast-build` mirrors `wintcp\tests\cli.bat`; if `cli.bat` and `fast-build` ever
+disagree on a result, `cli.bat` wins - this is a *smoke* gate, not the gate. `build.bat` (and a `cmake`
+or Visual Studio build) remain the things that prove a change ships.
+
+Incremental correctness: touching one `.cpp` recompiles that one file and relinks the affected
+binary in ~1s; touching a header recompiles only the translation units whose include closure
+contains it (the closure is computed from `wintcp\src` for the test files, the same `/I` `build.bat`
+uses). Timestamps are a heuristic; if the inputs or flags change, a SHA-256 of the flag set and
+source list is stored in `build-fast\state.txt` and forces a full rebuild on mismatch. A `.lock`
+directory survives a crashed run until removed; stale locks are detected by mtime, and if a dead
+lock blocks you, delete `build-fast\.lock` (the script prints the PID it thinks holds the lock and
+suggests this).
+
 ### The flags, and what must not change
 
 `build.bat` compiles both translation-unit sets with:
@@ -81,6 +136,8 @@ The application manifest (Common Controls v6 + PerMonitorV2 DPI) is embedded by 
 Also a correctness requirement, not a preference. `main.cpp` returns an exit code, and an interactive `cmd.exe` does **not** wait for a GUI-subsystem process to finish - so a batch gate driving a `WINDOWS`-subsystem `wintcp.exe` would read the file before it was written. All three build paths therefore use `Console`; `CMakeLists.txt` and `wintcp.vcxproj` both carry a comment recording the earlier drift.
 
 ## Testing
+
+For day-to-day work, `fast-build.bat -Test` (see [Development build (incremental, not a gate)](#development-build-incremental-not-a-gate)) builds the stale files, relinks, and runs this same gate for you in one shot; `-TestOnly` re-runs just the gate against the existing `build-fast\` output without recompiling.
 
 ### Test and benchmark binary
 
@@ -136,7 +193,41 @@ The command list `examples.bat` executes. One command per line, in the order the
 
 Its contract is deliberately narrow: it asserts **exit codes only**, and only **rc 2** (bad arguments) counts as a failure. rc 0 and rc 1 are both acceptable - rc 1 means "nothing matched", which is a legitimate answer for a filter on a machine that has no such row. Output content is *not* asserted, because sample output is captured on one host and is explicitly documented as machine-specific.
 
-**`;expect=N` annotates a command whose contract IS a non-zero exit.** Appended to the end of a line, and stripped before the binary ever sees it:
+## Real MaxMind databases for the tests (optional)
+
+`wintcp\tests\Bench.cpp` has two families of GeoIP checks. The **synthetic** ones
+(`geoip.*` and `asn.*`) build a valid `.mmdb` in memory, so they run everywhere and
+assert exact values. The **real** ones (`realdb.*`) load a genuine database file
+from `wintcp\tests\fixtures\` and assert answers that are a matter of public
+record - 1.1.1.1 is AS13335 Cloudflare, 8.8.8.8 is AS15169 Google and in the US.
+
+They are **optional, and they are gitignored**. Never commit a `.mmdb`: these are
+licensed files, and redistributing them is precisely why WinTCP ships no database
+of its own. A fresh clone therefore has an empty `fixtures/` directory, the
+`realdb.*` checks report a single `realdb.skipped`, and every gate still passes.
+
+To get the signal locally:
+
+```bat
+mkdir wintcp\tests\fixtures
+:: up-to-date free DBIP editions, no account needed
+curl -o wintcp\tests\fixtures\dbip-asn-lite.mmdb.gz ^
+  https://download.db-ip.com/free/dbip-asn-lite-2026-10.mmdb.gz
+curl -o wintcp\tests\fixtures\dbip-country-lite.mmdb.gz ^
+  https://download.db-ip.com/free/dbip-country-lite-2026-10.mmdb.gz
+:: .gz - decompress to wintcp\tests\fixtures\dbip-*.mmdb and delete the .gz
+```
+
+Any number of `.mmdb` files may sit there; the loader picks the first one whose
+`database_type` mentions ASN and the first that does not. An unreadable file is
+reported, not failed on, because it is a local download rather than a checked-in
+fixture.
+
+Assert facts the **file** states, not the address. `175.247.199.0` is `CN` in
+MaxMind's `GeoIP2-Country-Test.mmdb` and `KR` in the DBIP file above - the
+check accepts either, which rules out a reader that answers "US" for everything
+without pinning an answer that changes when the file is refreshed. That is the
+whole reason these assert narrow, verifiable properties rather than golden output.**`;expect=N` annotates a command whose contract IS a non-zero exit.** Appended to the end of a line, and stripped before the binary ever sees it:
 
 ```text
 kill --pid 4 ;expect=2

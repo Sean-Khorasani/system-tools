@@ -1,4 +1,5 @@
 // EtwTrafficTypes.h
+// SPDX-License-Identifier: Apache-2.0
 // The pure, self-contained half of the ETW traffic counter: the MOF
 // provider GUIDs, the direction enum and the two parser/classifier
 // declarations.

@@ -1,4 +1,5 @@
 // Grouping.h
+// SPDX-License-Identifier: Apache-2.0
 // Group connection rows by process for display.
 //
 // WHY A SEPARATE MODULE. Grouping is pure logic over a row list - which

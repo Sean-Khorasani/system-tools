@@ -1,4 +1,5 @@
 // Cli.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Unified command-line entry: wintcp.exe <command> [switches].
 //
 // There is exactly ONE CLI mode. An earlier revision had a second,

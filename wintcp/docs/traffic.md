@@ -81,11 +81,11 @@ Value details that are easy to get wrong:
 - Zero retransmits is a real answer. It prints `0 B`, not `—`.
 - Each field is gated on its own known flag, because the kernel populates them independently. A socket with TCP timestamps off still reports a real congestion window, and blanking the row would discard three good readings to hide one missing one.
 
-In the GUI these four columns and `Proc Speed` are available from **View → Columns** and hidden by default.
+In the GUI these four columns and `Process rate` are available from **View → Columns** and hidden by default.
 
 ### Per-process rate
 
-`procspeed` (header *Proc Speed*) is a process's bytes per second **summed over its sockets**, comparable to `nethogs` on Linux. It differs from `bandwidth` on exactly the rows that matter: a browser's per-socket figures are a fraction of its total, whereas a process with one busy socket shows the same figure in both. With `--group` the row *is* a process, so `procspeed` is the meaningful column and `bandwidth` deliberately shows `—`.
+`procspeed` (header *Process rate*) is a process's bytes per second **summed over its sockets**, comparable to `nethogs` on Linux. It differs from `bandwidth` on exactly the rows that matter: a browser's per-socket figures are a fraction of its total, whereas a process with one busy socket shows the same figure in both. With `--group` the row *is* a process, so `procspeed` is the meaningful column and `bandwidth` deliberately shows `—`.
 
 The sum is a correctness claim rather than a style choice:
 
@@ -110,7 +110,7 @@ Supporting rules:
 - Reads are folded in **per socket**, not at the end of the pass, so a pass that gives up still keeps everything it did read.
 - A pass stops waiting once its workers stop making progress (250 ms of silence, with 4 s as a hard ceiling) rather than waiting out a fixed budget for a thread that will never return.
 
-On a machine with such a socket the traffic, age and rate columns are **partial**: `—` for sockets that could not be read. The GUI reports the count so it is visible rather than silent. A row with no age never matches `duration:`, so the filter can return fewer rows than the table shows instead of pretending the unmeasured ones are new.
+On a machine with such a socket the traffic, age and rate columns are **partial**: `—` for sockets that could not be read. The GUI status bar reports the count in its tooltip so it is visible rather than silent. A row with no age never matches `duration:`, so the filter can return fewer rows than the table shows instead of pretending the unmeasured ones are new.
 
 Most `-` cells are not stalls at all. The majority of sockets on a busy machine are UDP, to which `SIO_TCP_INFO` does not apply, and they answer instantly with `WSAENOTSOCK`. Measured on one Windows 11 host by walking every socket-shaped handle the system reported: of **199,464** handles total, **13,955** belonged to sockets, and of those **12,235** failed the ioctl instantly and **1,720** belonged to a process that could not be opened at all. **None** of them answered with a byte count. A scan that appears to be failing is usually a scan that is correctly finding that most of the machine is not TCP.
 

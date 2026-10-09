@@ -1,4 +1,5 @@
 // main.cpp
+// SPDX-License-Identifier: Apache-2.0
 // Application entry point: wmain, common-controls init, main window, message loop.
 
 #ifndef WIN32_LEAN_AND_MEAN

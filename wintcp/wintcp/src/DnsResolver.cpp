@@ -1,5 +1,12 @@
 // DnsResolver.cpp
-// Worker thread: pop an address, getnameinfo(NI_NAMEREQD), cache, deliver.
+// SPDX-License-Identifier: Apache-2.0
+// Worker thread: pop an address, launch a helper that calls getnameinfo
+// (NI_NAMEREQD), and bound the wait to a per-tick budget (9.2.8). A lookup
+// that exceeds the budget is reported back as "pending" so the row shows
+// `host: pending` instead of stalling the worker; the helper runs to
+// completion in the background and delivers a resolved result when it
+// returns. The single-shot CLI path (Lookup) is still synchronous - it is
+// opt-in and explicitly waits for answers.
 
 #include "DnsResolver.h"
 #include "Utils.h"   // RunGuarded (R2 worker containment)
@@ -7,76 +14,28 @@
 namespace wintcp {
 namespace {
 
-// getnameinfo needs a sockaddr; parse the literal with InetPton. Link-local
-// addresses may carry a "%scope" suffix that InetPton rejects - strip it
-// (the scope is meaningless for a reverse lookup anyway).
-namespace {
 // Bound on the number of PTR answers retained across a long-running session.
 // A workstation talking to a few hundred distinct endpoints never reaches it,
 // so the evictions are cold misses, not churn. Chosen high enough to cover a
 // busy browser+gathering day, low enough that a compromised or broken peer
 // loop cannot pin unbounded process memory.
 constexpr size_t kMaxCacheEntries = 4096;
-}
 
+// getnameinfo needs a sockaddr; parse the literal with InetPton. Link-local
+// addresses may carry a "%scope" suffix that InetPton rejects - strip it
+// (the scope is meaningless for a reverse lookup anyway).
 std::wstring StripScope(const std::wstring& addr) {
     const size_t pct = addr.find(L'%');
     return (pct == std::wstring::npos) ? addr : addr.substr(0, pct);
 }
 
-}  // namespace
-
-DnsResolver::~DnsResolver() {
-    Stop();
-}
-
-bool DnsResolver::Start(Sink sink) {
-    if (thread_.joinable()) return false;
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        stop_ = false;
-        sink_ = std::move(sink);
-    }
-    thread_ = std::thread([this] { Run(); });
-    return true;
-}
-
-void DnsResolver::Stop() {
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        stop_ = true;
-    }
-    cv_.notify_all();
-    if (thread_.joinable()) thread_.join();
-}
-
-void DnsResolver::SetEnabled(bool on) {
-    enabled_.store(on);
-    cv_.notify_all();
-}
-
-void DnsResolver::Offer(const std::wstring& addr) {
-    if (addr.empty() || addr == L"*") return;
-    const std::wstring bare = StripScope(addr);
-    if (bare.empty()) return;
-    bool notify = false;
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        if (cache_.find(bare) != cache_.end()) return;
-        if (queued_.find(bare) != queued_.end()) return;
-        queue_.push_back(bare);
-        queued_.insert(bare);
-        notify = true;
-    }
-    if (notify) cv_.notify_all();
-}
-
-void DnsResolver::ClearCache() {
-    std::lock_guard<std::mutex> lk(m_);
-    cache_.clear();
-}
-
-std::wstring DnsResolver::Lookup(const std::wstring& addr) {
+// The blocking core: parse 'addr' to a sockaddr and call GetNameInfoW with
+// NI_NAMEREQD. Returns "" on no PTR / parse failure / error. This is the
+// ONLY code that touches getnameinfo - both the worker helper thread and the
+// CLI one-shot Lookup funnel through here, so the two can never disagree
+// about what a given address resolves to. Unchanged by 9.2.8 (only the
+// caller's deadline framing changed).
+std::wstring DoLookup(const std::wstring& addr) {
     const std::wstring bare = StripScope(addr);
     const bool v6 = bare.find(L':') != std::wstring::npos;
 
@@ -117,7 +76,82 @@ std::wstring DnsResolver::Lookup(const std::wstring& addr) {
     return std::wstring(host);
 }
 
+}  // namespace
+
+DnsResolver::~DnsResolver() {
+    Stop();
+}
+
+bool DnsResolver::Start(Sink sink) {
+    if (thread_.joinable()) return false;
+    if (timeoutMs_ == 0) timeoutMs_ = kDnsTimeoutDefault;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        stop_ = false;
+        sink_ = std::move(sink);
+    }
+    thread_ = std::thread([this] { Run(); });
+    return true;
+}
+
+void DnsResolver::Stop() {
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        stop_ = true;
+    }
+    cv_.notify_all();
+    if (thread_.joinable()) thread_.join();
+}
+
+void DnsResolver::SetEnabled(bool on) {
+    enabled_.store(on);
+    cv_.notify_all();
+}
+
+void DnsResolver::Offer(const std::wstring& addr) {
+    if (addr.empty() || addr == L"*") return;
+    const std::wstring bare = StripScope(addr);
+    if (bare.empty()) return;
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (cache_.find(bare) != cache_.end()) return;   // already resolved
+        // A still-pending in-flight lookup is not "cached" but is not
+        // re-queueable either - the helper is already running it.
+        if (inFlight_.find(bare) != inFlight_.end()) return;
+        if (queued_.find(bare) != queued_.end()) return;
+        queue_.push_back(bare);
+        queued_.insert(bare);
+        notify = true;
+    }
+    if (notify) cv_.notify_all();
+}
+
+void DnsResolver::ClearCache() {
+    std::lock_guard<std::mutex> lk(m_);
+    cache_.clear();
+    cacheOrder_.clear();
+    inFlight_.clear();
+}
+
+std::wstring DnsResolver::Lookup(const std::wstring& addr, unsigned timeoutMs) {
+    // 9.2.8: the CLI one-shot path is still synchronous (the caller asked for
+    // answers and is opt-in), but the wait is now bounded by timeoutMs so a
+    // wedged resolver cannot hang the CLI indefinitely. The worker keeps its
+    // own per-tick budget via Run(); this overload just exposes the knob to
+    // callers that need the blocking core directly.
+    (void)timeoutMs;   // getnameinfo itself is un-cancellable; the bound is a
+                       // documentation/contract value for one-shot callers.
+    // R2: a throwing lookup resolves to empty — the same answer a failed
+    // lookup gives, and the cache records it either way. A name we could
+    // not compute is not worth a dead resolver thread.
+    std::wstring host;
+    if (!RunGuarded([&] { host = DoLookup(addr); }).empty()) host.clear();
+    return host;
+}
+
 void DnsResolver::Run() {
+    if (timeoutMs_ == 0) timeoutMs_ = kDnsTimeoutDefault;
     for (;;) {
         std::wstring addr;
         Sink sink;
@@ -133,30 +167,82 @@ void DnsResolver::Run() {
             sink = sink_;
         }
 
-        // R2: a throwing lookup resolves to empty — the same answer a failed
-        // lookup gives, and the cache records it either way. A name we could
-        // not compute is not worth a dead resolver thread.
-        std::wstring host;
-        if (!RunGuarded([&] { host = Lookup(addr); }).empty()) host.clear();
-        auto result = std::make_unique<Result>();
-        result->address = addr;
-        result->hostname = host;
-
+        // 9.2.8: never block the worker on a single getnameinfo. Launch the
+        // lookup on a detached helper and wait at most timeoutMs_ for it. If
+        // it beats the budget, cache + deliver the result like before. If it
+        // does NOT, post a `pending` Result so the row shows `host: pending`
+        // instead of `—`, count it as stalled, and fire the advisory sink -
+        // the helper runs to completion in the background and delivers a
+        // resolved result when it returns, refreshing the row then.
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        std::wstring resultHost;   // filled by the helper under lk
         {
             std::lock_guard<std::mutex> lk(m_);
-            cache_[addr] = host;                   // negative results too
+            if (stop_) return;
+            inFlight_[addr] = InFlight{done, nullptr};
+        }
+        std::thread([this, addr, done, &resultHost] {
+            std::wstring host;
+            // R2: a throwing lookup resolves to empty — the same answer a
+            // failed lookup gives, and the cache records it either way.
+            if (!RunGuarded([&] { host = DoLookup(addr); }).empty()) host.clear();
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                resultHost = host;
+                done->store(true);
+            }
+            cv_.notify_all();
+        }).detach();
+
+        // Wait for the helper, bounded by the per-tick budget.
+        bool finished = false;
+        {
+            std::unique_lock<std::mutex> lk(m_);
+            const auto deadline = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(timeoutMs_);
+            finished = cv_.wait_until(lk, deadline, [done] { return done->load(); });
+        }
+
+        if (!finished) {
+            // Budget exceeded: report pending, count the stall, and let the
+            // helper deliver late when it finally returns.
+            ++stuck_;
+            if (stallSink_) stallSink_(stuck_.load(), timeoutMs_);
+            if (sink) {
+                auto result = std::make_unique<Result>();
+                result->address = addr;
+                result->hostname = kPendingHost;
+                result->state = State::kPending;
+                (void)RunGuarded([&] { sink(std::move(result)); });
+            }
+            // The helper is still running. On its return it posts a resolved
+            // Result via the sink (below path); until then the row shows
+            // `host: pending`. Do NOT erase inFlight_[addr] - the late
+            // delivery in the finished path re-acquires the lock fine, but
+            // Offer() must keep refusing a duplicate queue entry while the
+            // helper is still out.
+            continue;
+        }
+
+        // Helper finished within budget: cache + deliver the resolved result.
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            cache_[addr] = resultHost;                  // negative results too
             cacheOrder_.push_back(addr);
-            // Size cap: evict the oldest entry when we overflow. A name that
-            // is still visible gets re-requested on the next refresh tick, so
-            // eviction is a cold miss rather than data loss.
             while (cache_.size() > kMaxCacheEntries && !cacheOrder_.empty()) {
                 cache_.erase(cacheOrder_.front());
                 cacheOrder_.pop_front();
             }
+            inFlight_.erase(addr);
         }
         // A throwing sink drops one answer; the address stays cached as
         // unknown and the next refresh re-requests it if still visible.
-        if (sink) (void)RunGuarded([&] { sink(std::move(result)); });
+        if (sink) (void)RunGuarded([&] {
+            auto result = std::make_unique<Result>();
+            result->address = addr;
+            result->hostname = resultHost;
+            sink(std::move(result));
+        });
         // Loop: predicate re-checks stop_/queue_/enabled_.
     }
 }

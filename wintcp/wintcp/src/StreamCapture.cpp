@@ -1,4 +1,5 @@
 // StreamCapture.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See StreamCapture.h. Process spawning, temp files and pktmon invocation
 // live here and nowhere else.
 
@@ -74,14 +75,28 @@ int RunTool(const std::wstring& exe, const std::wstring& args) {
     return static_cast<int>(code);
 }
 
-std::wstring PktmonPath() {
+// Absolute path of a tool that ships in the system directory, or just the bare
+// name when the directory could not be read. The bare name is a deliberate
+// fallback, not laziness: CreateProcess searches PATH, so a relative answer can
+// still work, and refusing outright would disable capture on a machine whose
+// SystemDirectory call failed for an unrelated reason.
+std::wstring SystemToolPath(const wchar_t* name) {
     wchar_t buf[MAX_PATH] = {0};
     const DWORD n = ::GetSystemDirectoryW(buf, MAX_PATH);
     // This was the house model C10 points at, and it was already right. It now
     // names the shared rule so the two forms cannot drift apart again.
-    if (bufferWasTooSmall(n, MAX_PATH)) return L"pktmon.exe";
-    return std::wstring(buf, n) + L"\\pktmon.exe";
+    if (bufferWasTooSmall(n, MAX_PATH)) return name;
+    return std::wstring(buf, n) + L"\\" + name;
 }
+
+std::wstring PktmonPath() { return SystemToolPath(L"pktmon.exe"); }
+
+// 9.2.7: etl2pcap turns pktmon's ETL into the pcapng the parser reads. It ships
+// in the same directory, and before this it was named BARE on the conversion
+// command line - so its absence surfaced as a capture that ran, waited, and was
+// then thrown away at the conversion step. Probed up front instead, and invoked
+// by absolute path.
+std::wstring Etl2PcapPath() { return SystemToolPath(L"etl2pcap.exe"); }
 
 // A temp path in the user's temp dir, created with a distinctive name so a
 // stray file is recognisable. Returns empty on failure.
@@ -155,28 +170,107 @@ std::wstring KeyEndpoint(const unsigned char* addr, uint16_t port, bool v4) {
 // Elevation is delegated to Elevate.cpp, which owns the token logic and the
 // "can this user elevate at all" question. The extra function here would
 // exist only to rename it, so it is gone.
+// 9.2.7: are the capture TOOLS on this machine? Probed once and cached, because
+// the answer cannot change while the process runs and this is on a path the GUI
+// asks about while building menus.
+//
+// BOTH tools, and that is the fix rather than a detail. Capture also needs
+// etl2pcap to turn the ETL into a pcapng, and before this its absence surfaced
+// as a capture that ran, waited for the user, and was then discarded at the
+// conversion step - the worst possible time to discover it. Finding out up
+// front is the difference between a disabled menu item and a lost capture.
+//
+// THE WORDING IS LOAD-BEARING, and it was wrong once. The first version of this
+// string ended "...and elevating will not supply it." That reads correctly and
+// shares a word with ElevationUnavailableReason(), whose advice is "this feature
+// needs administrator rights". Two reasons a user has to tell apart should not
+// use the same word: a support log containing both, or a report scanned for
+// "elevat", cannot say which was which. The pre-emption is kept - the user
+// should not go and try the obvious thing - but it is said in its own words, so
+// "administrator" appears in exactly one of the two reasons and that one is the
+// elevation reason.
+bool CaptureToolsPresent(std::wstring* whyNot) {
+    static int cached = -1;   // -1 not yet probed, 0 missing, 1 present
+    static std::wstring cachedWhy;
+    if (cached < 0) {
+        const wchar_t* missing = nullptr;
+        if (::GetFileAttributesW(PktmonPath().c_str()) ==
+            INVALID_FILE_ATTRIBUTES) {
+            missing = L"pktmon.exe";
+        } else if (::GetFileAttributesW(Etl2PcapPath().c_str()) ==
+                   INVALID_FILE_ATTRIBUTES) {
+            missing = L"etl2pcap.exe";
+        }
+        if (missing == nullptr) {
+            cached = 1;
+        } else {
+            cached = 0;
+            cachedWhy = std::wstring(missing) +
+                        L" was not found in the system directory. Stream "
+                        L"capture needs it, and relaunching with more privilege "
+                        L"will not help.";
+        }
+    }
+    if (cached == 0 && whyNot != nullptr) *whyNot = cachedWhy;
+    return cached == 1;
+}
+// 9.2.7: the capture decision TABLE, split out from the two probes so that the
+// order of the probes can be tested at all.
+//
+// WHY A PURE FUNCTION AND NOT JUST A COMMENTED IF-CHAIN. The order of the two
+// checks is the entire fix, and an order buried in a function that reads live
+// process state is untestable. Measured while writing the gate: it runs
+// elevated, and when the token is good the two orders return the same verdict -
+// so a mutation that moved the token check back in front of the tool check
+// passed green. A test that cannot fail on the bug it was written for is not a
+// test. Taking the two answers as parameters makes all four combinations
+// reachable from any process, at any integrity level.
+//
+// The rule this encodes, in one sentence: a missing tool is reported as a
+// missing tool, always, even when the token would also refuse - because "run as
+// administrator" is advice the user cannot act on when the tool is the thing
+// that is absent, and elevating will not conjure it.
+CaptureGate EvaluateCaptureGate(bool toolsPresent, bool elevated,
+                                const std::wstring& toolWhy,
+                                const std::wstring& elevationWhy) {
+    CaptureGate g;
+    g.ok = false;
+    // Deliberately a switch on both bits rather than early returns, so the whole
+    // table reads in one place and no future edit can quietly reorder it.
+    if (!toolsPresent) {
+        // The tool's absence outranks the token. Both `if (!toolsPresent)` and
+        // `if (!elevated)` refusing is correct; which one gets to EXPLAIN is not
+        // symmetric, and the tool wins.
+        g.why = toolWhy;
+    } else if (!elevated) {
+        g.why = elevationWhy;
+    } else {
+        g.ok = true;
+        g.why.clear();
+    }
+    return g;
+}
+
 bool CaptureAvailable(std::wstring* whyNot) {
-    // pktmon's driver is only loaded for an elevated process. If this process
-    // is not elevated but the user COULD elevate, the correct answer is "not
-    // right now" rather than "impossible" - the caller offers a relaunch.
-    // See Elevate.h for why the whole process relaunches.
-    if (!IsElevated()) {
-        if (whyNot != nullptr) *whyNot = ElevationUnavailableReason();
-        return false;
-    }
-    if (::GetFileAttributesW(PktmonPath().c_str()) == INVALID_FILE_ATTRIBUTES) {
-        if (whyNot != nullptr)
-            *whyNot = L"pktmon.exe was not found in the system directory.";
-        return false;
-    }
-    return true;
+    // Two impure probes, then the table. This function is the only place that
+    // knows what the gates are; EvaluateCaptureGate is the only place that
+    // knows what order they go in.
+    std::wstring toolWhy;
+    const bool tools = CaptureToolsPresent(&toolWhy);
+    const CaptureGate g = EvaluateCaptureGate(tools, IsElevated(), toolWhy,
+                                              ElevationUnavailableReason());
+    // Always write, even on success: a caller that reuses one whyNot buffer
+    // across calls must not see the previous refusal's text after a pass.
+    if (whyNot != nullptr) *whyNot = g.why;
+    return g.ok;
 }
 
 void ClearCaptureFilter() {
     RunTool(PktmonPath(), L"filter remove");
 }
 
-bool StartCapture(const CaptureTarget& target, std::wstring* error) {
+bool StartCapture(const CaptureTarget& target, unsigned eventFlags,
+                  const std::wstring& extraAddr, std::wstring* error) {
     const std::wstring exe = PktmonPath();
     const auto fail = [error](const wchar_t* what) {
         if (error != nullptr) *error = what;
@@ -192,9 +286,17 @@ bool StartCapture(const CaptureTarget& target, std::wstring* error) {
     ::swprintf_s(ports, L"-t TCP -p %u -p %u -i %s", target.localPort,
                  target.remotePort,
                  FormatAddrForFilter(target.localAddr, target.ipV4).c_str());
-    if (RunTool(exe, std::wstring(L"filter add wintcp ") + ports) != 0)
+    std::wstring filt = std::wstring(L"filter add wintcp ") + ports;
+    // 9.3.7: --filter passthrough. Built on the DYNAMIC string, never the fixed
+    // `ports` buffer above: an IPv6 address can be 45 chars and a second
+    // -i <ip> would push it past kFilterArgChars, silently truncating the
+    // command - the exact failure pktmon's own truncation hides.
+    if (!extraAddr.empty()) {
+        filt += L" -i " + extraAddr;
+    }
+    if (RunTool(exe, filt) != 0)
         return fail(L"Could not start packet capture (pktmon filter). "
-                    L"Another capture tool may be running.");
+                     L"Another capture tool may be running.");
 
     const std::wstring etl = MakeTempPath(L".etl");
     if (etl.empty()) return fail(L"Could not create a temporary file name.");
@@ -202,8 +304,17 @@ bool StartCapture(const CaptureTarget& target, std::wstring* error) {
     wchar_t start[kMaxPathPlus] = {0};
     // --pkt-size 0 = no truncation. Omitting it truncates each packet and
     // the stream becomes unreassemblable.
-    ::swprintf_s(start, L"start --capture --pkt-size 0 --file-name \"%s\"",
-                 etl.c_str());
+    // --flags is only emitted when the caller asked for a mask: 0 means
+    // "capture every TCP lifecycle event", which is the default and the only
+    // mode that yields a fully reassemblable stream.
+    if (eventFlags == 0) {
+        ::swprintf_s(start, L"start --capture --pkt-size 0 --file-name \"%s\"",
+                     etl.c_str());
+    } else {
+        ::swprintf_s(start,
+                     L"start --capture --pkt-size 0 --flags %u --file-name \"%s\"",
+                     eventFlags, etl.c_str());
+    }
     if (RunTool(exe, start) != 0) {
         RunTool(exe, L"filter remove");
         return fail(L"Could not start packet capture (pktmon start).");
@@ -247,8 +358,10 @@ CaptureResult StopCapture(const CaptureTarget& target,
     // etl.c_str(), not etl: a std::wstring passed to a variadic function is
     // bitwise-copied, so its buffer is never read and the path comes out as
     // whatever happened to be on the stack.
-    ::swprintf_s(conv, L"etl2pcap \"%s\" --out \"%s\"", etl.c_str(),
-                 pcapng.c_str());
+    // Absolute path (9.2.7). The bare name relied on PATH, so a machine where
+    // pktmon ships but etl2pcap does not would fail HERE, after the capture.
+    ::swprintf_s(conv, L"\"%s\" \"%s\" --out \"%s\"", Etl2PcapPath().c_str(),
+                 etl.c_str(), pcapng.c_str());
     if (RunTool(exe, conv) != 0) {
         RemoveIfPresent(etl);
         RemoveIfPresent(pcapng);
@@ -507,6 +620,59 @@ bool ParseCaptureDir(const std::wstring& value, CaptureDir* out) {
         return true;
     }
     return false;
+}
+
+// Mirror of ParseCaptureDir's "token OR number" shape, but for pktmon's event
+// flag bitmask. Named spellings are preferred because --flags 5 is unguessable,
+// but a bare number is accepted for the rare caller who knows the raw mask.
+bool ParseCaptureFlags(const std::wstring& value, unsigned* out) {
+    if (out == nullptr) return false;
+    const std::wstring v = ToLowerW(value);
+    unsigned m = 0;
+    // Comma-separated, whitespace-tolerated, order-independent - the same reader
+    // that ParseEventMask established so `--flags syn,rst` and `--flags rst,syn`
+    // cannot disagree with each other or with the spelling table.
+    size_t i = 0;
+    while (i <= v.size()) {
+        size_t comma = v.find(L',', i);
+        if (comma == std::wstring::npos) comma = v.size();
+        std::wstring t = v.substr(i, comma - i);
+        while (!t.empty() && ::iswspace(t.front())) t.erase(t.begin());
+        while (!t.empty() && ::iswspace(t.back())) t.pop_back();
+        if (!t.empty()) {
+            if (t == L"none" || t == L"0")
+                m |= 0;
+            else if (t == L"syn")
+                m |= 1;                      // TCP_SYN per pktmon docs
+            else if (t == L"fin")
+                m |= 2;                      // TCP_FIN
+            else if (t == L"rst")
+                m |= 4;                      // TCP_RST
+            else if (t == L"all" || t == L"syn,fin,rst" || t == L"7")
+                m |= 7;                      // the whole documented mask
+            else if (::iswdigit(t[0])) {
+                // A bare bitmask (e.g. "5" = SYN+RST). Leading zero is caught
+                // by the "none"/"0" branch above, so this is a genuine number.
+                // Validate that EVERY character is a digit - a mix like "5x" is
+                // a typo, not a lenient parse.
+                bool allDigits = true;
+                for (wchar_t ch : t) {
+                    if (!::iswdigit(ch)) { allDigits = false; break; }
+                }
+                if (!allDigits) return false;
+                unsigned n = 0;
+                for (wchar_t ch : t) n = static_cast<unsigned>(n * 10 + (ch - L'0'));
+                if (n > 7) return false;       // outside the documented mask range
+                m |= n;
+            }
+            else
+                return false;
+        }
+        if (comma == v.size()) break;
+        i = comma + 1;
+    }
+    *out = m;
+    return true;
 }
 
 }  // namespace wintcp

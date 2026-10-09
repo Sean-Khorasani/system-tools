@@ -994,9 +994,17 @@ bool GeoIpDatabase::NodeRecord(size_t node, unsigned half, size_t* out) const {
 std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
                                        unsigned bitCount,
                                        size_t startNode) const {
-    if (!Loaded() || nodeCount_ == 0 || recordBytes_ == 0) {
-        return std::wstring();
-    }
+    size_t offset = 0;
+    if (!ResolveOffset(bits, bitCount, startNode, &offset)) return std::wstring();
+    return CountryAt(offset);
+}
+
+bool GeoIpDatabase::ResolveOffset(const unsigned char bits[16],
+                                  unsigned bitCount,
+                                  size_t startNode,
+                                  size_t* out) const {
+
+    if (!Loaded() || nodeCount_ == 0 || recordBytes_ == 0) return false;
 
     const size_t nodeCount = static_cast<size_t>(nodeCount_);
     size_t node = startNode;
@@ -1004,7 +1012,9 @@ std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
     for (unsigned depth = 0; depth < bitCount; ++depth) {
         const unsigned bit = (bits[depth / 8] >> (7 - (depth % 8))) & 1u;
         size_t record = 0;
-        if (!NodeRecord(node, bit, &record)) return std::wstring();
+
+// SPDX-License-Identifier: Apache-2.0
+        if (!NodeRecord(node, bit, &record)) return false;
 
         // Three cases: below the node count it is a node number; equal to it
         // the database has no data here; and node_count + 16 or above it is a
@@ -1025,27 +1035,26 @@ std::wstring GeoIpDatabase::LookupBits(const unsigned char bits[16],
             node = record;
         } else if (record >= nodeCount + kSeparatorLen) {
             const size_t offset = record - nodeCount - kSeparatorLen;
-            if (offset >= dataSectionSize_) return std::wstring();
-            return CountryAt(offset);
+            if (offset >= dataSectionSize_) return false;
+            *out = offset;
+            return true;
         } else {
-            return std::wstring();
+            return false;
         }
     }
 
     // Every address bit was consumed and the walk still stands on an internal
     // node, so the address simply has no record. 'node' is a NODE NUMBER - it
     // is only ever assigned when a record came back below node_count - so
-    // handing it to CountryAt decoded search-tree bytes as if they were a
-    // country record, naming a country for an address that has none (and, now
-    // that data offset 0 is a reachable record, naming whatever sits there for
-    // every address with no data at all).
-    return std::wstring();
+    // handing it to the decoder would read search-tree bytes as if they were a
+    // data record, naming a country (or an ASN) for an address that has none
+    // (and, now that data offset 0 is a reachable record, naming whatever sits
+    // there for every address with no data at all).
+    return false;
 }
 
-std::wstring GeoIpDatabase::LookupV4(uint32_t hostOrderAddr) const {
-    if (!IsGlobalUnicastV4(hostOrderAddr)) return std::wstring();
-    if (!Loaded()) return std::wstring();
-
+void GeoIpDatabase::AddressBitsV4(uint32_t hostOrderAddr,
+                                  unsigned char bits[16]) {
     // The tree is indexed in network order, so hand it the address that way:
     // the most significant octet of a host-order value is the LAST octet of the
     // address, so the two pairs swap. Swapping the wrong way round (which is
@@ -1061,15 +1070,47 @@ std::wstring GeoIpDatabase::LookupV4(uint32_t hostOrderAddr) const {
     // reading be >> 24 first walked the tree in reverse octet order and
     // answered for 4.4.8.8 when asked about 8.8.4.4 - a wrong answer, not an
     // error, in every caller (list --db, the country: filter, the GUI).
-    unsigned char bits[16] = {0};
+    for (int i = 0; i < 16; ++i) bits[i] = 0;
     bits[0] = static_cast<unsigned char>(be & 0xFFu);
     bits[1] = static_cast<unsigned char>((be >> 8) & 0xFFu);
     bits[2] = static_cast<unsigned char>((be >> 16) & 0xFFu);
     bits[3] = static_cast<unsigned char>((be >> 24) & 0xFFu);
+}
+
+std::wstring GeoIpDatabase::LookupV4(uint32_t hostOrderAddr) const {
+    if (!IsGlobalUnicastV4(hostOrderAddr)) return std::wstring();
+    if (!Loaded()) return std::wstring();
+
+    unsigned char bits[16] = {0};
+    AddressBitsV4(hostOrderAddr, bits);
     // In an IPv6 tree the IPv4 space is a SUBTREE - the 96-zero-bit one - so an
     // IPv4 walk starts there rather than at the root. v4StartNode_ is 0 for a
     // plain IPv4 tree, where the root is the correct start anyway.
     return LookupBits(bits, kIpv4BitCount, ipv6Tree_ ? v4StartNode_ : 0);
+}
+
+AsnInfo GeoIpDatabase::LookupAsnV4(uint32_t hostOrderAddr) const {
+    if (!IsGlobalUnicastV4(hostOrderAddr)) return AsnInfo();
+    if (!Loaded()) return AsnInfo();
+
+    unsigned char bits[16] = {0};
+    AddressBitsV4(hostOrderAddr, bits);
+    size_t offset = 0;
+    if (!ResolveOffset(bits, kIpv4BitCount, ipv6Tree_ ? v4StartNode_ : 0,
+                       &offset)) {
+        return AsnInfo();
+    }
+    return AsnAt(offset);
+}
+
+AsnInfo GeoIpDatabase::LookupAsnV6(const unsigned char addr[16]) const {
+    if (!IsGlobalUnicastV6(addr)) return AsnInfo();
+    if (!Loaded()) return AsnInfo();
+    // Always the root, for the same reason LookupV6 does: a 128-bit walk lands
+    // in the IPv4 subtree of a v6 tree on its own.
+    size_t offset = 0;
+    if (!ResolveOffset(addr, kIpv6BitCount, 0, &offset)) return AsnInfo();
+    return AsnAt(offset);
 }
 
 std::wstring GeoIpDatabase::LookupV6(const unsigned char addr[16]) const {
@@ -1132,8 +1173,63 @@ std::wstring GeoIpDatabase::CountryAt(size_t dataOffset) const {
 }
 
 // ---------------------------------------------------------------------------
-// Global unicast
+// ASN
 // ---------------------------------------------------------------------------
+
+std::wstring AsnInfo::Display() const {
+    if (number == 0 && org.empty()) return std::wstring();
+    std::wstring s;
+    if (number != 0) {
+        s = L"AS";
+        s += std::to_wstring(number);
+    }
+    if (!org.empty()) {
+        if (!s.empty()) s += L' ';
+        s += org;
+    }
+    return s;
+}
+
+AsnInfo GeoIpDatabase::AsnAt(size_t dataOffset) const {
+    // Same offset-0 rule as CountryAt: offset 0 is a real record, not "no data".
+    if (dataSectionSize_ == 0) return AsnInfo();
+    const DataReader r(mappedView_ + dataSectionBase_, dataSectionSize_);
+
+    Value rec;
+    if (!r.Decode(dataOffset, &rec) || rec.type != Value::Type::kMap) {
+        return AsnInfo();
+    }
+
+    // Unlike a country record, these two keys sit at the TOP level of the map.
+    // GeoLite2-ASN has no wrapper object - the record IS the autonomous system,
+    // so looking for a nested "autonomous_system" key (which it does not have)
+    // finds nothing and every address reads as unknown.
+    //
+    // The two halves are read independently rather than as a pair, because a
+    // record that has only one of them is still worth reporting: some entries
+    // carry an organisation with no number. Reading them as a pair would throw
+    // that away.
+    AsnInfo out;
+    size_t pos = 0;
+    if (MapFind(r, rec, "autonomous_system_number", &pos)) {
+        Value v;
+        if (r.Decode(pos, &v) && v.type == Value::Type::kUint) {
+            // 0 is not a real ASN, and Decode cannot produce it from a
+            // non-empty field (a zero-length uint reads as 0), so an explicit
+            // check keeps "the record says zero" from printing as "AS0".
+            if (v.uval != 0 && v.uval <= 0xFFFFFFFFull) {
+                out.number = static_cast<uint32_t>(v.uval);
+            }
+        }
+    }
+    if (MapFind(r, rec, "autonomous_system_organization", &pos)) {
+        Value v;
+        if (r.Decode(pos, &v) && v.type == Value::Type::kString) {
+            out.org = Widen(r, v);
+        }
+    }
+    return out;
+}
 
 // Deliberately wider than RFC1918: a connection to a CGNAT address, a
 // benchmarking range or a documentation block is just as much not a country as
@@ -1172,7 +1268,12 @@ bool IsGlobalUnicastV4(uint32_t a) {
 
 bool IsGlobalUnicastV6(const unsigned char a[16]) {
     if (a[0] == 0xFF) return false;                           // ff00::/8 multicast
-    if (a[0] == 0xFE && (a[1] & 0xC0) == 0x80) return false;  // fc00::/7 private
+    // fc00::/7 is unique-local - the private range for IPv6. Its first seven bits
+    // are 1111110, so the first byte is fc or fd and that is the whole test.
+    // The line this replaces checked a[0]==0xFE with the SECOND byte in fc..ff,
+    // which is fe80::/10 - a different range - so every ULA address was reported
+    // as globally routable, and got a country and an ASN it should never have had.
+    if (a[0] == 0xFC || a[0] == 0xFD) return false;            // fc00::/7 ULA
     if (a[0] == 0xFE && (a[1] & 0xC0) == 0xC0) return false;  // fe80::/10 link-local
     if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x0D && a[3] == 0xB8) {
         return false;  // 2001:db8::/32 documentation
@@ -1201,6 +1302,14 @@ bool IsGlobalUnicastV6(const unsigned char a[16]) {
         if (tailZero) return false;
     }
     return true;
+}
+
+// F5.11. `local:private` and `remote:private`. Defined as the exact inverse of
+// the GeoIP predicate, so the two can never disagree: an address the Country
+// layer refuses to name is the same address a filter calls private.
+bool IsPrivateAddrV4(uint32_t a) { return !IsGlobalUnicastV4(a); }
+bool IsPrivateAddrV6(const unsigned char a[16]) {
+    return !IsGlobalUnicastV6(a);
 }
 
 }  // namespace wintcp

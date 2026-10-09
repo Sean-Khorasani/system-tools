@@ -1,4 +1,5 @@
 // CrashDump.h
+// SPDX-License-Identifier: Apache-2.0
 // Last-resort crash diagnostics (R1): an unhandled-exception filter that
 // writes a minidump, an on-disk breadcrumb in the dump folder and a one-line
 // breadcrumb on stderr before the process dies.

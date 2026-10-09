@@ -1,4 +1,5 @@
 // Pcapng.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See Pcapng.h. Every field is read through the byte-order helpers below and
 // every length is validated before it is used to index, because the input is
 // a file that may be truncated mid-block (pktmon killed, disk full, or a

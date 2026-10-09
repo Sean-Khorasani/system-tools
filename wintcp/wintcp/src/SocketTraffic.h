@@ -1,4 +1,5 @@
 // SocketTraffic.h
+// SPDX-License-Identifier: Apache-2.0
 // non-admin per-PID TCP byte totals.
 //
 // Windows exposes live per-PID network bytes to standard users through

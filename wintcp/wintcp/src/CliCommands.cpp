@@ -1,4 +1,5 @@
 // CliCommands.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See CliCommands.h. Verbs for users and for unattended scripts:
 // every verb prints machine-readable table/csv/json, honours --watch/--count
 // for polling, and never prompts: mutating verbs need --yes (exit 3 without).
@@ -77,8 +78,11 @@ const char* kHelp =
     "\r\n"
     "Usage: wintcp.exe <command> [switches]\r\n"
     "       wintcp.exe help <command>     full help + examples for one command\r\n"
-    "       wintcp.exe <command> --help   same as above\r\n"
-    "       wintcp.exe --help | -h        this overview\r\n"
+      "       wintcp.exe <command> --help   same as above\r\n"
+      "       wintcp.exe help columns      list column names, headers, sources\r\n"
+      "       wintcp.exe help filters      list accepted filter keywords\r\n"
+      "       wintcp.exe help doctor       environment diagnostics\r\n"
+      "       wintcp.exe --help | -h        this overview\r\n"
     "\r\n"
     "Monitoring (ps/top/lsof-like, single snapshot unless --watch/--count):\r\n"
     "  list | conn   connections table (filter, sort, group, choose columns)\r\n"
@@ -93,7 +97,7 @@ const char* kHelp =
     "Library (bookmarks, presets, export, GeoIP):\r\n"
     "  bookmark | preset | export | geoip\r\n"
     "\r\n"
-    "Other: version | help\r\n"
+    "Other: version | doctor | alert | help\r\n"
     "\r\n"
     "Exit codes: 0 ok, 1 failure or empty result, 2 bad arguments,\r\n"
     "            3 refused (mutating command without --yes).\r\n"
@@ -123,7 +127,8 @@ const CommandHelp kCommandHelps[] = {
      "Usage: wintcp.exe list [--filter F] [--sort COL] [--asc|--desc]\r\n"
      "                       [--group] [--format table|csv|tsv|json|jsonl]\r\n"
      "                       [--columns SET|a,b,c] [--limit N] [--out FILE]\r\n"
-     "                       [--quiet] [--watch [sec]] [--interval N] [--count N]\r\n"
+      "                       [--quiet] [--watch [sec]] [--interval N] [--count N]\r\n"
+      "                       [--traffic] [--dns [--dns-timeout MS]]\r\n"
      "\r\n"
      "  --filter F    filter-box grammar: chrome, port:443, pid:1000-2000,\r\n"
      "                state:estab, process:svchost, proto:udp, remote:1.2.3.4,\r\n"
@@ -184,9 +189,13 @@ const CommandHelp kCommandHelps[] = {
      "                the whole view (adds up to ~4 s on machines with wedged\r\n"
      "                sockets, usually ms). Sampled before sorting, so\r\n"
      "                `--sort nettotal` orders real totals.\r\n"
-     "  --dns         reverse-DNS the printed rows only (slow; bound cost\r\n"
-     "                with --limit).\r\n"
-     "  --db FILE     load this .mmdb and join country codes for printed rows.\r\n"
+      "  --dns         reverse-DNS the printed rows only (slow; bound cost\r\n"
+      "                with --limit).\r\n"
+      "  --dns-timeout MS   per-lookup budget (ms) for --dns. A lookup that\r\n"
+      "                exceeds it is shown as `host: pending` instead of\r\n"
+      "                stalling the run; the count of pending lookups is\r\n"
+      "                written to stderr. 1..60000; default 3000.\r\n"
+      "  --db FILE     load this .mmdb and join country codes for printed rows.\r\n" "  --asn-db FILE  load this GeoLite2-ASN.mmdb and join autonomous systems.\r\n"
      "  --signatures  verify each distinct process image with WinVerifyTrust\r\n"
      "                so the signature column and signed: filter have an\r\n"
      "                answer. SLOW: a certificate chain per image, cached per\r\n"
@@ -273,14 +282,14 @@ const CommandHelp kCommandHelps[] = {
      "details - full report for exactly one connection\r\n"
      "\r\n"
      "Usage: wintcp.exe details --select <filter> [--traffic] [--dns]\r\n"
-     "                          [--db FILE]\r\n"
+     "                          [--db FILE] [--asn-db FILE]\r\n"
      "\r\n"
      "The filter uses the list grammar and must match exactly one LIVE row:\r\n"
      "zero matches and ambiguous matches are errors (exit 1) - the command\r\n"
      "refuses to guess. Prints the same sections as the GUI Details window:\r\n"
      "process identity, live stats, TLS state, the connection, and the other\r\n"
      "connections owned by the same PID. --traffic fills the network totals,\r\n"
-     "--dns the hostname, --db the country (same cost notes as list).\r\n"
+     "--dns the hostname, --db the country, --asn-db the autonomous system.\r\n"
      "\r\n"
      "Examples:\r\n"
      "  wintcp.exe details --select \"pid:1234\"\r\n"
@@ -449,6 +458,7 @@ const CommandHelp kCommandHelps[] = {
      "geoip - country lookup from a local MaxMind database\r\n"
      "\r\n"
      "Usage: wintcp.exe geoip lookup --db FILE <ip>\r\n"
+       "       (pass a GeoLite2-ASN file for an autonomous-system answer)\r\n"
      "       wintcp.exe geoip info --db FILE\r\n"
      "\r\n"
      "No database ships with WinTCP (MaxMind licensing) and none is ever\r\n"
@@ -464,8 +474,8 @@ const CommandHelp kCommandHelps[] = {
      "\r\n"
      "Usage: wintcp.exe capture --select <filter> [--secs N]\r\n"
      "                          [--yes] [--dry-run]\r\n"
-     "                          [--text] [--dir both|first|second]\r\n"
-     "                          [--out FILE] [--force]\r\n"
+       "                          [--text] [--bin] [--dir both|first|second]\r\n"
+       "                          [--filter IP] [--out FILE] [--force]\r\n"
      "\r\n"
      "Installs a pktmon filter for the selected connection, records N\r\n"
      // Keep-in-step: default 5 / 1..60 restate kCaptureSecsDefault/Min/Max
@@ -479,10 +489,21 @@ const CommandHelp kCommandHelps[] = {
      "  --text         print the reassembled stream to stdout as a hex dump,\r\n"
      "                 one block per direction, labelled by the endpoint that\r\n"
      "                 sent it. This is the command-line equivalent of the\r\n"
-     "                 GUI's Follow TCP stream, removed 2026-10-05.\r\n"
-     "  --dir LIST     which direction --text prints: both (default), first\r\n"
-     "                 (a) or second (b).\r\n"
-     "  --out FILE     save the capture as pcapng, byte-for-byte, so it opens\r\n"
+      "                 GUI's Follow TCP stream, removed 2026-10-05.\r\n"
+      "  --bin          instead of the hex dump, write the raw reassembled\r\n"
+      "                 stream to --out FILE as bytes, with no pcapng or hex\r\n"
+      "                 framing. Requires --out; mutually exclusive with --text.\r\n"
+      "  --dir LIST     which direction --text prints: both (default), first\r\n"
+      "                 (a) or second (b).\r\n"
+      "  --flags MASK   packet event filter for pktmon: none, syn, fin, rst,\r\n"
+      "                 all, or a bitmask (default none = every event). Narrowing\r\n"
+      "                 the set lightens the capture but can prevent the stream\r\n"
+       "                 from reassembling to completion.\r\n"
+       "  --filter IP    extra address pin added to the pktmon filter add line\r\n"
+       "                 (-i), alongside the selected connection's ports: record\r\n"
+       "                 an additional IPv4 or IPv6 address. Must be a bare IP;\r\n"
+       "                 a non-IP value exits 2 without touching the snapshot.\r\n"
+       "  --out FILE     save the capture as pcapng, byte-for-byte, so it opens\r\n"
      "                 in Wireshark or tshark. An existing path is REFUSED\r\n"
      "                 (exit 2) unless --force is given, because --out replaces\r\n"
      "                 the whole file and this command cannot ask.\r\n"
@@ -494,8 +515,10 @@ const CommandHelp kCommandHelps[] = {
      "Examples:\r\n"
      "  wintcp.exe capture --select \"pid:1234\" --dry-run\r\n"
      "  wintcp.exe capture --select \"pid:1234 remote:port:443\" --secs 10 --yes\r\n"
-     "  wintcp.exe capture --select \"pid:1234\" --secs 20 --text --dir b --yes\r\n"
-     "  wintcp.exe capture --select \"pid:1234\" --secs 20 --out c:\\tmp\\s.pcapng --yes\r\n"},
+      "  wintcp.exe capture --select \"pid:1234\" --secs 20 --text --dir b --yes\r\n"
+       "  wintcp.exe capture --select \"pid:1234\" --secs 20 --bin --out c:\\tmp\\s.bin --force --yes\r\n"
+       "  wintcp.exe capture --select \"pid:1234\" --filter 192.0.2.1 --dry-run\r\n"
+      "  wintcp.exe capture --select \"pid:1234\" --secs 20 --out c:\\tmp\\s.pcapng --yes\r\n"},
     {"stat sys",
      "stat - system CPU / memory / disk / network (one sample, then exit)\r\n"
      "\r\n"
@@ -516,14 +539,56 @@ const CommandHelp kCommandHelps[] = {
     {"version",
      "version - build banner and capability summary\r\n"
      "\r\n"
-     "Usage: wintcp.exe version\r\n"
+     "Usage: wintcp.exe version [--verbose]\r\n"
      "\r\n"
      "Same text as the GUI About box: version, what the binary is, and the\r\n"
      "state of this run (elevation, traffic source). Always exits 0.\r\n"
+     "--verbose adds diagnostic detail (ETW state, fallback, scan counters).\r\n"
      "\r\n"
      "Examples:\r\n"
-     "  wintcp.exe version\r\n"},
-    {"help",
+     "  wintcp.exe version\r\n"
+      "  wintcp.exe version --verbose\r\n"},
+     {"alert",
+     "alert - read and set the threshold-alerting configuration\r\n"
+     "\r\n"
+     "Usage: wintcp.exe alert [--enable|--disable]\r\n"
+     "       wintcp.exe alert [--bps-warn N] [--bps-critical N] [--connections N]\r\n"
+     "       wintcp.exe alert [--on-listener|--off-listener] [--on-connection|--off-connection]\r\n"
+     "       wintcp.exe alert [--on-rst|--off-rst] [--on-closed|--off-closed]\r\n"
+     "       wintcp.exe alert [--alert-format table|json]\r\n"
+     "\r\n"
+     "Alerting is MUTED BY DEFAULT and every threshold is off until set. That is\r\n"
+     "the design, not an unfinished state: a network viewer that raises a balloon\r\n"
+     "on every refresh is one the user switches off, and then it is useless for\r\n"
+     "the one event that mattered.\r\n"
+     "\r\n"
+     "Rates are BYTES PER SECOND, the same unit the engine applies them in - a\r\n"
+     "KB/MB suffix would be one more place for a unit to be misread, and the\r\n"
+     "numbers are small enough not to need it. 0 disables that threshold.\r\n"
+     "\r\n"
+     "Every switch is optional; supplying none prints the current configuration.\r\n"
+     "The four event switches default to on, on, on, off.\r\n"
+     "\r\n"
+     "Examples:\r\n"
+     "  wintcp.exe alert --enable --bps-warn 1000000\r\n"
+     "  wintcp.exe alert --enable --connections 400 --off-connection\r\n"
+     "  wintcp.exe alert --alert-format json\r\n"},    {"doctor",
+      "doctor - environment diagnostics for running this tool here\r\n"
+      "\r\n"
+      "Usage: wintcp.exe doctor [--format table|json] [--verbose] [--db FILE] [--asn-db FILE]\r\n"
+      "\r\n"
+      "Prints what THIS run can do and why anything cannot, in one block: process\r\n"
+      "state (elevation, handle/GDI/USER counts, traffic source) via the same\r\n"
+      "summary `version` uses, plus GeoIP (--db), the WinTCP firewall-rule count,\r\n"
+      "and capture availability (pktmon tools + elevation). Always exits 0; a\r\n"
+      "degraded capability is reported as text, not a failure. --format json emits\r\n"
+      "a stable object for scripted checks.\r\n"
+      "\r\n"
+      "Examples:\r\n"
+      "  wintcp.exe doctor\r\n"
+      "  wintcp.exe doctor --format json\r\n"
+      "  wintcp.exe doctor --verbose --db GeoLite2-Country.mmdb\r\n"},
+     {"help",
      "help - this help, or full help for one command\r\n"
      "\r\n"
      "Usage: wintcp.exe help [command]\r\n"
@@ -577,7 +642,11 @@ bool TakesValue(const std::wstring& t) {
            t == L"--count" || t == L"--out" || t == L"--select" ||
            t == L"--pid" || t == L"--address" || t == L"--port" ||
            t == L"--tag" || t == L"--note" || t == L"--name" ||
-           t == L"--db" || t == L"--secs" || t == L"--event" ||
+           t == L"--db" || t == L"--asn-db" || t == L"--secs" || t == L"--event" ||
+           t == L"--alert-format" || t == L"--bps-warn" ||
+t == L"--rule-name" || t == L"--rule-address" ||
+           t == L"--rule-process" || t == L"--rule-format" ||
+           t == L"--bps-critical" || t == L"--connections" ||
            t == L"--dir";
 }
 
@@ -670,6 +739,23 @@ struct Args {
     std::wstring note;
     std::wstring name;
     std::wstring db;
+    // F5.4: the ASN database is a different file from the country one.
+    std::wstring asnDb;
+    // 9.2.11 / F5.6. Tri-state: -1 means "not supplied". Rates are bytes/sec.
+    long long alertBpsWarn = -1, alertBpsCritical = -1, alertConnWarn = -1;
+    int alertEnable = -1;                 // -1 unset, 0 off, 1 on
+    int alertOnListener = -1, alertOnConnection = -1;
+    int alertOnRst = -1, alertOnClosed = -1;
+    std::wstring alertFmtW;
+    // F5.6: alert rule sub-command. --rule-address/--rule-process/"--rule-name"
+    // are how `alert rule add` builds one.
+    std::wstring alertRuleAction;
+    std::wstring alertRuleName;
+    std::wstring alertRuleAddress;
+    std::wstring alertRuleProcess;
+    int alertRuleOnNew = -1, alertRuleOnClose = -1;
+    int alertRuleOnThreshold = -1;
+    std::wstring alertRuleFormat;
     std::wstring ip;
     std::wstring sub;     // bookmark/preset/geoip subverb
     bool quiet = false;   // list/ps: no output, rc answers
@@ -679,15 +765,21 @@ struct Args {
     // `out` for list/export, means the same thing (a file to write), and giving
     // one switch two homes is how a reader ends up with two different defaults.
     bool captureText = false;
+    bool captureBin = false;
     std::wstring captureDir = L"both";
+    unsigned captureFlags = kCaptureFlagsDefault;   // parsed via ParseCaptureFlags
     bool traffic = false; // list/details: per-PID byte totals (bounded scan)
     bool dns = false;     // list/details: reverse-DNS the printed rows
+    // 9.2.8: per-lookup budget (ms) for --dns-timeout. 0 = not given (the
+    // resolver default applies). Valid range 1..60000 (see parser).
+    unsigned dnsTimeoutMs = 0;
     // F5.3: verify each process image with WinVerifyTrust. OFF by default and
     // opt-in for a measured reason: WinVerifyTrust builds a certificate chain
     // and would otherwise be paid for every process on every refresh. Cached per
     // image path, so the cost is once per distinct binary, not once per row.
     bool signatures = false;   // list/details: Authenticode verdicts
     bool changes = false; // list --watch: deltas only
+    bool verbose = false; // version: add diagnostic detail
     // D25: which change kinds to print, as a bitmask of RowChangeKind. The
     // default is all three. Before this there was NO way to select a kind, so
     // the "what opened while I was away" question - the single most valuable
@@ -774,6 +866,20 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             *out = argv[++i] != nullptr ? argv[i] : L"";
             return true;
         };
+        // 9.2.11: the numeric counterpart. Rejects a non-number rather than
+        // silently storing 0, because 0 DISABLES an alert and a typo that
+        // reads as a disabled threshold makes the feature look broken for no
+        // visible reason.
+        auto needNum = [&](long long* out) -> bool {
+            if (i + 1 >= argc) return false;
+            const wchar_t* raw = argv[++i];
+            if (raw == nullptr) return false;
+            wchar_t* endp = nullptr;
+            const long long v = ::wcstoll(raw, &endp, 10);
+            if (endp == raw || *endp != L'\0') return false;
+            *out = v;
+            return true;
+        };
         if (t == L"--filter") {
             if (!need(&a->filter)) return "missing value for --filter";
         } else if (t == L"--sort") {
@@ -832,12 +938,19 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             a->dryRun = true;
         } else if (t == L"--force") {
             a->force = true;
+        } else if (t == L"--verbose") {
+            a->verbose = true;
         } else if (t == L"--out") {
             if (!need(&a->out)) return "missing value for --out";
         } else if (t == L"--text") {
             // capture only. No value: the only question is whether to print the
             // stream, and "how much of it" is --dir's job, not this switch's.
             a->captureText = true;
+        } else if (t == L"--bin") {
+            // capture only. Writes the raw reassembled bytes to --out (binary,
+            // no hex/pcapng framing). Mutually exclusive with --text, and --out
+            // is mandatory: there is no stdout form for binary data.
+            a->captureBin = true;
         } else if (t == L"--dir") {
             std::wstring v;
             if (!need(&v)) return "missing value for --dir";
@@ -849,6 +962,16 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             if (!ParseCaptureDir(v, &ignored))
                 return "bad --dir (use both, first/a, or second/b)";
             a->captureDir = v;
+        } else if (t == L"--flags") {
+            // capture only. Parsed HERE, the same as --dir: a typo is a parse
+            // error before any pktmon runs, and ParseCaptureFlags is the single
+            // spelling table both the CLI and the dry-run plan read from.
+            std::wstring v;
+            if (!need(&v)) return "missing value for --flags";
+            unsigned f = 0;
+            if (!ParseCaptureFlags(v, &f))
+                return "bad --flags (use none, syn, fin, rst, all, or a bitmask)";
+            a->captureFlags = f;
         } else if (t == L"--select") {
             if (!need(&a->select)) return "missing value for --select";
         } else if (t == L"--pid") {
@@ -883,11 +1006,75 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             if (!need(&a->name)) return "missing value for --name";
         } else if (t == L"--db") {
             if (!need(&a->db)) return "missing value for --db";
+        } else if (t == L"--asn-db") {
+            if (!need(&a->asnDb)) return "missing value for --asn-db";
+        } else if (t == L"--enable") {
+            a->alertEnable = 1;
+        } else if (t == L"--disable") {
+            a->alertEnable = 0;
+        } else if (t == L"--bps-warn") {
+            if (!needNum(&a->alertBpsWarn))
+                return "missing or non-numeric value for --bps-warn";
+        } else if (t == L"--bps-critical") {
+            if (!needNum(&a->alertBpsCritical))
+                return "missing or non-numeric value for --bps-critical";
+        } else if (t == L"--connections") {
+            if (!needNum(&a->alertConnWarn))
+                return "missing or non-numeric value for --connections";
+        } else if (t == L"--alert-format") {
+            if (!need(&a->alertFmtW)) return "missing value for --alert-format";
+        } else if (t == L"--on-listener") {
+            a->alertOnListener = 1;
+        } else if (t == L"--off-listener") {
+            a->alertOnListener = 0;
+        } else if (t == L"--on-connection") {
+            a->alertOnConnection = 1;
+        } else if (t == L"--off-connection") {
+            a->alertOnConnection = 0;
+        } else if (t == L"--on-rst") {
+            a->alertOnRst = 1;
+        } else if (t == L"--off-rst") {
+            a->alertOnRst = 0;
+        } else if (t == L"--on-closed") {
+        } else if (t == L"--rule-name") {
+            if (!need(&a->alertRuleName)) return "missing value for --rule-name";
+        } else if (t == L"--rule-address") {
+            if (!need(&a->alertRuleAddress))
+                return "missing value for --rule-address";
+        } else if (t == L"--rule-process") {
+            if (!need(&a->alertRuleProcess))
+                return "missing value for --rule-process";
+        } else if (t == L"--rule-format") {
+            if (!need(&a->alertRuleFormat)) return "missing value for --rule-format";
+        } else if (t == L"--rule-on-new") {
+            a->alertRuleOnNew = 1;
+        } else if (t == L"--rule-off-new") {
+            a->alertRuleOnNew = 0;
+        } else if (t == L"--rule-on-close") {
+            a->alertRuleOnClose = 1;
+        } else if (t == L"--rule-off-close") {
+            a->alertRuleOnClose = 0;
+        } else if (t == L"--rule-on-threshold") {
+            a->alertRuleOnThreshold = 1;
+            a->alertOnClosed = 1;
+        } else if (t == L"--off-closed") {
+            a->alertOnClosed = 0;
         } else if (t == L"--traffic") {
             a->traffic = true;
-        } else if (t == L"--dns") {
-            a->dns = true;
-        } else if (t == L"--signatures") {
+    } else if (t == L"--dns") {
+        a->dns = true;
+    } else if (t == L"--dns-timeout") {
+        // 9.2.8: per-lookup budget (ms) for --dns. 1..60000; 0 is rejected (the
+        // default lives in DnsResolver::kDnsTimeoutDefault, but a user typing a
+        // number wants a number). Parsed here, the same place --limit/--watch
+        // are, so a typo is refused before any lookup runs.
+        std::wstring v;
+        if (!need(&v)) return "missing value for --dns-timeout";
+        unsigned val = 0;
+        if (!ParseUint(v, &val) || val < 1 || val > 60000)
+            return "bad --dns-timeout (need 1..60000)";
+        a->dnsTimeoutMs = val;
+    } else if (t == L"--signatures") {
             // F5.3. No value: the only question is whether to pay for the
             // verification. A threshold for "how trusted is it" would be a
             // second, differently-worded way of asking the same thing, and the
@@ -964,7 +1151,9 @@ ListOptions ToListOptions(const Args& a) {
     o.quiet = a.quiet;
     o.traffic = a.traffic;
     o.dns = a.dns;
+    o.dnsTimeoutMs = a.dnsTimeoutMs;
     o.geoIpPath = a.db;
+    o.asnIpPath = a.asnDb;
     o.changes = a.changes;
     // F5.3. Carried on ListOptions rather than applied at the parse site,
     // because the SnapshotSource owns the resolver and is created further down;
@@ -1034,10 +1223,20 @@ const wchar_t* const kSwitchNames[] = {
     L"--filter", L"--sort", L"--asc", L"--desc", L"--group", L"--format",
     L"--columns", L"--limit", L"--quiet", L"--watch", L"--interval", L"--count", L"--out",
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
-    L"--name", L"--db", L"--secs", L"--traffic", L"--dns", L"--changes",
+    L"--name", L"--db", L"--asn-db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
-    L"--text", L"--dir",
-    L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
+    L"--text", L"--bin", L"--dir",
+     L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
+     L"--dns-timeout",
+     L"--dns-timeout",
+     // 9.2.11 / F5.6. Eleven of these are booleans and deliberately do NOT
+     // appear in TakesValue.
+     L"--enable", L"--disable", L"--on-listener", L"--off-listener",
+     L"--on-connection", L"--off-connection", L"--on-rst", L"--off-rst",
+     L"--on-closed", L"--off-closed",
+     L"--rule-name", L"--rule-address", L"--rule-process",
+     L"--rule-format", L"--rule-on-new", L"--rule-off-new",
+     L"--rule-on-close", L"--rule-off-close", L"--rule-on-threshold",
 };
 constexpr size_t kSwitchNameCount =
     sizeof(kSwitchNames) / sizeof(kSwitchNames[0]);
@@ -1131,8 +1330,8 @@ const VerbSwitches kVerbSwitches[] = {
      // --out/--force: 9.3.4, the table written to a file instead of stdout;
      // --force only exists because --out refuses an existing path.
      L"--filter --sort --asc --desc --group --format --columns --limit "
-     L"--quiet --watch --interval --count --traffic --dns --db --changes --event "
-     L"--signatures --out --force"},
+      L"--quiet --watch --interval --count --traffic --dns --dns-timeout --db --asn-db --changes --event "
+      L"--signatures --out --force"},
     {L"conn", nullptr},   // alias: same as list
     {L"ps",
      // --columns is deliberately absent. ps renders one fixed set of six
@@ -1148,7 +1347,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"top", nullptr},    // alias: same as ps
     {L"stat", L"--format --watch --interval --count"},
     {L"sys", nullptr},    // alias: same as stat
-    {L"details", L"--select --traffic --dns --db --signatures"},
+    {L"details", L"--select --traffic --dns --dns-timeout --db --asn-db --signatures"},
     {L"kill",
      // 9.3.6: --close (ask only) and --force (terminate at once); the
      // default stays the documented hybrid.
@@ -1157,12 +1356,12 @@ const VerbSwitches kVerbSwitches[] = {
     {L"block", L"--select --yes --dry-run"},
     {L"unblock", L"--address --port --yes --dry-run"},
     {L"blocks", L""},     // takes no switches
-    {L"capture", L"--select --secs --yes --dry-run --text --dir --out --force"},
+       {L"capture", L"--select --filter --secs --yes --dry-run --text --bin --dir --flags --out --force"},
     {L"follow", nullptr},  // alias: same as capture
     {L"bookmark", L"--address --port --tag --note --format"},
     {L"preset",
      L"--name --filter --sort --asc --desc --force --format --columns "
-     L"--limit --traffic --dns --db --group"},
+     L"--limit --traffic --dns --db --asn-db --group"},
     {L"export",
      // --limit is LISTED even though it is refused further down. That is
      // deliberate: the generic D24 message ("this switch is not one of this
@@ -1170,10 +1369,16 @@ const VerbSwitches kVerbSwitches[] = {
      // considered opinion - an export always writes the whole view, so a file
      // cannot hold a subset and misreport its own row count. Listing it lets
      // the export-specific explanation win.
-     L"--out --format --filter --sort --asc --desc --columns --group "
-     L"--traffic --dns --db --quiet --limit --force"},
+      L"--out --format --filter --sort --asc --desc --columns --group "
+      L"--traffic --dns --dns-timeout --db --asn-db --quiet --limit --force"},
     {L"geoip", L"--db"},
-    {L"version", L""},    // takes no switches
+    {L"version", L"verbose"},  // --verbose adds diagnostic detail
+    // F5.4: --asn-db so `doctor` can diagnose the second database, which until now
+    // it silently refused. An asn: filter that matches nothing had no way to ask
+    // whether the file it was given was even an ASN database.
+    {L"doctor", L"--verbose --format --db --asn-db"},
+    // 9.2.11 / F5.6. Takes switches because it IS the surface that sets them.
+    {L"alert", L"--enable --disable --bps-warn --bps-critical --connections on-listener off-listener on-connection off-connection on-rst off-rst on-closed off-closed --alert-format --rule-name --rule-address --rule-process --rule-format --rule-on-new --rule-off-new --rule-on-close --rule-off-close --rule-on-threshold"},
     {L"help", L""},       // takes no switches
     // Hidden test verb for R1: raises a real access violation so that
     // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
@@ -1401,6 +1606,14 @@ int RunCliCommand(int argc, wchar_t** argv) {
             topic = t;
             break;
         }
+        if (topic == L"columns") {
+            WriteOut(HelpColumnsText());
+            return 0;
+        }
+        if (topic == L"filters") {
+            WriteOut(HelpFiltersText());
+            return 0;
+        }
         if (topic.empty()) {
             WriteOut(kHelp);
             return 0;
@@ -1461,6 +1674,8 @@ int RunCliCommand(int argc, wchar_t** argv) {
         }
     }
     if (cmd == L"version") {
+        // 9.2.4: --verbose adds diagnostic detail for troubleshooting.
+        const bool verbose = a.verbose;
         // D23. Two real bugs in one place, both about the summary claiming
         // things this process did not check.
         //
@@ -1545,8 +1760,19 @@ int RunCliCommand(int argc, wchar_t** argv) {
             s.gdiCount = ::GetGuiResources(::GetCurrentProcess(), GR_GDIOBJECTS);
             s.userCount = ::GetGuiResources(::GetCurrentProcess(), GR_USEROBJECTS);
         }
-        WriteOut(WideToUtf8(AboutText(s)));
+        WriteOut(WideToUtf8(AboutText(s, verbose)));
         return 0;
+    }
+    if (cmd == L"doctor") {
+        std::string verr;
+        const std::string fmt = a.format.empty() ? std::string("table") : a.format;
+        if (!CheckFormat(fmt, {"table", "json"}, "doctor", &verr)) {
+            WriteErr(verr + "\r\n");
+            return 2;
+        }
+        const CommandResult r = CmdDoctor(a.verbose, a.db, a.asnDb, fmt);
+        Emit(r);
+        return r.exitCode;
     }
     if (cmd == L"crashtest") {
         // R1 fuse box. Not reachable from help, the README or any script
@@ -1753,7 +1979,9 @@ int RunCliCommand(int argc, wchar_t** argv) {
         eo.procStats = true;
         eo.traffic = a.traffic;
         eo.dns = a.dns;
+        eo.dnsTimeoutMs = a.dnsTimeoutMs;
         eo.geoIpPath = a.db;
+    eo.asnIpPath = a.asnDb;
         eo.signatures = a.signatures;
         const CommandResult r = CmdDetails(src, a.select, eo);
         Emit(r);
@@ -1990,6 +2218,46 @@ int RunCliCommand(int argc, wchar_t** argv) {
         Emit(r);
         return r.exitCode;
     }
+    if (cmd == L"alert") {
+        AlertFlags af;
+        af.enableSet = a.alertEnable >= 0;
+        af.enable = a.alertEnable > 0;
+        af.bpsWarn = a.alertBpsWarn;
+        af.bpsCritical = a.alertBpsCritical;
+        af.connWarn = a.alertConnWarn;
+        af.onListenerSet = a.alertOnListener >= 0;
+        af.onListener = a.alertOnListener > 0;
+        af.onConnectionSet = a.alertOnConnection >= 0;
+        af.onConnection = a.alertOnConnection > 0;
+        af.onRstSet = a.alertOnRst >= 0;
+        af.onRst = a.alertOnRst > 0;
+        af.onClosedSet = a.alertOnClosed >= 0;
+        af.onClosed = a.alertOnClosed > 0;
+        af.format = WideToUtf8(a.alertFmtW);
+        const CommandResult r = CmdAlert(af);
+        // F5.6: `alert rule <add|list|remove>`. The sub-command arrives as the
+        // first non-switch argument, same shape as `geoip lookup` uses.
+        // F5.6: `alert rule <add|list|remove>`. Two positional slots already
+        // exist - the subverb, then `geoip lookup`'s address - and this needs
+        // exactly two: `rule`, then the action. No new parser grammar.
+        if (ToLowerW(a.sub) == L"rule" && !a.ip.empty()) {
+            AlertRuleFlags rf;
+            rf.name = a.alertRuleName;
+            rf.address = a.alertRuleAddress;
+            rf.process = a.alertRuleProcess;
+            rf.onNewSet = a.alertRuleOnNew >= 0;
+            rf.onNew = a.alertRuleOnNew > 0;
+            rf.onCloseSet = a.alertRuleOnClose >= 0;
+            rf.onClose = a.alertRuleOnClose > 0;
+            rf.onThreshold = a.alertRuleOnThreshold > 0;
+            rf.format = WideToUtf8(a.alertRuleFormat);
+            const CommandResult rr = CmdAlertRule(ToLowerW(a.ip), rf);
+            Emit(rr);
+            return rr.exitCode;
+        }
+        Emit(r);
+        return r.exitCode;
+    }
     if (cmd == L"geoip") {
         const std::wstring sub = ToLowerW(a.sub);
         SnapshotSource src;
@@ -2018,8 +2286,11 @@ int RunCliCommand(int argc, wchar_t** argv) {
         SnapshotSource src;
         CaptureOptions co;
         co.text = a.captureText;
+        co.bin = a.captureBin;
         co.outPath = a.out;
         co.dir = a.captureDir;
+        co.eventFlags = a.captureFlags;
+        co.filter = a.filter;
         co.forceOverwrite = a.force;
         const CommandResult r = CmdCapture(src, a.select, mo, a.secs, co);
         Emit(r);

@@ -1,4 +1,5 @@
 // PromptDialog.h
+// SPDX-License-Identifier: Apache-2.0
 // A one-line text prompt (name a preset, type a bookmark note).
 //
 // WHY IT EXISTS. Three separate features need the same thing - "ask the user

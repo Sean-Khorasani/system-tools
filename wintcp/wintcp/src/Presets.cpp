@@ -1,4 +1,5 @@
 // Presets.cpp
+// SPDX-License-Identifier: Apache-2.0
 // HKCU\Software\WinTCP\Presets\<name> - one saved view per subkey.
 //
 // Every read is type- and size-checked. A registry value of the wrong type

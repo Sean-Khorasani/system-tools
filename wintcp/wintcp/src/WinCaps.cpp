@@ -1,4 +1,5 @@
 // WinCaps.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See WinCaps.h.
 //
 // The libraries probed here, and WHY each one is a candidate at all:
@@ -32,6 +33,7 @@
 #include "WinCaps.h"
 
 #include "Utils.h"   // Utf8ToWide for the user-facing capability names
+#include "StreamCapture.h"   // 9.2.7: CaptureToolsPresent, for the capture row
 
 #include <pdh.h>
 
@@ -218,6 +220,26 @@ bool HasDedicatedProbe(const char* dllName) {
 
 std::vector<Capability> BuildCapabilities() {
     std::vector<Capability> caps;
+
+    // --- stream capture (pktmon + etl2pcap, 9.2.7) ---
+    {
+        Capability c;
+        c.what = L"Stream capture (pktmon)";
+        c.install = L"";   // nothing to install; it is a SKU difference
+        // Registered here so `about` and `stat` can answer "can this machine
+        // capture a stream?" without the caller having to know that the answer
+        // needs TWO exes. CaptureAvailable() owns the real probe and the
+        // elevation half; this row reports the tool half only, because a
+        // capability row that said "unavailable: run as administrator" for
+        // every standard user would be noise - that is a permission, not a
+        // missing capability, and CapState::Unavailable is not what a report
+        // of "what this machine can do" wants to say.
+        std::wstring why;
+        c.state = CaptureToolsPresent(&why) ? CapState::Available
+                                            : CapState::Missing;
+        if (c.state == CapState::Missing) c.detail = why;
+        caps.push_back(c);
+    }
 
     // --- disk counters (pdh) ---
     {

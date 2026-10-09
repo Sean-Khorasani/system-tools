@@ -1,4 +1,5 @@
 // ProcessInfo.cpp
+// SPDX-License-Identifier: Apache-2.0
 // PID -> process name resolution. Strategy, in order:
 //   1. Well-known pseudo PIDs (0 = ownerless rows like TIME_WAIT -> "-",
 //      4 = System).

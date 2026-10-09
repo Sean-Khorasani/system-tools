@@ -1,4 +1,5 @@
 // StreamCapture.h
+// SPDX-License-Identifier: Apache-2.0
 // Drives pktmon to capture one TCP connection, converts the ETL to pcapng,
 // parses it and reassembles the stream. This is the only part of
 // the follow-stream feature that touches the filesystem or spawns processes.
@@ -79,10 +80,44 @@ struct CaptureResult {
     std::wstring dir2Label;
 };
 
-// True when this process can drive pktmon at all. Checks the token rather
-// than trying, so the UI can disable the menu item up front instead of
-// failing after the user has waited.
+// 9.2.7: are pktmon.exe AND etl2pcap.exe present in the system directory?
+// Probed once and cached; no elevation involved.
+//
+// SEPARATE FROM CaptureAvailable ON PURPOSE. This answers "does this machine
+// have the tools", which is a capability - a property of the OS install - while
+// CaptureAvailable answers "can this process drive them right now", which is a
+// permission. Collapsing them is what let a standard user on a machine with no
+// pktmon be told to run as administrator.
+struct CaptureGate {
+    bool ok;
+    std::wstring why;   // empty when ok
+};
+
+// The decision table, as a pure function of the two probe answers and their two
+// reasons. See its definition for why it is not written inline in
+// CaptureAvailable - the short version is that the order of the checks is the
+// fix, and an order inside a function that reads live process state cannot be
+// tested on a machine where both orders happen to agree.
+CaptureGate EvaluateCaptureGate(bool toolsPresent, bool elevated,
+                                const std::wstring& toolWhy,
+                                const std::wstring& elevationWhy);
+
+// True when this process can drive pktmon at all: the tools must be present, and
+// then the token must be good. Refusal explains which of the two failed, with
+// the tool reported first whenever both would refuse - see the table.
 bool CaptureAvailable(std::wstring* whyNot = nullptr);
+
+// The tool half on its own, with no elevation involved: true when both capture
+// exes are in the system directory. Cached; the answer cannot change while the
+// process runs. This is what WinCaps reports as the "Stream capture (pktmon)"
+// capability, because a missing tool is a property of the OS install while a
+// missing token is a property of the caller - and a capability report that said
+// "unavailable: run as administrator" to every standard user would be noise.
+//
+// BOTH exes, because capture needs both: etl2pcap converts pktmon's ETL into
+// the pcapng the parser reads, and its absence used to surface as a capture
+// that ran, waited, and was discarded at the conversion step.
+bool CaptureToolsPresent(std::wstring* whyNot = nullptr);
 
 // Build the target for a connection row. Takes the addresses from the
 // BINARY fields, not the printable ones: the endpoint strings carry the
@@ -96,7 +131,14 @@ CaptureTarget MakeCaptureTarget(const Connection& c);
 // Install a filter and start capturing. Returns false and sets 'error' if
 // pktmon could not be started. On success the capture is running and
 // StopCapture() must be called even if the window is closed early.
-bool StartCapture(const CaptureTarget& target, std::wstring* error);
+//
+// `eventFlags` is the pktmon `start --flags N` bitmask (SYN/FIN/RST, see
+// ParseCaptureFlags). 0 emits no --flags and records everything - the
+// historical and default behaviour - so existing callers that pass 0 are
+// unchanged. A non-zero mask narrows the recorded events, which is a
+// deliberate, caller-chosen trade-off.
+bool StartCapture(const CaptureTarget& target, unsigned eventFlags,
+                  const std::wstring& extraAddr, std::wstring* error);
 
 // Stop, convert, parse, reassemble, and clean up. Safe to call even if
 // StartCapture failed. Always clears any pktmon filter it installed.
@@ -143,6 +185,24 @@ enum class CaptureDir : unsigned {
 // is obvious from the accepted names. False on anything else - an unrecognised
 // direction must be an error, never a silent both.
 bool ParseCaptureDir(const std::wstring& value, CaptureDir* out);
+
+// pktmon's `start --flags N` passthrough. The bitmask names the TCP lifecycle
+// events pktmon should record (a filter on event TYPE, not on addresses - the
+// address filter is the -p/-i part of `pktmon filter add`). pktmon documents:
+//   1 = SYN   (connection establishment)
+//   2 = FIN   (orderly close)
+//   4 = RST   (abortive close)
+// 0 means "no --flags flag" and records every packet type, which is the default
+// and the only behaviour that reassembles a full stream. A partial mask is a
+// deliberate narrowing for lighter captures - and one the caller chose, so a
+// refused parse is an error rather than a silent default. Returns the resolved
+// bitmask in `out` (0..7), false on a bad token.
+bool ParseCaptureFlags(const std::wstring& value, unsigned* out);
+
+// The default --flags a CLI `capture` uses. 0 = emit no --flags on the pktmon
+// start line, which asks for everything (the historical behaviour). Centralised
+// so the help text and the executor cannot drift about which mask is "default".
+constexpr unsigned kCaptureFlagsDefault = 0;
 
 // Remove any filter this tool installed. Called from both paths and from the
 // destructor of the object that owns the flow, so an abandoned filter can

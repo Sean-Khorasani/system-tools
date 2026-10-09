@@ -1,4 +1,5 @@
 // WinCaps.h
+// SPDX-License-Identifier: Apache-2.0
 // Runtime capability report: which optional Windows facilities this machine
 // actually offers, and why not when it does not.
 //
@@ -61,9 +62,18 @@ struct Capability {
 };
 
 // Probe every optional capability once and cache the answer. Cheap: each probe
-// is one LoadLibrary of a DLL the loader already mapped, or one function
-// lookup. Called from the GUI at startup, from `about` and from `stat`, so a
-// headless run can report the same truth the window shows.
+// is one LoadLibrary of a DLL the loader already mapped, one function lookup, or
+// - for the capture row added in 9.2.7 - two GetFileAttributes calls on exes
+// that are always mapped into the loader's search path anyway.
+//
+// CALLED FROM exactly one place: BuildInfo.cpp's "This run" block, which both
+// the CLI `version` command and the GUI About box render. That comment used to
+// add "and from `stat`", which was false - `stat` prints a single fixed-width
+// line and never builds a BuildSummary, so no capability row has ever appeared
+// in it. Verified by running both: `stat` output is one line and contains no
+// capability text. Correcting it here rather than adding the call, because
+// `stat`'s line format is a fixed-width contract that a multi-line capability
+// block would break, and no item asked for that.
 const std::vector<Capability>& WinCapabilities();
 
 // True when every probed capability is Available. Convenience for the one

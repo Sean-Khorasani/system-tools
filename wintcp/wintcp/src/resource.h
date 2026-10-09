@@ -1,4 +1,5 @@
 // resource.h
+// SPDX-License-Identifier: Apache-2.0
 // Control / menu / icon identifiers for wintcp.
 
 #pragma once
@@ -53,6 +54,31 @@
 // the sheet while the About dialog keeps its own command id.
 #define IDM_HELP_SHORTCUTS      40021
 #define IDM_VIEW_GEOIP          40022
+#define IDM_VIEW_ASNIP          40040
+
+// 9.4.4 column profiles and F5.11/9.4.3 quick filters. Appended after the
+// highest in-use View id so no existing command number shifts - the same rule
+// the View block above follows.
+//
+// The five profiles are a CONTIGUOUS block (40041..40045) because the handler
+// resolves them arithmetically, and a gap there would silently turn an entry
+// into the wrong profile rather than failing to compile.
+#define IDM_PROFILE_DEFAULT     40041
+#define IDM_PROFILE_MINIMAL     40042
+#define IDM_PROFILE_NETWORK     40043
+#define IDM_PROFILE_SECURITY    40044
+#define IDM_PROFILE_PERFORMANCE 40045
+#define IDM_PROFILE_DIAGNOSTICS 40046
+
+// F5.11. One-click quick filters. A contiguous block too, for the same reason:
+// the handler indexes a table by the offset from the first id.
+#define IDM_QFILTER_ALL         40047
+#define IDM_QFILTER_TCP         40048
+#define IDM_QFILTER_UDP         40049
+#define IDM_QFILTER_LISTEN      40050
+#define IDM_QFILTER_ESTAB       40051
+#define IDM_QFILTER_MINE        40052
+#define IDM_QFILTER_CLEAR       40053
 
 // 5.2 preset commands and 5.3 bookmark commands, wired into the GUI.
 #define IDM_FILE_PRESET_SAVE    40023

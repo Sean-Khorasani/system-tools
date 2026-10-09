@@ -53,6 +53,7 @@ Usage: wintcp.exe <command> [switches]
 | | `export` | Write a view to CSV, TSV or JSON. |
 | | `geoip` | Inspect a `.mmdb` database and look up addresses. |
 | Other | `version` | Report what is available on this system, and why anything is not. |
+| | `doctor` | Environment diagnostics for this run: elevation, handle/GDI/USER counts, traffic source, GeoIP, firewall rules and capture availability. Exits `0`; degraded capability is reported as text. `--format json` for scripts. |
 | | `help` | Overview or per-command help. |
 
 The act verbs (`kill`, `close`, `block`, `unblock`, `capture`) require `--yes` and support `--dry-run`. `wintcp.exe help` lists `blocks` alongside them; unlike the others it only reads.
@@ -102,7 +103,8 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
 --filter F    filter grammar: chrome, port:443, pid:1000-2000, state:estab,
               process:svchost, proto:udp, remote:1.2.3.4, note:"vendor api",
               cpu:12, rx:2.0. Space = AND, exclude:X negates, "quoted value"
-              keeps a space inside one value.
+              keeps a space inside one value. Run `wintcp help filters` for the
+              full keyword list, and `wintcp help columns` for every column.
 --sort COL    sort column (default pid). --desc reverses.
 --group       one row per process instead of per connection.
 --format S    table (default) = aligned columns, header printed first, rows
@@ -112,6 +114,8 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
               be consumed as it runs instead of buffered to the closing
               bracket.
 --columns C   default | minimal | full (wide = full), or a comma-separated list.
+               Run `wintcp help columns` for the authoritative name list, header
+               and which enrichment source fills each column.
 --limit N     at most N rows.
 --quiet       print nothing; exit 0 when any row matches, else 1. An
               enrichment filter without its source switch (--dns, --db,
@@ -123,7 +127,15 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
               --changes and --quiet (exit 2, naming the conflict).
 --traffic     per-PID byte totals via one bounded socket scan.
 --dns         reverse-DNS the printed rows only (slow; bound with --limit).
+--dns-timeout MS  per-lookup budget (ms) for --dns. A lookup that exceeds it
+              shows `host: pending` instead of stalling the run; the count of
+              pending lookups is written to stderr. 1..60000; default 3000.
+              The GUI applies the same budget automatically; this switch is
+              the CLI binding of that per-tick ceiling.
 --db FILE     load this .mmdb and join country codes for printed rows.
+--asn-db FILE  load this GeoLite2-ASN .mmdb and join autonomous systems. A
+               SEPARATE file from --db: the two databases have different record
+               shapes, so one --db cannot supply both. Either, both or neither.
 --signatures  verify each distinct process image with WinVerifyTrust so the
               signature column and signed: filter have an answer. SLOW: a
               certificate chain per image, cached per image path for the run.
@@ -140,6 +152,7 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
 Notes:
 
 - `--watch` re-prints the table; with `--changes` it prints only deltas. The interval **is** the sensitivity: at 1 s you catch short-lived sockets, at 10 s you miss them.
+- Closed sockets linger as **grey ghost rows** (F5.7): after a `DISAPPEAR` they stay in the table for up to 500 sockets (oldest dropped first) instead of vanishing on the next poll, so a `--watch` stream keeps a short history of what just closed. The change feed is unaffected - `DISAPPEAR` still fires exactly once per socket - only the retained row table holds them.
 - `--count` counts **snapshots, not events**. On a busy machine four snapshots can emit hundreds of lines; pipe through `head` if you need exactly N.
 - `--watch` without `--count` runs until Ctrl+C — right for a terminal, a trap for a redirected script. When stdout is **not** a console, a one-line warning is printed on stderr; pass `--count` in scripts.
 - `--event` takes a comma-separated list. An unrecognised name exits `2`; it is never silently dropped.
@@ -153,6 +166,7 @@ Some columns and filters need the switch that supplies their data. When it is mi
 |---|---|---|
 | `host` column, `host:` filter | `--dns` | Reverse DNS runs only on the printed rows. It is slow; bound it with `--limit`. |
 | `country` column, `country:` filter | `--db FILE` | A memory-mapped lookup; no network. |
+| `country` column's ASN half, `asn:` filter | `--asn-db FILE` | A second memory-mapped lookup, against GeoLite2-ASN. Separate from `--db` because the two are different files. |
 | `traffic`, `rx`, `tx`, `nettotal` | `--traffic` | One bounded socket scan, joined per PID. |
 | `duration` | `--traffic` | Ages come from the kernel's `ConnectionTimeMs` in the same scan. Without the scan the column reads `0s`. |
 | `bandwidth` (per-socket rate) | `--traffic` and `--watch N` | A rate is the difference between two samples. The first tick shows `—` by design. |
@@ -167,9 +181,17 @@ There are exactly **32 columns and that is a deliberate freeze**, not a limit th
 ran into. The persisted visible-set mask is one bit per column in a `UINT32`, and
 it is already full; `architecture.md` records why widening it is an eight-part
 change with a schema migration, and why a feature that needs a 33rd column should
-reuse an existing one (ASN reuses `country`) rather than grow the mask as a side
-effect. A `static_assert` in `ColumnsWin.h` fails the build at 33 so that a new
-column cannot arrive unnoticed.
+reuse an existing one rather than grow the mask as a side effect. A
+`static_assert` in `ColumnsWin.h` fails the build at 33 so that a new column
+cannot arrive unnoticed.
+
+**ASN reuses `country`, and now does so.** F5.4 was the live case that decision
+was recorded for. The `country` cell renders the two together - `US \xB7 AS15169
+Google LLC` - with the separator appearing only when both are known, so a
+country-only row reads exactly as it always did. The AS number is placed *before*
+the organisation name so that a narrow window, which ellipsises on overflow, can
+never hide which network a row belongs to; `details` and the machine-readable
+formats always carry both in full. There is no 33rd column and no 33rd bit.
 
 Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separated list. The same names are used by `list`, `export` and `--sort`. Run `wintcp.exe help list` for the authoritative list for your build.
 
@@ -181,17 +203,17 @@ Use `--columns default`, `minimal` or `full` (alias `wide`), or a comma-separate
 | Live, per process | `traffic`, `rx`, `tx`, `nettotal`, `cpu`, `mem`, `disk`, `procspeed` |
 | Live, per connection | `duration`, `bandwidth` (header *Speed*), `rtt`, `minrtt`, `cwnd`, `retrans` |
 | Present but never populated | `tls` - see the note below |
-| Enrichment | `host` (needs `--dns`), `country` (needs `--db`), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
+| Enrichment | `host` (needs `--dns`), `country` (needs `--db`, and shows the ASN too when `--asn-db` is given), `pinned` (bookmark color; header *bookmarks*), `note` (the bookmark's text; header *Note*) |
 
 > **The `tls` column is inert.** It is accepted, it sorts, it is rendered and it is unit-tested, but **nothing populates it**, so every row shows `-`. Measured on one Windows 11 host: **299 of 299** rows carried the unknown marker, including **62 of 62** established connections, while `host` over those same 62 rows filled **31** - so the enrichment pipeline works and `tls` alone has no producer. There is no cheap way to fill it: Windows has no socket-level TLS ioctl, and `TCP_INFO_v0` - the only socket info a separate process can read - carries no TLS fields at all. The two real sources both need elevation, and the capture-based one can only ever cover the connections you choose to capture, so it cannot fill a column across every row. Treat `tls` as a reserved column rather than a working one. The reasoning is recorded at the top of `Connection.h`.
 
 Value conventions:
 
-- **Unknown is `—`, never `0`.** "We could not measure this" and "this is zero" are different answers, and unknown values always sort last, in both directions.
+- **Unknown is `-`, never `0`.** "We could not measure this" and "this is zero" are different answers, and unknown values sort last, in both directions. **The Country cell is the exception**, and an empty one for the same reason: it is a joined value rather than a measured one, so an unenriched row shows an empty cell and not a dash. It also honours the sort rule - `unknownLast` is set for it - which was not true until 2026-10-08, when an empty cell rose to the **top** under `--desc` because an empty string compares below every real value and the direction multiplier had nothing to counteract it.
 - `rtt` and `minrtt` are in **milliseconds**. The kernel reports microseconds; the conversion happens once, at the read boundary. A sub-millisecond RTT prints `<1`, never `0`.
 - `retrans` prints `0 B` for a connection that has genuinely never retransmitted. That is a real answer, not a missing one.
 - `ppid` prints `<pid> <parent name>`, or just the number when the parent was not in the snapshot. An **unknown** parent prints `—`: the snapshot not covering a parent is not the same as a process having no parent, and the two are not collapsed.
-- `signature` distinguishes four answers, not one. `Signed` (chains to a trusted root), `unsigned` (no embedded signature — normal, and **not** a finding), `BAD SIG` (signed, but the chain does not verify), and `—` (never verified, which is what every row shows without `--signatures`).
+- `host` prints the PTR name, or `—` when there is no name / the lookup failed. With `--dns-timeout` set, a lookup still in flight prints `pending` instead of `—` so a slow resolver is distinguishable from a missing one; the count of such stalls is one line on stderr.
 - `integrity` prints the mandatory level as a word, never the RID: `12288` answers no question a reader has, `High` answers "could this have written to HKLM".
 - `cwnd` is the kernel's congestion window in bytes. Each `rtt`/`minrtt`/`cwnd`/`retrans` field is gated on its own known flag, so a socket with TCP timestamps off still shows its real congestion window.
 - UDP rows print `*:*` for the remote and `—` for the state, as `netstat` does. `proto` prints `UDPv4` / `UDPv6` rather than a generic `UDP`.
@@ -292,6 +314,25 @@ The default end-mode is the hybrid: `WM_CLOSE`, then terminate if the process is
 
 `pktmon` is a **sampling driver, not a tap**: only what happens after the filter is armed is recorded. A connection that has gone quiet during the window legitimately returns nothing, and an empty result is not evidence of a fault. Generate traffic during the window, or widen `--secs`.
 
+#### What capture needs, and which reason you get
+
+Capture needs **two** tools in the system directory, not one: `pktmon.exe` to record the ETL and `etl2pcap.exe` to convert it into the pcapng the parser reads. Both are checked **before** the token, and the tool's absence is what gets reported when both would refuse.
+
+That order is deliberate. The alternative - asking the token first - produces "run as administrator" for a user whose machine has no `pktmon` at all, and that advice cannot help, because elevating does not install a tool. The refusal you get therefore names the thing that is actually missing.
+
+The two questions are also reported separately, because they mean different things:
+
+| Question | Answered by | Meaning |
+| --- | --- | --- |
+| Can this machine capture? | `Stream capture (pktmon)` row in `about` and `stat` | A property of the OS install. Missing means the exes are not there. |
+| Can this process capture right now? | The refusal on a `capture` run | A permission. "Not right now" - the caller can offer a relaunch. See [elevation](#elevation). |
+
+A standard user on a machine that has both tools gets the *elevation* reason, not the tool reason. That asymmetry is the point: the token is a permission the user may be able to change, the tool is not.
+
+`etl2pcap.exe` is the one that is easy to miss. When it is absent the failure used to arrive late - the capture ran, waited out its window, wrote the ETL, and was then discarded at the conversion step. It is now reported up front, as a capability row, before any capture is attempted.
+
+`pktmon` is a **sampling driver, not a tap**: only what happens after the filter is armed is recorded. A connection that has gone quiet during the window legitimately returns nothing, and an empty result is not evidence of a fault. Generate traffic during the window, or widen `--secs`.
+
 #### Reading the TLS handshake
 
 Every capture also prints `tls:` lines describing the TLS session, parsed out of the bytes it just reassembled. This is the **only** place WinTCP can report a TLS session: Windows has no socket-level TLS ioctl (there is no `SIO_TLS_INFO` in the SDK, and `TCP_INFO_v0` carries no TLS field), so the handshake is the only source, and it is visible only because TLS sends it in the clear. The `tls` **column** therefore stays empty - see its note in the [column reference](#column-reference).
@@ -318,12 +359,15 @@ What appears depends entirely on where the capture window fell relative to the h
 | `--text` | Print the reassembled stream to stdout as a hex dump, one block per direction. This is the command-line equivalent of the GUI's *Follow TCP stream*, which was removed on 2026-10-05. |
 | `--dir both\|first\|second` | Which direction `--text` prints. `first`/`a` and `second`/`b` are accepted, as are the `server`/`client` spellings. Default `both`. An unrecognised value is refused, never treated as `both`. |
 | `--out FILE` | Save the capture as **pcapng**, byte-for-byte, so it opens in Wireshark or `tshark` with no conversion by the reader. An existing file there is refused (exit `2`) unless `--force`. |
+| `--bin` | Instead of the hex dump, write the **raw reassembled stream bytes** to `--out FILE`, with no hex or pcapng framing. Requires `--out`; mutually exclusive with `--text`. With `--dir both` (the default) the two directions are concatenated, `first` writes only to-server bytes, `second` only to-client. An existing file there is refused (exit `2`) unless `--force`. |
 | `--force` | Authorise replacing an existing `--out` file. Checked **before** the capture window opens, so `--dry-run` reports a taken destination. |
+| `--flags none\|syn\|fin\|rst\|all\|N` | Pass a `--flags` bitmask to `pktmon start`, selecting which TCP lifecycle events to record (`syn=1`, `fin=2`, `rst=4`). `all` is `7`. Default `none` emits no flag and records everything — the only mode that fully reassembles a stream. Narrowing the set lightens the capture but can prevent reassembly from completing. |
+| `--filter IP` | Add a second address to the `pktmon filter add` line (`-i`), so the capture records an additional IPv4 or IPv6 address alongside the selected connection's ports. Must be a bare IP address — a non-IP value exits `2` before the snapshot runs. The extra address appears in `--dry-run`'s plan. |
 
 - **Each direction is labelled by the endpoint that sent it**, not by `client`/`server`. `pktmon` does not reliably report which end sent the SYN, so those words would be a claim the capture cannot support. The labels are derived from the same endpoint ordering the reassembler used, so a label cannot disagree with which half of the bytes it is.
 - The offsets in the dump are that direction's **own** stream offsets, so they line up with the TCP sequence base when a SYN was seen.
 - **A hole in the stream is reported before the bytes, not after.** A gap or a truncated direction prints a `NOTE:` line before its dump; a reader who stops at the first block is still told the stream is incomplete. Silence about it would be worse than the gap itself, since every decode after a hole is wrong.
-- `--text` and `--out` compose: one run can print the stream and save the capture.
+- `--text` and `--out` compose: one run can print the stream and save the capture. `--bin` is a **third** output mode: it writes the raw reassembled bytes to `--out` instead of the hex dump, so it requires `--out` and is refused alongside `--text`.
 
 ### `export`
 
@@ -381,9 +425,62 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 | `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing prints only its header and exits `0`, exactly as `list` does; `apply` takes no `--quiet` (that is `2`), so there is no match-or-not exit code to branch on. |
 | `delete --name N` | Removes a preset. |
 
-### `geoip`
+`wintcp.exe alert` reads and writes the threshold-alerting configuration. With no
+switches it prints the current state; with them it sets it. `--enable` and
+`--disable` are the master switch, `--bps-warn N` / `--bps-critical N` /
+`--connections N` the three thresholds, and the four `--on-*` / `--off-*` pairs
+the events that fire one.
 
-`geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
+Alerting is **muted by default and every threshold is off until set**. That is the
+design rather than an unfinished state: a network viewer that raises a balloon on
+every refresh is one the user switches off, and then it is useless for the one
+event that mattered. Rates are **bytes per second**, the same unit the engine
+applies them in; `0` disables a threshold. Every one of these has the same
+meaning in the GUI window as on the command line.
+
+`--alert-format json` is the shape a script should read.
+
+`alert rule` manages per-connection rules - "tell me when the one thing I asked
+about changes":
+
+```
+wintcp.exe alert rule add --rule-name NAME --rule-address A.B.C.D [--rule-process IMAGE]
+wintcp.exe alert rule list [--rule-format json]
+wintcp.exe alert rule remove --rule-name NAME
+```
+
+A rule needs a name and at least one selector (`--rule-address` or
+`--rule-process`); a rule with neither matches every connection and is refused
+rather than created. `--rule-on-close` adds the disappearance event, and the
+appearance event is on unless you say otherwise. Address matching is exact; process
+matching is a case-insensitive substring.
+
+Rules are stored one-per-registry-value under `HKCU\Software\WinTCP\AlertRules`, so
+they survive a relaunch and `alert rule list` is the same view the window has.
+
+### Quick filters and column profiles (GUI)
+
+**Filter -> All / TCP / UDP / Listeners / Established / Mine** writes a filter into
+the box and applies it, so the expression stays visible and editable - the box is
+the same one typing uses, and clearing the menu is the same as emptying it.
+`Mine` is `local:private`, i.e. connections whose local endpoint is on a
+non-routable range: this machine talking to its own network rather than to the
+internet. The grammar cannot OR two terms, so "listening OR established" is not
+expressible and was not invented.
+
+**View -> Column profile** switches the visible column set in one click:
+`Default`, `Minimal`, `Network`, `Security`, `Performance` and `Show diagnostics`.
+A profile is a COLUMN MASK and nothing else - a *preset* (File > Save view as
+preset) is still the full view (filter, sort, grouping, sources and mask), and the
+two are deliberately not the same thing. `Show diagnostics` ORs the five G6/G5
+readings onto whatever is already visible rather than replacing it, and reads as on
+while all five are present even after you hide one of them.
+
+`local:private` and `remote:private` also work on the CLI, negated as
+`exclude:local:private`.
+## `geoip`
+
+`geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". The record count is the file's own `record_count` metadata, and most real files **omit it** - every DBIP edition does - in which case the count is reported as *not stated* rather than as `0`, which would otherwise read as "this 8 MB database is empty". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.
 
 Both sub-commands want `--db FILE`: without it they exit `2`, and a file that will not load exits `1` carrying the parser's reason. Neither ever fetches anything — obtaining a database, and keeping it current, is covered in [GeoIP database](../README.md#geoip-database).
 

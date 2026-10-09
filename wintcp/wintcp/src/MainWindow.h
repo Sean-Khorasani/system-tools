@@ -1,4 +1,5 @@
 // MainWindow.h
+// SPDX-License-Identifier: Apache-2.0
 // Main application window: control bar + virtual ListView (LVS_OWNERDATA)
 // + status bar. Owns the RefreshEngine worker, the ConnectionStore model,
 // filter/sort/export logic, selection preservation, and column layout.
@@ -51,6 +52,7 @@ namespace wintcp {
 enum : UINT {
     WM_APP_REFRESH_RESULT = WM_APP + 1,   // RefreshResult*
     WM_APP_DNS_RESULT     = WM_APP + 2,   // DnsResolver::Result*
+    WM_APP_DNS_STALLED    = WM_APP + 6,   // wParam = stalled count (9.2.8)
     WM_APP_TRAY           = WM_APP + 3,   // tray icon callback
     // Posted to self when a header drag starts, so the resulting order is read
     // back AFTER the drag has finished (7.1). Posting rather than reading
@@ -152,11 +154,32 @@ private:
     void TrayRemove();
     void ShowTrayMenu();
 
+    // 9.4.6: on the first minimize while the tray icon is OFF, offer the user a
+    // one-shot choice - minimize-to-tray (enable the tray icon) or exit. The
+    // choice is remembered in settings_.trayMinimizeChoice so the prompt never
+    // returns. Returns true if the minimize should proceed to the chosen target
+    // (the caller hides or exits accordingly). Returns false if the caller should
+    // let the default minimize-to-taskbar behaviour run.
+    enum class MinimizeTarget { kTaskbar, kTray, kExit };
+    MinimizeTarget ResolveMinimize();
+
     // Reverse-DNS plumbing.
     void OfferDnsForAllRows();
     void OfferGeoIpForAllRows();           // 4.3: fill Country from the MMDB
     void LoadGeoIpDatabase();              // 4.3: pick a .mmdb, load, refresh
-
+    void OfferAsnForAllRows();             // F5.4: fill the ASN half of Country
+    void LoadAsnDatabase();                // F5.4: pick a GeoLite2-ASN .mmdb
+    // 9.4.4 column profiles and F5.11 quick filters. Both are one-click named
+    // sets, so both live here as a pair of apply-and-sync helpers rather than as
+    // five and six near-identical command handlers.
+    void ApplyColumnProfile(int profileId);
+    UINT32 ColumnProfileMask(int profileId) const;   // profile id -> column mask
+    void ApplyQuickFilter(int filterId);
+    void SyncColumnProfileChecks();        // View > Column profile ticks
+    void SyncQuickFilterChecks();          // Filter menu ticks
+    void UpdateEmptyState();               // 9.4.2: the empty-column infobar
+    void RunAlerts();                    // F5.6: evaluate + balloon
+    void RaiseAlert(const wintcp::Alert& a);   // F5.6: one balloon per alert
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
     void ApplyViewWith(const std::vector<std::uint64_t>& ids,
@@ -344,9 +367,20 @@ private:
 
     bool reportErrorsNextResult_ = false;
     bool dnsEnabled_ = false;              // View > Resolve hostnames
+    std::wstring dnsStalledHint_;         // 9.2.8 status-bar hint on stalls
+    // 9.4.2. Same shape and same lifetime as dnsStalledHint_ - derived from live
+    // state each second, never stored across a refresh - because a stored hint
+    // outlives the condition that produced it.
+    std::wstring emptyStateHint_;
+    // F5.6: the alert fallback when there is no tray icon, and the count of
+    // alerts currently suppressed by the engine's latch.
+    std::wstring alertHint_;
+    size_t suppressedAlerts_ = 0;
     bool topMost_ = false;                 // View > Always on top
     bool trayEnabled_ = false;             // View > Tray icon
     bool trayIconShown_ = false;
+    // 9.4.6: remembered first-minimize choice (mirrors settings_.trayMinimizeChoice).
+    DWORD trayMinimizeChoice_ = 0;
     bool etwAutoAttempted_ = false;        // at most one implicit ETW start
     NOTIFYICONDATAW trayNid_ = {};
     HBRUSH hwndBrushWindow_ = nullptr;   // WM_CTLCOLOR* backdrop (system)
@@ -415,6 +449,15 @@ private:
     // actually consulted, so the Country column was permanently empty - a
     // 778-line feature wired to nothing.
     GeoIpDatabase geo_;
+    // F5.4. The ASN database is a SEPARATE file (GeoLite2-ASN, different record
+    // shape), so it is a second instance rather than a mode of the first. It is
+    // optional and independent: loading one does not disturb the other, and
+    // neither is required for the other to work.
+    GeoIpDatabase asnGeo_;
+    // F5.6. The engine is pure; this is its ONLY production caller.
+    // It used to have none at all, which is why the alert.* selftests
+    // were the only thing exercising it.
+    AlertEngine alertEngine_;
 
     wchar_t dispBuf_[kMaxColumnText] = {0};  // LVN_GETDISPINFO scratch buffer
 

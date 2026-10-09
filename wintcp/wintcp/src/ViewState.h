@@ -1,4 +1,5 @@
 // ViewState.h
+// SPDX-License-Identifier: Apache-2.0
 // What to show: filter, sort, grouping, freeze, column set. One struct, shared
 // by the GUI's live view and by a saved preset.
 //
@@ -61,7 +62,7 @@ enum PresetSource : unsigned {
     kPresetSourceHosts  = 1u << 0,   // reverse-DNS the remote addresses
     kPresetSourceEtw    = 1u << 1,   // per-PID traffic counters (needs elevation)
     kPresetSourceSocket = 1u << 2,   // per-socket rate sampling (Speed column)
-    kPresetSourceGeoIp  = 1u << 3,   // country enrichment
+    kPresetSourceGeoIp  = 1u << 3,   // GeoIP enrichment: country and/or ASN
     kPresetSourceAll    = 0x0Fu,
 };
 

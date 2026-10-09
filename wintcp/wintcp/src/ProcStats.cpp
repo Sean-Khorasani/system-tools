@@ -1,4 +1,5 @@
 // ProcStats.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See ProcStats.h. One OpenProcess per PID per refresh (~3 cheap queries
 // on the handle); failures degrade to "unknown", never to an error.
 

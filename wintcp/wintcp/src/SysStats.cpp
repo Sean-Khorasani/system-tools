@@ -1,4 +1,5 @@
 // SysStats.cpp
+// SPDX-License-Identifier: Apache-2.0
 // See SysStats.h. Same sampling math as ChartsWindow::Sample, minus the
 // window, the histories and the painting.
 

@@ -31,6 +31,7 @@ Background pages: [filter language](filters.md), [CLI reference](cli.md), [traff
 | **Enrichment** | | |
 | [12](#12-country-watchdog-gated-on-the-answer) | Is anything talking to country X? | no |
 | [13](#13-the-enriched-triage-row) | Host, country, process and bytes in one row | no |
+| [13a](#13a-which-network-is-that-asn) | Whose network is this? (ASN) | no |
 | [14](#14-full-dossier-for-one-connection) | Everything about one connection | no |
 | **Watching for change** | | |
 | [15](#15-churn-journal-and-the---event-filter) | A readable feed of connection changes | no |
@@ -318,14 +319,14 @@ wintcp.exe list --traffic --group --sort procspeed --desc --limit 6 --columns pi
 ```
 
 ```text
-Process                      Speed                           Proc Speed
-AnyDesk.exe                  idle                            idle
-svchost.exe                  idle                            idle
-cline.exe                    idle                            idle
+ Process                      Rate                            Process rate
+ AnyDesk.exe                  idle                            idle
+ svchost.exe                  idle                            idle
+ cline.exe                  idle                            idle
 ```
 
 ```text
-Process                      Speed                           Proc Speed
+Process                      Rate                            Process rate
 AnyDesk.exe                  idle                            idle
 Avira.Spotlight.Service.exe  —                               —
 svchost.exe                  idle                            idle
@@ -335,7 +336,7 @@ cline.exe                    idle                            idle
 ```
 
 ```text
-  PID  Process                      Proc Speed
+  PID  Process                      Process rate
  6500  tailscaled.exe               ↓ 0 B/s  ↑ 365 B/s
  20868  brave.exe                    idle
   6436  wslrelay.exe                 idle
@@ -489,6 +490,30 @@ Remote address    Hostname                                                   Cou
 | `list --filter "state:estab"` | Not cosmetic. The unfiltered head of this table is `TIME_WAIT` and wildcard rows whose enrichment columns are legitimately empty, which makes the example look broken. |
 | `--limit 4` | The cost control for `--dns`. A `note:` on stderr appears when a printed enrichment column cannot be filled, naming the missing switch. |
 | `--columns remote,host,country,process,nettotal` | The five columns the four tools would each give you. `host` and `country` can be empty *honestly*: an address in no database, or a peer whose PTR record does not resolve, is a real answer. |
+
+#### 13a. Which network is that? (ASN)
+
+`country` answers *where*; the autonomous system answers *whose*. The country code comes from GeoLite2-Country and the AS number and operator from GeoLite2-ASN, so they are two files and two switches. The ASN rides in the `country` cell - `US · AS15169 Google LLC` - because the column count is frozen at 32.
+
+```bat
+REM every row that has an autonomous system at all
+wintcp.exe list --db GeoLite2-Country.mmdb --asn-db GeoLite2-ASN.mmdb ^
+  --filter "asn:" --columns remote,country,process --limit 10
+
+REM one operator, by name - case-insensitive, matches the whole cell
+wintcp.exe list --asn-db GeoLite2-ASN.mmdb --filter "asn:cloudflare" --limit 10
+
+REM a numeric RANGE on the AS number, which is a threshold and not a substring
+wintcp.exe list --asn-db GeoLite2-ASN.mmdb --filter "asn:15169-20000" --limit 10
+```
+
+| Switch | Why it is in this command |
+|---|---|
+| `--asn-db FILE` | The GeoLite2-ASN database. Separate from `--db` because the two are different products with different record shapes; supply either, both or neither. |
+| `--filter "asn:..."` | A bare number is a threshold on the AS number and accepts ranges; anything else is a substring of `AS<n> <org>`, so both "which AS is this" and "who runs this" are one field. |
+| `--columns ... country ...` | The ASN shares the `country` cell. `details` gives it its own `AS number` and `AS organisation` rows when you want them apart. |
+
+Two honest limits, the same as the country recipe: an address that is not globally routable never gets an ASN, and an address no database covers leaves the cell as the country alone rather than inventing one.
 
 ### 14. Full dossier for one connection
 

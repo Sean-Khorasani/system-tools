@@ -1,4 +1,5 @@
 // ProcStats.h
+// SPDX-License-Identifier: Apache-2.0
 // Per-process live stats sampler: CPU %, working-set / private
 // memory and cumulative disk-transfer bytes for a set of PIDs. Runs on the
 // RefreshEngine worker once per refresh (manual or auto): CPU % is derived
