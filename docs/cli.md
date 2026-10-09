@@ -439,6 +439,25 @@ applies them in; `0` disables a threshold. Every one of these has the same
 meaning in the GUI window as on the command line.
 
 `--alert-format json` is the shape a script should read.
+
+`alert rule` manages per-connection rules - "tell me when the one thing I asked
+about changes":
+
+```
+wintcp.exe alert rule add --rule-name NAME --rule-address A.B.C.D [--rule-process IMAGE]
+wintcp.exe alert rule list [--rule-format json]
+wintcp.exe alert rule remove --rule-name NAME
+```
+
+A rule needs a name and at least one selector (`--rule-address` or
+`--rule-process`); a rule with neither matches every connection and is refused
+rather than created. `--rule-on-close` adds the disappearance event, and the
+appearance event is on unless you say otherwise. Address matching is exact; process
+matching is a case-insensitive substring.
+
+Rules are stored one-per-registry-value under `HKCU\Software\WinTCP\AlertRules`, so
+they survive a relaunch and `alert rule list` is the same view the window has.
+
 ### Quick filters and column profiles (GUI)
 
 **Filter -> All / TCP / UDP / Listeners / Established / Mine** writes a filter into

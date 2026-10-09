@@ -110,3 +110,6 @@ version
 help
 help list
 help details
+alert rule list
+alert rule add --rule-name example --rule-address 198.51.100.
+alert rule remove --rule-name example

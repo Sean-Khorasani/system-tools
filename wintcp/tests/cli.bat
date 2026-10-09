@@ -497,6 +497,28 @@ call :t "alert bad rate" "alert --bps-warn not-a-number" 2 "non-numeric"
 call :t "alert missing rate" "alert --bps-warn" 2 "missing"
 call :t "alert missing format" "alert --alert-format" 2 "missing"
 
+REM F5.6 rule sub-commands. Each rule is a registry value, so these DO exercise
+REM the real store - but they are written to be order-independent: every check
+REM adds its own uniquely-named rule and removes it again, so a second run of
+REM this file leaves exactly the state the first one did. The one check that
+REM cannot be order-independent is the "removed" one, which is why it asserts the
+REM failure AFTER a successful remove rather than before.
+set AR=clitest-%RANDOM%
+call :t "rule list empty or not" "alert rule list" 0 "name"
+call :t "rule add works" "alert rule add --rule-name %AR% --rule-address 198.51.100." 0 "added rule"
+call :t "rule add is idempotent" "alert rule add --rule-name %AR% --rule-address 198.51.100." 0 "added rule"
+call :t "rule appears in list" "alert rule list" 0 "%AR%"
+call :t "rule list json shape" "alert rule list --rule-format json" 0 "onNew"
+call :t "rule add needs a name" "alert rule add --rule-address 198.51.100." 2 "--rule-name"
+call :t "rule add refuses match-everything" "alert rule add --rule-name bare-%AR%" 2 "matches every connection"
+call :t "rule add missing address value" "alert rule add --rule-name x --rule-address" 2 "missing value"
+call :t "rule add json" "alert rule add --rule-name %AR%-json --rule-process svchost --rule-format json" 0 "added"
+call :t "rule remove works" "alert rule remove --rule-name %AR%" 0 "removed rule"
+call :t "rule remove twice fails" "alert rule remove --rule-name %AR%" 1 "no rule named"
+call :t "rule remove needs a name" "alert rule remove" 2 "--rule-name"
+call :t "rule unknown action" "alert rule nonsense" 2 "usage is add"
+call :t "rule cleanup json" "alert rule remove --rule-name %AR%-json" 0 "removed"
+
 REM D3: the unenrichable-window hint is ADVISORY and goes to stderr only, so
 REM stdout must stay a clean table that no marker pollutes. Whether the hint
 REM fires depends on the live socket landscape (TIME_WAIT/listener rows come

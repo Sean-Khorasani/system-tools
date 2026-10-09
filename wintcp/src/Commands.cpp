@@ -3,6 +3,7 @@
 // See Commands.h. All headless; no HWND, no dialogs, no clipboard.
 
 #include "Commands.h"
+#include "Alerts.h"     // F5.6: AlertRule, AlertRuleStore
 #include "Settings.h"
 
 #include <algorithm>
@@ -2949,6 +2950,119 @@ CommandResult CmdAlert(AlertFlags f) {
 }
 
 
+// ---- F5.6: alert rule sub-commands -----------------------------------------
+// The engine and the store landed first; this is the surface that fills them.
+//
+// `add` is deliberately idempotent by name: the same rule name twice is one rule,
+// which is what the registry already does and what a user retyping a command
+// expects. It is NOT upsert-by-content - editing a rule means adding it again with
+// the same name, which is the smallest number of concepts.
+CommandResult CmdAlertRule(const std::wstring& action, AlertRuleFlags f) {
+    CommandResult r;
+
+    if (action == L"list") {
+        const std::vector<AlertRule> rules = AlertRuleStore::Load();
+        if (f.format == "json") {
+            if (rules.empty()) { r.out = "[]\n"; return r; }
+            std::string out = "[";
+            bool first = true;
+            for (const AlertRule& rule : rules) {
+                if (!first) out += ",";
+                first = false;
+                out += "\n  {\"name\":\"" + WideToUtf8(rule.name) + "\",";
+                out += "\"address\":\"" + WideToUtf8(rule.address) + "\",";
+                out += "\"process\":\"" + WideToUtf8(rule.process) + "\",";
+                out += "\"onNew\":" + std::string(rule.onNew ? "true" : "false") + ",";
+                out += "\"onClose\":" + std::string(rule.onClose ? "true" : "false") + "}";
+            }
+            out += "\n]\n";
+            r.out = out;
+            return r;
+        }
+        if (rules.empty()) {
+            r.out = "no alert rules. add one with: alert rule add --rule-name NAME [--rule-address A.B.C.D] [--rule-process IMAGE]\r\n";
+            return r;
+        }
+        // Fixed widths, truncated rather than wrapped. The previous version
+        // padded by eye, which produced a table whose columns only lined up when
+        // every field happened to be the same length.
+        std::wstring o;
+        const auto cell = [](const std::wstring& v, size_t w) {
+            if (v.size() > w - 1) return v.substr(0, w - 1);
+            return v + std::wstring(w - v.size(), L' ');
+        };
+        o += cell(L"name", 22) + cell(L"address", 18) + cell(L"process", 18) +
+             L"new  close" + L"\r\n";
+        for (const AlertRule& rule : rules) {
+            o += cell(rule.name, 22);
+            o += cell(rule.address.empty() ? L"(any)" : rule.address, 18);
+            o += cell(rule.process.empty() ? L"(any)" : rule.process, 18);
+            o += rule.onNew ? L"yes" : L"no";
+            o += L"  ";
+            o += rule.onClose ? L"yes" : L"no";
+            o += L"\r\n";
+        }
+        r.out = WideToUtf8(o);
+        return r;
+        return r;
+    }
+
+    if (action == L"remove") {
+        if (f.name.empty()) {
+            r.exitCode = kExitArgs;
+            r.err = "alert rule remove: --rule-name NAME is required.\r\n";
+            return r;
+        }
+        if (!AlertRuleStore::Remove(f.name)) {
+            // "removed" and "never was there" are different answers, and a caller
+            // that cannot tell them cannot tell whether it needs to retry.
+            r.exitCode = kExitFail;
+            r.err = "alert rule remove: there is no rule named '" +
+                    WideToUtf8(f.name) + "'.\r\n";
+            return r;
+        }
+        r.out = "removed rule '" + WideToUtf8(f.name) + "'\r\n";
+        return r;
+    }
+
+    if (action == L"add") {
+        if (f.name.empty()) {
+            r.exitCode = kExitArgs;
+            r.err = "alert rule add: --rule-name NAME is required.\r\n";
+            return r;
+        }
+        if (f.address.empty() && f.process.empty()) {
+            // A rule matching everything is legal but a mistake nine times out of
+            // ten, so it is refused rather than created silently.
+            r.exitCode = kExitArgs;
+            r.err = "alert rule add: give --address or --process, otherwise the "
+                    "rule matches every connection.\r\n";
+            return r;
+        }
+        AlertRule rule;
+        rule.name = f.name;
+        rule.address = f.address;
+        rule.process = f.process;
+        rule.onNew = f.onNewSet ? f.onNew : true;    // default: on
+        rule.onClose = f.onCloseSet ? f.onClose : false;
+        rule.onThreshold = f.onThreshold;
+        if (!AlertRuleStore::Save(rule)) {
+            r.exitCode = kExitFail;
+            r.err = "alert rule add: could not write the rule to the registry.\r\n";
+            return r;
+        }
+        if (f.format == "json") {
+            r.out = "{\"added\":\"" + WideToUtf8(rule.name) + "\"}\n";
+        } else {
+            r.out = "added rule '" + WideToUtf8(rule.name) + "'\r\n";
+        }
+        return r;
+    }
+
+    r.exitCode = kExitArgs;
+    r.err = "alert rule: usage is add | list | remove\r\n";
+    return r;
+}
 // A database's own record_count metadata, phrased honestly.
 //
 // Real files very often OMIT this field - every DBIP edition does - so 0 means

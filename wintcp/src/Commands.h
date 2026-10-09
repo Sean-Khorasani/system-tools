@@ -471,6 +471,22 @@ struct AlertFlags {
     std::string format;
 };
 
+// F5.6. Rule sub-commands: `alert rule add/list/remove`. add is the only one that
+// carries a rule; the rest identify one by name.
+struct AlertRuleFlags {
+    std::wstring name;
+    std::wstring address;
+    std::wstring process;
+    bool onNew = false;        // "tell me when it appears" - the default for a
+                               // hand-built rule too, and set explicitly here so
+    bool onClose = false;      // `add --on-close` is the opt-in, not the default
+    bool onThreshold = false;
+    bool onNewSet = false;
+    bool onCloseSet = false;
+    std::string format;
+};
+
+CommandResult CmdAlertRule(const std::wstring& action, AlertRuleFlags f);
 CommandResult CmdAlert(AlertFlags f);
 CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
                         const std::wstring& asnDbPath, const std::string& format);

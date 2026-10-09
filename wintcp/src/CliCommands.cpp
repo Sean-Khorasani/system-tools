@@ -644,6 +644,8 @@ bool TakesValue(const std::wstring& t) {
            t == L"--tag" || t == L"--note" || t == L"--name" ||
            t == L"--db" || t == L"--asn-db" || t == L"--secs" || t == L"--event" ||
            t == L"--alert-format" || t == L"--bps-warn" ||
+t == L"--rule-name" || t == L"--rule-address" ||
+           t == L"--rule-process" || t == L"--rule-format" ||
            t == L"--bps-critical" || t == L"--connections" ||
            t == L"--dir";
 }
@@ -745,6 +747,15 @@ struct Args {
     int alertOnListener = -1, alertOnConnection = -1;
     int alertOnRst = -1, alertOnClosed = -1;
     std::wstring alertFmtW;
+    // F5.6: alert rule sub-command. --rule-address/--rule-process/"--rule-name"
+    // are how `alert rule add` builds one.
+    std::wstring alertRuleAction;
+    std::wstring alertRuleName;
+    std::wstring alertRuleAddress;
+    std::wstring alertRuleProcess;
+    int alertRuleOnNew = -1, alertRuleOnClose = -1;
+    int alertRuleOnThreshold = -1;
+    std::wstring alertRuleFormat;
     std::wstring ip;
     std::wstring sub;     // bookmark/preset/geoip subverb
     bool quiet = false;   // list/ps: no output, rc answers
@@ -1025,6 +1036,26 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
         } else if (t == L"--off-rst") {
             a->alertOnRst = 0;
         } else if (t == L"--on-closed") {
+        } else if (t == L"--rule-name") {
+            if (!need(&a->alertRuleName)) return "missing value for --rule-name";
+        } else if (t == L"--rule-address") {
+            if (!need(&a->alertRuleAddress))
+                return "missing value for --rule-address";
+        } else if (t == L"--rule-process") {
+            if (!need(&a->alertRuleProcess))
+                return "missing value for --rule-process";
+        } else if (t == L"--rule-format") {
+            if (!need(&a->alertRuleFormat)) return "missing value for --rule-format";
+        } else if (t == L"--rule-on-new") {
+            a->alertRuleOnNew = 1;
+        } else if (t == L"--rule-off-new") {
+            a->alertRuleOnNew = 0;
+        } else if (t == L"--rule-on-close") {
+            a->alertRuleOnClose = 1;
+        } else if (t == L"--rule-off-close") {
+            a->alertRuleOnClose = 0;
+        } else if (t == L"--rule-on-threshold") {
+            a->alertRuleOnThreshold = 1;
             a->alertOnClosed = 1;
         } else if (t == L"--off-closed") {
             a->alertOnClosed = 0;
@@ -1203,6 +1234,9 @@ const wchar_t* const kSwitchNames[] = {
      L"--enable", L"--disable", L"--on-listener", L"--off-listener",
      L"--on-connection", L"--off-connection", L"--on-rst", L"--off-rst",
      L"--on-closed", L"--off-closed",
+     L"--rule-name", L"--rule-address", L"--rule-process",
+     L"--rule-format", L"--rule-on-new", L"--rule-off-new",
+     L"--rule-on-close", L"--rule-off-close", L"--rule-on-threshold",
 };
 constexpr size_t kSwitchNameCount =
     sizeof(kSwitchNames) / sizeof(kSwitchNames[0]);
@@ -1344,7 +1378,7 @@ const VerbSwitches kVerbSwitches[] = {
     // whether the file it was given was even an ASN database.
     {L"doctor", L"--verbose --format --db --asn-db"},
     // 9.2.11 / F5.6. Takes switches because it IS the surface that sets them.
-    {L"alert", L"--enable --disable --bps-warn --bps-critical --connections on-listener off-listener on-connection off-connection on-rst off-rst on-closed off-closed --alert-format"},
+    {L"alert", L"--enable --disable --bps-warn --bps-critical --connections on-listener off-listener on-connection off-connection on-rst off-rst on-closed off-closed --alert-format --rule-name --rule-address --rule-process --rule-format --rule-on-new --rule-off-new --rule-on-close --rule-off-close --rule-on-threshold"},
     {L"help", L""},       // takes no switches
     // Hidden test verb for R1: raises a real access violation so that
     // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
@@ -2201,6 +2235,26 @@ int RunCliCommand(int argc, wchar_t** argv) {
         af.onClosed = a.alertOnClosed > 0;
         af.format = WideToUtf8(a.alertFmtW);
         const CommandResult r = CmdAlert(af);
+        // F5.6: `alert rule <add|list|remove>`. The sub-command arrives as the
+        // first non-switch argument, same shape as `geoip lookup` uses.
+        // F5.6: `alert rule <add|list|remove>`. Two positional slots already
+        // exist - the subverb, then `geoip lookup`'s address - and this needs
+        // exactly two: `rule`, then the action. No new parser grammar.
+        if (ToLowerW(a.sub) == L"rule" && !a.ip.empty()) {
+            AlertRuleFlags rf;
+            rf.name = a.alertRuleName;
+            rf.address = a.alertRuleAddress;
+            rf.process = a.alertRuleProcess;
+            rf.onNewSet = a.alertRuleOnNew >= 0;
+            rf.onNew = a.alertRuleOnNew > 0;
+            rf.onCloseSet = a.alertRuleOnClose >= 0;
+            rf.onClose = a.alertRuleOnClose > 0;
+            rf.onThreshold = a.alertRuleOnThreshold > 0;
+            rf.format = WideToUtf8(a.alertRuleFormat);
+            const CommandResult rr = CmdAlertRule(ToLowerW(a.ip), rf);
+            Emit(rr);
+            return rr.exitCode;
+        }
         Emit(r);
         return r.exitCode;
     }
