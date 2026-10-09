@@ -28,7 +28,8 @@
 #include "Freeze.h"        // FrozenAgeMs (5.5)
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
-#include "FontCache.h"     // F5.15: shared, DPI-correct fonts
+#include "FontCache.h"
+#include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
 
 namespace wintcp {
@@ -1352,6 +1353,10 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     RefreshBookmarkMarks();
     ApplyViewWith(ids, focusedId, topIdx);
     RefreshDetailsWindow();              // live stats stay fresh
+    // F5.6. AFTER the view is rebuilt, so a balloon names rows the user can
+    // actually look at - evaluated earlier it would answer about a table
+    // that is about to be replaced.
+    RunAlerts();
 }
 
 void MainWindow::Refresh(bool reportErrors) {
@@ -1602,6 +1607,59 @@ void MainWindow::SyncColumnMenuChecks() {
     }
 }
 
+// ---- F5.6: the alert engine's only production caller ------------------------
+// The engine has existed, pure and tested, with no caller at all. This is it.
+//
+// Three rules it must obey, and one it must NOT:
+//
+//   * The tray icon is OPTIONAL. Balloons need it; without one the alert still
+//     fires, it just lands on the status bar rather than silently vanishing - an
+//     alert that does nothing is worse than no alert at all.
+//   * The engine latches. A condition already active is suppressed until it
+//     clears, so a connection sitting above the threshold does not re-notify on
+//     every refresh. That is the engine's job, not this function's.
+//   * Settings are re-read FRESH each tick, because another process running
+//     `wintcp.exe alert` can change them between two refreshes and the window
+//     must not be the only thing that does not know.
+//   * It must NOT hold a row pointer across the balloon call - a modal pumps
+//     messages and a refresh can reallocate the store underneath. Everything
+//     below is copied by value.
+void MainWindow::RunAlerts() {
+    Settings s;
+    if (!s.Load()) return;              // no store, no alerting - say nothing
+    alertHint_.clear();
+    suppressedAlerts_ = 0;
+    if (!s.alerts.enabled) {
+        // Reset on disable: a stale latch would fire the instant alerting is
+        // turned back on, for a condition the user never saw happen.
+        alertEngine_.Reset();
+        return;
+    }
+    const std::vector<Connection> rows = store_.Rows();   // a copy, on purpose
+    const std::vector<Alert> fired = alertEngine_.Evaluate(rows, s.alerts);
+    for (const Alert& a : fired) {
+        if (trayIconShown_) {
+            // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for
+            // the duration of the call; szInfo is cleared first so a shorter
+            // previous message cannot leave its tail behind.
+            ::ZeroMemory(&trayNid_.szInfo, sizeof(trayNid_.szInfo));
+            ::ZeroMemory(&trayNid_.szInfoTitle, sizeof(trayNid_.szInfoTitle));
+            ::wcsncpy_s(trayNid_.szInfo, a.text.c_str(), _TRUNCATE);
+            ::wcsncpy_s(trayNid_.szInfoTitle, a.title.c_str(), _TRUNCATE);
+            trayNid_.uFlags = NIF_INFO;
+            trayNid_.dwInfoFlags = NIIF_WARNING;
+            ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+            trayNid_.uFlags = 0;
+        } else {
+            if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
+            alertHint_ += a.title;
+        }
+    }
+    // Surfaced, not hidden: "nothing appeared" and "it is all already on fire" are
+    // different answers and only one of them is fine.
+    suppressedAlerts_ = alertEngine_.SuppressedCount();
+    UpdateStatusBar(lastError_);
+}
 // ---- 9.4.2 empty states -----------------------------------------------------
 // A blank cell answers the wrong question. "No rows", "no country database
 // loaded" and "traffic never ran" are three DIFFERENT reasons a column is empty,
@@ -2186,7 +2244,13 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // the shape dnsStalledHint_ already uses and the only time-scoped message
     // channel the window has: there is no toolbar and no WM_PAINT hook in this
     // window, so a banner over the list would be new chrome rather than a reuse.
-    if (!emptyStateHint_.empty()) {
+    // F5.6. Same channel and same shape as the empty-state hint beside it, and
+    // deliberately NOT stored: nothing about an alert survives a refresh, so a
+    // cleared alert stops being reported without anyone removing it.
+    if (!alertHint_.empty()) {
+        if (!right.empty()) right += L"  \xB7  ";
+        right += alertHint_;
+    }    if (!emptyStateHint_.empty()) {
         if (!right.empty()) right += L"  ";
         right += emptyStateHint_;
     }

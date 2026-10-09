@@ -178,6 +178,7 @@ private:
     void SyncColumnProfileChecks();        // View > Column profile ticks
     void SyncQuickFilterChecks();          // Filter menu ticks
     void UpdateEmptyState();               // 9.4.2: the empty-column infobar
+    void RunAlerts();                    // F5.6: evaluate + balloon
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
     void ApplyViewWith(const std::vector<std::uint64_t>& ids,
@@ -370,6 +371,10 @@ private:
     // state each second, never stored across a refresh - because a stored hint
     // outlives the condition that produced it.
     std::wstring emptyStateHint_;
+    // F5.6: the alert fallback when there is no tray icon, and the count of
+    // alerts currently suppressed by the engine's latch.
+    std::wstring alertHint_;
+    size_t suppressedAlerts_ = 0;
     bool topMost_ = false;                 // View > Always on top
     bool trayEnabled_ = false;             // View > Tray icon
     bool trayIconShown_ = false;
@@ -448,6 +453,10 @@ private:
     // optional and independent: loading one does not disturb the other, and
     // neither is required for the other to work.
     GeoIpDatabase asnGeo_;
+    // F5.6. The engine is pure; this is its ONLY production caller.
+    // It used to have none at all, which is why the alert.* selftests
+    // were the only thing exercising it.
+    AlertEngine alertEngine_;
 
     wchar_t dispBuf_[kMaxColumnText] = {0};  // LVN_GETDISPINFO scratch buffer
 
