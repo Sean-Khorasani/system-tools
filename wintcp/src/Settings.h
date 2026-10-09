@@ -19,6 +19,7 @@
 #include <string>   // RegReadBoundedString's std::wstring
 #include <vector>
 
+#include "Alerts.h"   // 9.2.11/F5.6: AlertSettings
 #include "ColumnsWin.h"   // COL_COUNT, kDefaultVisibleCols, ClampVisibleCols
 
 namespace wintcp {
@@ -130,6 +131,26 @@ struct Settings {
     // for the same reason - the window should not have to be told again at every
     // launch. Also deliberately NOT a ColVersion bump: it is not a column.
     wchar_t asnIpPath[MAX_PATH] = {0};
+
+    // Alerts (9.2.11). The engine itself is pure and tested; it had no persistence
+    // and no caller, so nothing could ever fire. Persisted on the same terms as the
+    // paths above - one value per setting, absent keys fall back to the engine's own
+    // defaults, and no ColVersion bump because none of this is a column.
+    //
+    // MUTED BY DEFAULT is the design rule, not a missing feature: a network viewer
+    // that pops a balloon every refresh is one the user switches off, and then it is
+    // useless for the one event that mattered.
+    // Alerts (9.2.11 / F5.6).
+    //
+    // This is the ENGINE'S OWN struct, not a parallel shape of it. The first
+    // attempt kept eight separate fields here and converted on the way to the
+    // evaluator, which is the duplication this codebase's own rule is about: two
+    // representations of one configuration can drift, and the one that drifts is
+    // always the one nobody displays. Persisting the struct the engine reads is
+    // what makes the CLI, the registry and the evaluator unable to disagree.
+    //
+    // MUTED BY DEFAULT, by design rather than by omission.
+    AlertSettings alerts;
 
     // Read from HKCU; never fails hard (defaults stay on missing values).
     bool Load();

@@ -43,6 +43,16 @@ const wchar_t* kValLastExportDir = L"LastExportDir";
     const wchar_t* kValGeoIpPath = L"GeoIpPath";
 // F5.4: the ASN database path.
 const wchar_t* kValAsnIpPath = L"AsnIpPath";
+// 9.2.11: alerting. One value per setting so a missing key leaves the engine
+//'s own default in place, which is what makes an older Settings store load clean.
+const wchar_t* kValAlertEnabled = L"AlertEnabled";
+const wchar_t* kValAlertBpsWarn = L"AlertBpsWarn";
+const wchar_t* kValAlertBpsCritical = L"AlertBpsCritical";
+const wchar_t* kValAlertConnWarn = L"AlertConnWarn";
+const wchar_t* kValAlertOnListener = L"AlertOnNewListener";
+const wchar_t* kValAlertOnConnection = L"AlertOnNewConnection";
+const wchar_t* kValAlertOnRst = L"AlertOnRst";
+const wchar_t* kValAlertOnClosed = L"AlertOnClosed";
 
 bool GetDword(HKEY root, const wchar_t* path, const wchar_t* name, DWORD& out) {
     DWORD value = 0;
@@ -328,6 +338,27 @@ bool Settings::Load() {
                sizeof(asnIpPath) / sizeof(asnIpPath[0])))
         asnIpPath[0] = L'\0';
 
+    // 9.2.11 / F5.6. Every value is optional; an absent one leaves the field at the
+    // engine's default, so a half-written store loads as "whatever was there" rather
+    // than failing the whole settings read.
+    DWORD alertDw = 0;
+    if (GetDword(root, kKeyPath, kValAlertEnabled, alertDw))
+        alerts.enabled = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertBpsWarn, alertDw))
+        alerts.bpsWarn = static_cast<double>(alertDw);
+    if (GetDword(root, kKeyPath, kValAlertBpsCritical, alertDw))
+        alerts.bpsCritical = static_cast<double>(alertDw);
+    if (GetDword(root, kKeyPath, kValAlertConnWarn, alertDw))
+        alerts.connectionWarn = static_cast<size_t>(alertDw);
+    if (GetDword(root, kKeyPath, kValAlertOnListener, alertDw))
+        alerts.alertOnNewListener = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertOnConnection, alertDw))
+        alerts.alertOnNewConnection = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertOnRst, alertDw))
+        alerts.alertOnRst = alertDw != 0;
+    if (GetDword(root, kKeyPath, kValAlertOnClosed, alertDw))
+        alerts.alertOnClosed = alertDw != 0;
+
     return true;
 }
 
@@ -374,6 +405,18 @@ bool Settings::Save() const {
     ok &= SetSz(key, kValLastExportDir, lastExportDir);
     ok &= SetSz(key, kValGeoIpPath, geoIpPath);
     ok &= SetSz(key, kValAsnIpPath, asnIpPath);
+    ok &= SetDword(key, kValAlertEnabled, alerts.enabled ? 1u : 0u);
+    ok &= SetDword(key, kValAlertBpsWarn,
+                  static_cast<DWORD>(alerts.bpsWarn < 0 ? 0 : alerts.bpsWarn));
+    ok &= SetDword(key, kValAlertBpsCritical,
+                  static_cast<DWORD>(alerts.bpsCritical < 0 ? 0 : alerts.bpsCritical));
+    ok &= SetDword(key, kValAlertConnWarn,
+                  static_cast<DWORD>(alerts.connectionWarn));
+    ok &= SetDword(key, kValAlertOnListener, alerts.alertOnNewListener ? 1u : 0u);
+    ok &= SetDword(key, kValAlertOnConnection,
+                  alerts.alertOnNewConnection ? 1u : 0u);
+    ok &= SetDword(key, kValAlertOnRst, alerts.alertOnRst ? 1u : 0u);
+    ok &= SetDword(key, kValAlertOnClosed, alerts.alertOnClosed ? 1u : 0u);
 
     ::RegCloseKey(key);
     return ok;
