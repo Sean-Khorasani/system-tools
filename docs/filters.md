@@ -48,6 +48,9 @@ A `--select` selector must resolve to **exactly one live row**; see [Selectors](
 | `host:` | Reverse-DNS name | CLI: needs `--dns`. |
 | `proto:` | Protocol or family | `proto:udp`, `proto:tcp`, `proto:ipv6`. |
 | `country:` | GeoIP country code | `country:de`. CLI: needs `--db` - where to get a database and what `--db` does is in [GeoIP database](../README.md#geoip-database). |
+
+Alerting is not a filter. wintcp.exe alert sets thresholds and wintcp.exe alert reads them back; a filter narrows the table, an alert reacts to it. The two share no switches.
+
 | `asn:` | Autonomous system (F5.4) | **Both kinds of value.** A bare number is a threshold on the AS number, so `asn:15169` and `asn:15169-20000` work and accept ranges. Anything else is a case-insensitive substring of the cell `AS15169 Google LLC`, so `asn:google` finds the operator by name. A bare `asn:` means "has an autonomous system"; a row with no ASN never matches, whatever the value. CLI: needs `--asn-db`, which is a GeoLite2-ASN file and is separate from `--db`. |
 | `tls:` | TLS summary | **Matches nothing** - the column is never populated. See [the note in the CLI reference](cli.md). |
 | `note:` | A bookmark's note | `note:vendor`. A bare `note:` means "has a note". |

@@ -425,6 +425,20 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 | `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing prints only its header and exits `0`, exactly as `list` does; `apply` takes no `--quiet` (that is `2`), so there is no match-or-not exit code to branch on. |
 | `delete --name N` | Removes a preset. |
 
+`wintcp.exe alert` reads and writes the threshold-alerting configuration. With no
+switches it prints the current state; with them it sets it. `--enable` and
+`--disable` are the master switch, `--bps-warn N` / `--bps-critical N` /
+`--connections N` the three thresholds, and the four `--on-*` / `--off-*` pairs
+the events that fire one.
+
+Alerting is **muted by default and every threshold is off until set**. That is the
+design rather than an unfinished state: a network viewer that raises a balloon on
+every refresh is one the user switches off, and then it is useless for the one
+event that mattered. Rates are **bytes per second**, the same unit the engine
+applies them in; `0` disables a threshold. Every one of these has the same
+meaning in the GUI window as on the command line.
+
+`--alert-format json` is the shape a script should read.
 ### Quick filters and column profiles (GUI)
 
 **Filter -> All / TCP / UDP / Listeners / Established / Mine** writes a filter into

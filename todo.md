@@ -418,9 +418,24 @@ copy of the item.
   the tree without it would have made the tag useless as a machine check. No gate
   change: build.bat clean, cli.bat 248/0, unit 15/15.
 
-- [ ] **9.2.11 — Alerts.** `Alerts.h:42` (thresholds hardcoded, no
-  persist/CLI/editor). Wire alert verb + tray balloon + registry rules
-  (F5.6) or hide. Docs: `docs/gui.md` new section or remove mention.
+- [x] **9.2.11 - Alerts.** DONE, and the missing piece was not the engine.
+  `AlertEngine::Evaluate` has been pure, latched and test-covered since it was
+  written; what it had was **no caller and no persistence** - nothing in the
+  product ever called it, and there was nowhere to put a threshold. That is the
+  gap this closes.
+  Now: `wintcp.exe alert` reads and writes the whole configuration (see
+  `docs/cli.md`), it persists in `HKCU\Software\WinTCP` under eight registry
+  values, and `MainWindow::RunAlerts()` runs it after every refresh - the engine's
+  ONLY production caller. Balloon via `Shell_NotifyIconW` when the tray icon is
+  present, status-bar text when it is not, because an alert that does nothing is
+  worse than none. `AlertSettings` is stored in `Settings` as the ENGINE'S OWN
+  struct rather than a parallel shape: the first attempt kept eight separate
+  fields here and converted on the way in, which is the duplication this project's
+  own rule is about.
+  Muted by default, every threshold off, each condition latched until it clears.
+  Docs: `docs/cli.md`, `docs/gui.md`, `docs/filters.md`.
+  Gates: build.bat clean, cli.bat 254 checks / 0 failures, unit 15/15 with six new
+  `alertcfg.*` checks, gui.bat 54/0.
 
 ### 5.6 Repo hygiene
 

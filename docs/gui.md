@@ -287,6 +287,20 @@ The ASN appears in the same `Country` cell as `US · AS15169 Google LLC`, becaus
 
 Its path persists on exactly the same terms as the country one, in its own `HKCU\Software\WinTCP` value: pick it once and it reloads silently, and a file that has moved fails quietly rather than nagging at every launch.
 
+## Alerts (F5.6)
+
+Threshold alerting is **off until you turn it on**, and that is the point: a
+network viewer that pops a balloon every time a connection crosses a line is one
+you switch off, and then it is useless for the one event that mattered.
+
+Set it with `wintcp.exe alert --enable --bps-warn 1000000` on the command line,
+or read the current state with `wintcp.exe alert`. The GUI window reads the same
+settings, so a change made anywhere takes effect on the next refresh.
+
+Each distinct condition fires **once** and then goes quiet until it clears, so a
+connection sitting above the threshold does not re-notify every tick. When the
+tray icon is off, an alert lands on the status bar instead of vanishing - an alert
+that does nothing is worse than no alert.
 ## Windows integration
 
 - **DPI.** Per-Monitor V2 DPI awareness via the manifest, 9 pt Segoe UI. Widths and fonts are recomputed on `WM_DPICHANGED`.
