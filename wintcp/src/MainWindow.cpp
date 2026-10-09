@@ -1636,30 +1636,43 @@ void MainWindow::RunAlerts() {
         return;
     }
     const std::vector<Connection> rows = store_.Rows();   // a copy, on purpose
+    // F5.6. The rules are read here, per tick, for the same reason the settings are:
+    // `alert rule add` from another process has to reach a running window without a
+    // restart. One list, so the CLI and the window cannot disagree about what is
+    // being watched.
+    const std::vector<AlertRule> rules = AlertRuleStore::Load();
+
     const std::vector<Alert> fired = alertEngine_.Evaluate(rows, s.alerts);
-    for (const Alert& a : fired) {
-        if (trayIconShown_) {
-            // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for
-            // the duration of the call; szInfo is cleared first so a shorter
-            // previous message cannot leave its tail behind.
-            ::ZeroMemory(&trayNid_.szInfo, sizeof(trayNid_.szInfo));
-            ::ZeroMemory(&trayNid_.szInfoTitle, sizeof(trayNid_.szInfoTitle));
-            ::wcsncpy_s(trayNid_.szInfo, a.text.c_str(), _TRUNCATE);
-            ::wcsncpy_s(trayNid_.szInfoTitle, a.title.c_str(), _TRUNCATE);
-            trayNid_.uFlags = NIF_INFO;
-            trayNid_.dwInfoFlags = NIIF_WARNING;
-            ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
-            trayNid_.uFlags = 0;
-        } else {
-            if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
-            alertHint_ += a.title;
-        }
-    }
+    const std::vector<Alert> ruleFired =
+        alertEngine_.EvaluateRules(rows, rules, s.alerts);
+    for (const Alert& a : fired) RaiseAlert(a);
+    for (const Alert& a : ruleFired) RaiseAlert(a);
     // Surfaced, not hidden: "nothing appeared" and "it is all already on fire" are
     // different answers and only one of them is fine.
     suppressedAlerts_ = alertEngine_.SuppressedCount();
     UpdateStatusBar(lastError_);
 }
+
+// F5.6. One balloon per alert, whichever source it came from.
+void MainWindow::RaiseAlert(const Alert& a) {
+    if (trayIconShown_) {
+        // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for the
+        // duration of the call; szInfo is cleared first so a shorter previous message
+        // cannot leave its tail behind.
+        ::ZeroMemory(&trayNid_.szInfo, sizeof(trayNid_.szInfo));
+        ::ZeroMemory(&trayNid_.szInfoTitle, sizeof(trayNid_.szInfoTitle));
+        ::wcsncpy_s(trayNid_.szInfo, a.text.c_str(), _TRUNCATE);
+        ::wcsncpy_s(trayNid_.szInfoTitle, a.title.c_str(), _TRUNCATE);
+        trayNid_.uFlags = NIF_INFO;
+        trayNid_.dwInfoFlags = NIIF_WARNING;
+        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+        trayNid_.uFlags = 0;
+    } else {
+        if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
+        alertHint_ += a.title;
+    }
+}
+
 // ---- 9.4.2 empty states -----------------------------------------------------
 // A blank cell answers the wrong question. "No rows", "no country database
 // loaded" and "traffic never ran" are three DIFFERENT reasons a column is empty,

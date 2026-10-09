@@ -179,6 +179,7 @@ private:
     void SyncQuickFilterChecks();          // Filter menu ticks
     void UpdateEmptyState();               // 9.4.2: the empty-column infobar
     void RunAlerts();                    // F5.6: evaluate + balloon
+    void RaiseAlert(const wintcp::Alert& a);   // F5.6: one balloon per alert
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
     void ApplyViewWith(const std::vector<std::uint64_t>& ids,
