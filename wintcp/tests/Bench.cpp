@@ -1466,6 +1466,179 @@ void CheckAlertConfiguration(TestResult& r) {
           !one.alertOnNewListener && one.alertOnNewConnection &&
               one.alertOnRst && !one.alertOnClosed);
 }
+
+// ---- F5.6: per-connection alert rules ---------------------------------------
+// The threshold engine is whole-table and latched on CHANGES to that table. A
+// rule is per-connection and must latch per RULE, which is a different problem:
+// two rules watching the same address are two independent watches, and keying the
+// latch by address would make the second a silent no-op.
+void CheckAlertRules(TestResult& r) {
+    AlertSettings s;                     // muted and threshold-free
+    AlertEngine e;
+
+    AlertRule watch;
+    watch.name = L"cloudflare";
+    watch.address = L"172.64.";          // Cloudflare's current range
+    watch.onNew = true;
+    watch.onClose = false;                // the default, and the interesting half
+
+    // A rule with no name cannot latch, so it must be ignored rather than firing
+    // forever. This is the "unnamed rule" hole, and it is a real one: a rule built
+    // from an empty label would match every row and never stop matching.
+    AlertRule unnamed = watch;
+    unnamed.name.clear();
+    AlertRule only = unnamed;
+    const std::vector<AlertRule> oneRule = {watch};
+
+    Connection hit;                       // matches
+    hit.remoteAddress = L"172.64.148.235";
+    hit.processName = L"brave.exe";
+    Connection miss;                      // does not
+    miss.remoteAddress = L"8.8.8.8";
+    miss.processName = L"chrome.exe";
+
+    // Substring on the address, exact semantics: a rule for "172.64." must not
+    // match "8.8.8.8", and the converse.
+    Check(r, "rule.matches-address-substring", watch.Matches(hit) &&
+                                                  !watch.Matches(miss));
+    // Substring on the process name, case-insensitively: that is how people write
+    // it, and a rule that silently matches nothing is worse than one that matches a
+    // bit more than intended.
+    AlertRule byName = watch;
+    byName.address.clear();
+    byName.process = L"BRAVE";
+    Check(r, "rule.matches-process-case-insensitive",
+          byName.Matches(hit) && !byName.Matches(miss));
+    // A rule with neither an address nor a process matches everything, which is
+    // what the whole-table threshold already does - so it is allowed, but it is not
+    // the case anyone should want.
+    AlertRule any = watch;
+    any.address.clear();
+    Check(r, "rule.empty-matches-anything", any.Matches(hit) && any.Matches(miss));
+
+    // The latch. First evaluation with nothing matching is silent, not a "cleared".
+    Check(r, "rule.silent-when-nothing-matches",
+          e.EvaluateRules({miss}, oneRule, s).empty());
+
+    // Then it fires ONCE on the appearance.
+    const std::vector<Alert> first = e.EvaluateRules({hit}, oneRule, s);
+    Check(r, "rule.fires-once-on-appearance", first.size() == 1, "one alert");
+
+    // And stays quiet while it keeps matching - this is the notification storm the
+    // engine's own design rule exists to prevent, now applied per rule.
+    Check(r, "rule.quiet-while-matching",
+          e.EvaluateRules({hit, hit}, oneRule, s).empty());
+
+    // Two rows matching is still ONE condition holding, not two firings.
+    Check(r, "rule.two-rows-one-condition",
+          e.EvaluateRules({hit, hit, hit}, oneRule, s).empty());
+
+    // A rule that fires on close reports the disappearance - and only that rule.
+    AlertRule closes = watch;
+    closes.onClose = true;
+    AlertEngine e2;
+    (void)e2.EvaluateRules({hit}, {closes}, s);   // arm the latch
+    const std::vector<Alert> cleared = e2.EvaluateRules({miss}, {closes}, s);
+    Check(r, "rule.on-close-fires-on-disappearance", cleared.size() == 1,
+          "one alert");
+    // A CLOSE-ONLY rule does not fire on arrival. The first attempt got this wrong
+    // in the other direction: it reused a rule with onNew still true, which of
+    // course fires on arrival, and the check failed for the right reason - the
+    // test was asserting something its own fixture contradicted.
+    AlertRule closeOnly = watch;
+    closeOnly.name = L"close-only";
+    closeOnly.onNew = false;
+    closeOnly.onClose = true;
+    AlertEngine e6;
+    (void)e6.EvaluateRules({hit}, {closeOnly}, s);   // arm it
+    Check(r, "rule.on-close-does-not-fire-on-arrival",
+          e6.EvaluateRules({hit}, {closeOnly}, s).empty());
+
+    // THE SEAM: two rules watching the same address are two independent watches.
+    // Keyed by address, the second would be a silent no-op for as long as the first
+    // held its latch.
+    AlertRule second = watch;
+    second.name = L"cloudflare-again";
+    AlertEngine e3;
+    (void)e3.EvaluateRules({hit}, {watch}, s);       // latch rule one only
+    const std::vector<Alert> both = e3.EvaluateRules({hit}, {watch, second}, s);
+    Check(r, "rule.latch-keyed-by-name-not-address", both.size() == 1,
+          "the second rule must fire where the first is already silent");
+
+    // An unnamed rule is ignored, not latched-forever.
+    AlertEngine e4;
+    Check(r, "rule.unnamed-is-ignored",
+          e4.EvaluateRules({hit}, {unnamed}, s).empty());
+
+    // Reset drops the rule latches, so a rule added after a reset is able to
+    // announce itself - without this it would be considered already firing.
+    AlertEngine e5;
+    (void)e5.EvaluateRules({hit}, oneRule, s);
+    e5.Reset();
+    const std::vector<Alert> afterReset = e5.EvaluateRules({hit}, oneRule, s);
+    Check(r, "rule.reset-rearms", afterReset.size() == 1, "fires again");
+
+    // SuppressedCount is surfaced so "nothing appeared" is distinguishable from
+    // "it is all already on fire".
+    Check(r, "rule.suppressed-count-surfaced",
+          e5.SuppressedCount() == 1, std::to_string(e5.SuppressedCount()));
+    (void)only;
+    (void)s;
+}
+
+// ---- F5.6: the rule serialisation ------------------------------------------
+// A rule typed by hand in the registry has to survive the round trip, and the two
+// halves that most easily go wrong are the empties ("no address means any") and the
+// booleans ("on but not closed"). The registry itself is not touched here: what is
+// checked is the pure conversion, which is the only part that can drift.
+void CheckAlertRuleSerialisation(TestResult& r) {
+    AlertRule full;
+    full.name = L"watch-cloudflare";
+    full.address = L"172.64.";
+    full.process = L"brave.exe";
+    full.onNew = true;
+    full.onClose = true;
+    full.onThreshold = false;
+
+    const std::wstring v = AlertRuleToValue(full);
+    AlertRule back;
+    Check(r, "rule.ser-round-trips", AlertRuleFromValue(full.name, v, &back) &&
+                                          back.address == full.address &&
+                                          back.process == full.process &&
+                                          back.onNew == full.onNew &&
+                                          back.onClose == full.onClose &&
+                                          back.onThreshold == full.onThreshold,
+          WideToUtf8(v));
+
+    // Empty fields must survive as empty. The default for onNew is TRUE, so a value
+    // that fails to set it would read back as "on" even when the stored text says
+    // "0" - and this is the check that catches it.
+    AlertRule sparse;
+    sparse.name = L"sparse";
+    sparse.onNew = false;
+    const std::wstring sv = AlertRuleToValue(sparse);
+    AlertRule back2;
+    Check(r, "rule.ser-empty-fields-survive",
+          AlertRuleFromValue(sparse.name, sv, &back2) &&
+              back2.address.empty() && back2.process.empty() &&
+              !back2.onNew && !back2.onClose && !back2.onThreshold,
+          WideToUtf8(sv));
+
+    // A malformed value is refused rather than half-read. The alternative is a rule
+    // that silently matches everything because three of its five fields are absent.
+    AlertRule junk;
+    Check(r, "rule.ser-refuses-short-value",
+          !AlertRuleFromValue(L"x", L"1|2|3", &junk));
+    // A rule with no name cannot be keyed, so it is refused at the boundary.
+    Check(r, "rule.ser-refuses-no-name",
+          !AlertRuleFromValue(L"", full.address, &junk));
+
+    // The name is never part of the value: it is the registry key. Storing it twice
+    // would make renaming a rule a two-step edit that can disagree with itself.
+    Check(r, "rule.ser-name-not-in-value",
+          v.find(L"watch-cloudflare") == std::wstring::npos,
+          WideToUtf8(v));
+}
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -8759,6 +8932,8 @@ static const unsigned char kClientHello[] = {
     // real metadata, both record layouts.
         CheckRealGeoIp(r);
     CheckAlertConfiguration(r);
+    CheckAlertRules(r);
+    CheckAlertRuleSerialisation(r);
     CheckColumnProfiles(r);
     CheckQuickFilters(r);
     CheckFontCache(r);
