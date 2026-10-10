@@ -3037,6 +3037,19 @@ std::string NumberNoTrailingZeros(double v) {
 CommandResult CmdAlert(AlertFlags f) {
     CommandResult r;
     Settings s;
+    // 9.2.10: portable defaults FIRST, so the registry always wins. A file that
+    // exists but cannot be read is reported rather than swallowed - it is a
+    // user-visible fault, and silently ignoring it would mean the portable copy
+    // quietly does nothing.
+    wchar_t exePath[MAX_PATH] = {0};
+    const DWORD pn = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring portableErr;
+    if (pn != 0 && pn < MAX_PATH) {
+        s.ApplyPortableDefaults(exePath, &portableErr);
+    }
+    if (!portableErr.empty()) {
+        r.err = "note: " + WideToUtf8(portableErr) + "\r\n";
+    }
     if (!s.Load()) {
         // A Settings store that will not read is not fatal here: the engine works
         // from the struct's defaults, which are the muted ones. Say so rather than

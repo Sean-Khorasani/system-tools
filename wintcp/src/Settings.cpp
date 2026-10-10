@@ -8,6 +8,10 @@
 
 #include <cstring>
 
+#include "IniFile.h"   // 9.2.10: the portable wintcp.ini
+#include "Opt.h"       // ReadUtf8File (Utf8ToWide lives in Utils.h)
+#include "Utils.h"
+
 namespace wintcp {
 namespace {
 
@@ -359,6 +363,97 @@ bool Settings::Load() {
     if (GetDword(root, kKeyPath, kValAlertOnClosed, alertDw))
         alerts.alertOnClosed = alertDw != 0;
 
+    return true;
+}
+
+// ---- 9.2.10: the portable `wintcp.ini` ---------------------------------------
+//
+// Applied BEFORE Load() so the registry always wins. See the header for why
+// that ordering is the one that cannot surprise anyone.
+
+// The exe's own directory. An empty 'exePath' (which happens when
+// GetModuleFileNameW fails) yields no ini path, which is an ordinary "no
+// portable file" rather than an error.
+std::wstring PortableIniPath(const std::wstring& exePath) {
+    if (exePath.empty()) return std::wstring();
+    const size_t slash = exePath.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return std::wstring();
+    return exePath.substr(0, slash + 1) + L"wintcp.ini";
+}
+
+bool Settings::ApplyPortableDefaults(const std::wstring& exePath,
+                                     std::wstring* error) {
+    if (error != nullptr) error->clear();
+    const std::wstring iniPath = PortableIniPath(exePath);
+    if (iniPath.empty()) return false;
+
+    // "No such file" is the ordinary case on every machine that is not
+    // running portably, and must not be reported as a fault.
+    const DWORD attrs = ::GetFileAttributesW(iniPath.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+
+    std::string text;
+    const std::wstring readErr = ReadUtf8File(iniPath, &text);
+    if (!readErr.empty()) {
+        if (error != nullptr) {
+            *error = L"could not read " + iniPath + L": " + readErr;
+        }
+        return false;
+    }
+    std::string parseErr;
+    const std::vector<IniValue> values =
+        ParseIniSection(text, "wintcp", &parseErr);
+    if (!parseErr.empty()) {
+        if (error != nullptr) {
+            *error = iniPath + L": " +
+                     std::wstring(parseErr.begin(), parseErr.end());
+        }
+        return false;
+    }
+
+    for (const IniValue& kv : values) {
+        // An unknown key in a file this build does not understand is not an
+        // error: it may be a key a newer build added, and refusing the file
+        // over it would be the reader's guess made into the user's problem.
+        if (!IsKnownIniKey(kv.key)) continue;
+
+        if (kv.key == "interval") {
+            const long long v = std::strtoll(kv.value.c_str(), nullptr, 10);
+            // Same range Load() enforces, for the same reason: an out-of-range
+            // interval would either spin the refresh or freeze it.
+            if (v >= kMinIntervalMs && v <= kMaxIntervalMs) {
+                intervalMs = static_cast<UINT>(v);
+            }
+            continue;
+        }
+        // Everything else is a boolean. The accepted spellings are the ones a
+        // human writes in a file like this; anything else leaves the default
+        // rather than guessing.
+        bool on = false;
+        if (kv.value == "1" || kv.value == "true" || kv.value == "yes" ||
+            kv.value == "on") {
+            on = true;
+        } else if (kv.value == "0" || kv.value == "false" ||
+                   kv.value == "no" || kv.value == "off") {
+            on = false;
+        } else {
+            continue;
+        }
+        if (kv.key == "autoRefresh") {
+            autoRefresh = on;
+        } else if (kv.key == "resolveHosts") {
+            resolveHosts = on;
+        } else if (kv.key == "topMost") {
+            topMost = on;
+        } else if (kv.key == "trayEnabled") {
+            trayEnabled = on;
+        } else if (kv.key == "trafficEnabled") {
+            // Only ever honoured as true when the ETW kernel logger actually
+            // starts, which needs elevation - the same rule the registry path
+            // follows, recorded on Save().
+            trafficEnabled = on;
+        }
+    }
     return true;
 }
 

@@ -918,6 +918,19 @@ void MainWindow::OnCreate() {
     socketTraffic_ = new SocketTrafficSampler();
     for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
     visibleCols_ = kDefaultVisibleCols;
+    // 9.2.10: the portable `wintcp.ini` supplies DEFAULTS only, so it is
+    // applied BEFORE settings_.Load() and an existing user's saved settings
+    // always win. A file that exists but will not parse is reported once
+    // rather than swallowed: a portable copy that quietly does nothing is
+    // worse than one that says so.
+    wchar_t exePath[MAX_PATH] = {0};
+    const DWORD pn = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (pn != 0 && pn < MAX_PATH) {
+        std::wstring iniErr;
+        if (settings_.ApplyPortableDefaults(exePath, &iniErr) && !iniErr.empty()) {
+            UpdateStatusBar(L"wintcp.ini: " + iniErr);
+        }
+    }
     settings_.Load();                       // (pre-set by Create())
 
     // 9.1.5: auto-load the remembered GeoIP database on startup. This is
@@ -1658,6 +1671,19 @@ void MainWindow::SyncColumnMenuChecks() {
 //     below is copied by value.
 void MainWindow::RunAlerts() {
     Settings s;
+    // 9.2.10: portable defaults first, so the registry always wins. Silent on
+    // a missing file; a file that exists but will not parse is reported once
+    // on the status line, because a portable copy that quietly does nothing
+    // is worse than one that says so.
+    wchar_t exePath[MAX_PATH] = {0};
+    const DWORD pn = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring portableErr;
+    if (pn != 0 && pn < MAX_PATH) {
+        s.ApplyPortableDefaults(exePath, &portableErr);
+    }
+    if (!portableErr.empty()) {
+        UpdateStatusBar(L"wintcp.ini: " + portableErr);
+    }
     if (!s.Load()) return;              // no store, no alerting - say nothing
     alertHint_.clear();
     suppressedAlerts_ = 0;
