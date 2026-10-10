@@ -50,6 +50,18 @@ const int kPdhReopenRetryTicks = 10;
 // IF_TYPE_SOFTWARE_LOOPBACK - numeric to keep the include surface small.
 const ULONG kIfTypeSoftwareLoopback = 24;
 
+// Percentages are reported on a 0..100 scale so a value is renderable as-is.
+// Same name as ProcStats.cpp's and SysStats.cpp's copies on purpose - a grep
+// should find every place a percent scale is assumed.
+const double kPctScale = 100.0;
+
+// Sanity ceiling on a per-direction network rate: 100 Gbit/s. An interface
+// table reset (replug, counter rollover) shows up as one enormous delta, and
+// without this it would be drawn as a full-height spike that flattens every
+// real sample on the panel. 8 bits per byte, so bits become bytes.
+const double kNetRateCapBitsPerSec = 100.0e9;
+const double kBitsPerByte = 8.0;
+
 const COLORREF kLightBg   = RGB(0xFF, 0xFF, 0xFF);
 const COLORREF kLightText = RGB(0x20, 0x20, 0x20);
 const COLORREF kLightGrid = RGB(0xDD, 0xDD, 0xDD);
@@ -59,6 +71,35 @@ const COLORREF kDarkGrid  = RGB(0x4A, 0x4A, 0x4A);
 
 const COLORREF kLineA = RGB(0x00, 0x78, 0xD7);   // primary (CPU / R)
 const COLORREF kLineB = RGB(0xCA, 0x6E, 0x00);   // secondary (W)
+
+// Default window size, in the metric grid every MulDiv in this file is authored
+// on. Wide and tall enough that four stacked panels each get a trace that can
+// be read rather than a hairline.
+const int kChartsDefaultWidth = 680;
+const int kChartsDefaultHeight = 640;
+
+// Smallest size the four panels can still be laid out in. Below this the
+// per-panel geometry in OnPaint would go negative and draw nothing at all, so
+// the window refuses the resize instead.
+const int kChartsMinTrackWidth = 420;
+const int kChartsMinTrackHeight = 340;
+
+// The DPI every MulDiv in this file scales FROM. It is USER_DEFAULT_SCREEN_DPI
+// (96) - the number Utils.cpp and FontCache.cpp carry as kDefaultScreenDpi -
+// but here it is the grid the metrics were authored on rather than a fallback,
+// so it has its own name to say which role it plays.
+const int kMetricsDpi = 96;
+
+// Floor for an auto-scaled byte-rate panel, in bytes/second. Same value and
+// name as ChartExport.cpp's kMinAutoScale: the export has to report the
+// ceiling the panel draws, so the two floors cannot disagree.
+const double kMinAutoScale = 64.0 * 1024.0;
+
+// Panel caption and y-axis label widths. A caption carries two FormatBps
+// strings plus byte totals, so it is the longer of the two; every swprintf_s
+// in this file truncates rather than overruns, so both are slack.
+constexpr size_t kCaptionChars = 160;
+constexpr size_t kScaleLabelChars = 64;
 
 ULONGLONG FtToU64(const FILETIME& ft) {
     ULARGE_INTEGER u = {};
@@ -141,8 +182,10 @@ void ChartsWindow::Show(HWND owner, bool dark) {
         hwnd_ = ::CreateWindowExW(
             0, kClassName, L"WinTCP - Performance graphs",
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
-            CW_USEDEFAULT, ::MulDiv(680, static_cast<int>(dpi), 96),
-            ::MulDiv(640, static_cast<int>(dpi), 96), owner, nullptr,
+            CW_USEDEFAULT, ::MulDiv(kChartsDefaultWidth, static_cast<int>(dpi),
+                                    kMetricsDpi),
+            ::MulDiv(kChartsDefaultHeight, static_cast<int>(dpi),
+                     kMetricsDpi), owner, nullptr,
             ::GetModuleHandleW(nullptr), this);
         if (hwnd_ == nullptr) return;
         CenterOnOwner(owner);
@@ -242,8 +285,10 @@ LRESULT ChartsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             // Keep all four panels paintable.
             const UINT dpi = QueryDpiForWindow(hwnd_);
             auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-            mmi->ptMinTrackSize.x = ::MulDiv(420, static_cast<int>(dpi), 96);
-            mmi->ptMinTrackSize.y = ::MulDiv(340, static_cast<int>(dpi), 96);
+            mmi->ptMinTrackSize.x =
+                ::MulDiv(kChartsMinTrackWidth, static_cast<int>(dpi), kMetricsDpi);
+            mmi->ptMinTrackSize.y =
+                ::MulDiv(kChartsMinTrackHeight, static_cast<int>(dpi), kMetricsDpi);
             return 0;
         }
         case WM_DPICHANGED: {
@@ -302,7 +347,7 @@ void ChartsWindow::Sample() {
                                         static_cast<double>(totalD);
                 if (busy < 0.0) busy = 0.0;
                 if (busy > 1.0) busy = 1.0;
-                cpuPct_ = busy * 100.0;
+                cpuPct_ = busy * kPctScale;
                 cpuOk = true;
             }
         }
@@ -321,7 +366,7 @@ void ChartsWindow::Sample() {
         memUsed_ = ms.ullTotalPhys - ms.ullAvailPhys;
         // Derive the percentage from the same two numbers the caption
         // prints instead of dwMemoryLoad.
-        memPct_ = 100.0 * static_cast<double>(memUsed_) /
+        memPct_ = kPctScale * static_cast<double>(memUsed_) /
                   static_cast<double>(memTotal_);
         PushCapped(memHist_, memPct_, kMaxSamples);
     }
@@ -426,7 +471,8 @@ void ChartsWindow::Sample() {
                 const ULONGLONG outD = outOctets - prevNetOut_;
                 // Guard against table resets (interface replug shows up
                 // as a huge spike): clamp to 100 Gbit/s per direction.
-                const double cap = 100.0e9 / 8.0 * secs;
+                const double cap =
+                    kNetRateCapBitsPerSec / kBitsPerByte * secs;
                 netRecvBps_ = (static_cast<double>(inD) > cap)
                                   ? 0.0
                                   : static_cast<double>(inD) / secs;
@@ -457,7 +503,7 @@ void ChartsWindow::OnPaint() {
 
     const UINT dpi = QueryDpiForWindow(hwnd_);
     const auto px = [dpi](int v) {
-        return ::MulDiv(v, static_cast<int>(dpi), 96);
+        return ::MulDiv(v, static_cast<int>(dpi), kMetricsDpi);
     };
 
     // Double buffer (avoids flicker at 1 Hz repaints).
@@ -491,7 +537,7 @@ void ChartsWindow::OnPaint() {
     // Captions exist only once their source produced a real reading
     // no fabricated "0.0 %" before the first delta.
     std::wstring cpuCap, memCap, diskCap, netCap;
-    wchar_t buf[160] = {0};
+    wchar_t buf[kCaptionChars] = {0};
     if (!cpuHist_.empty()) {
         ::swprintf_s(buf, L"%.1f %%", cpuPct_);
         cpuCap = buf;
@@ -518,8 +564,8 @@ void ChartsWindow::OnPaint() {
     }
 
     const Panel defs[4] = {
-        {L"CPU", &cpuHist_, nullptr, cpuCap, 100.0, nullptr},
-        {L"Memory", &memHist_, nullptr, memCap, 100.0, nullptr},
+        {L"CPU", &cpuHist_, nullptr, cpuCap, kPctScale, nullptr},
+        {L"Memory", &memHist_, nullptr, memCap, kPctScale, nullptr},
         {L"Disk", &diskReadHist_, &diskWriteHist_, diskCap, 0.0,
          diskAvailable_ ? nullptr : L"n/a \u2014 performance counters unavailable"},
         {L"Network", &netRecvHist_, &netSendHist_, netCap, 0.0, nullptr},
@@ -582,10 +628,10 @@ void ChartsWindow::OnPaint() {
             double yMax = d.fixedMax;
             if (yMax <= 0.0) {
                 yMax = MaxOf(*d.a, (d.b != nullptr) ? *d.b : *d.a) * 1.2;
-                if (yMax < 64.0 * 1024.0) yMax = 64.0 * 1024.0;
+                if (yMax < kMinAutoScale) yMax = kMinAutoScale;
             }
             // Scale label (top-right inside the chart).
-            wchar_t scale[64] = {0};
+            wchar_t scale[kScaleLabelChars] = {0};
             if (d.fixedMax > 0.0)
                 ::swprintf_s(scale, L"%.0f %%", yMax);
             else
