@@ -44,14 +44,20 @@
 // The four GUIDs this module needs, taken from netfw.h's own DECLSPEC_UUID
 // declarations so that no import library is required (see the note above).
 namespace wintcp {
+
+// Defined here rather than in the anonymous namespace, because BlockConn.h
+// declares it extern and every rule this module creates - the existing
+// connection blocks and the 9.5.5 general rules - has to be NAMEable from
+// the public half of this file. Keeping it in an anonymous namespace would
+// shadow the declaration and give the public code a different object.
+const wchar_t* const kRuleNamePrefix = L"WinTCP block: ";
+
 namespace {
 
 constexpr CLSID kClsidPolicy2 = __uuidof(NetFwPolicy2);
 constexpr CLSID kClsidRule = __uuidof(NetFwRule);
 constexpr IID kIidPolicy2 = __uuidof(INetFwPolicy2);
 constexpr IID kIidRule = __uuidof(INetFwRule);
-
-const wchar_t* const kRuleNamePrefix = L"WinTCP block: ";
 
 // "error %lu" plus NUL, and "0x%08lX" plus NUL. Both are fixed formats over a
 // bounded value, and swprintf_s truncates rather than overruns.
@@ -669,7 +675,332 @@ void RemoveRuleQuiet(INetFwRules* rules, const std::wstring& name) {
     }
 }
 
+// ========================================================================
+// 9.5.5 - the general firewall rule
+// ========================================================================
+//
+// A second writer beside EnsureRule, deliberately: BlockConnection's two rules
+// are a shipped, gated behaviour and this was NOT going to be a refactor of it.
+// EnsureRule stays exactly as it is; this is the generalized path.
+
+// Sanitise one scope value into the rule name. Determined by the value alone,
+// so two rules that differ anywhere in their scope get different names, and
+// the same rule always gets the same name - which is what makes
+// kAlreadyPresent work. An empty field becomes "-" rather than vanishing, so
+// "at its default" and "not stated" cannot collide with a real value.
+std::wstring FwRuleNameToken(const std::wstring& value) {
+    if (value.empty()) {
+        return L"-";
+    }
+    // Escaped rather than substituted for. A single "_" would make several
+    // distinct inputs collide - "a/b" and "a_b" would become the same token,
+    // so one rule would silently stand in for another - so every unsafe
+    // character is replaced by "_" plus its own hex value, which is unique
+    // per character and kept inside the name-length budget.
+    std::wstring token;
+    token.reserve(value.size());
+    for (const wchar_t ch : value) {
+        // The name is the only handle for finding the rule again, so anything
+        // the firewall or the shell would mangle is replaced rather than
+        // passed through.
+        const bool safe = (ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') ||
+                          (ch >= L'0' && ch <= L'9') || ch == L'.' || ch == L',' ||
+                          ch == L'-';
+        if (safe) {
+            token.push_back(ch);
+            continue;
+        }
+        static const wchar_t kHex[] = L"0123456789ABCDEF";
+        token.push_back(L'_');
+        token.push_back(kHex[(static_cast<uint32_t>(ch) >> 12) & 0xF]);
+        token.push_back(kHex[(static_cast<uint32_t>(ch) >> 8) & 0xF]);
+        token.push_back(kHex[(static_cast<uint32_t>(ch) >> 4) & 0xF]);
+        token.push_back(kHex[static_cast<uint32_t>(ch) & 0xF]);
+    }
+    return token;
+}
+
+}  // namespace
+
+// ========================================================================
+// 9.5.5 - the general firewall rule (public)
+// ========================================================================
+//
+// Deliberately NOT in the anonymous namespace: these are the definitions the
+// selftest links against and the product calls, so what is tested is what
+// ships - the same rule PromptDialog's TemplateFits and
+// BlockedPeersTemplateCapacity follow. A definition here that was also
+// declared in BlockConn.h inside an anonymous namespace would be a separate
+// function with the same name, which is precisely the ambiguity the compiler
+// just reported.
+
+bool ValidateFwRule(const FwRule& rule, std::wstring* error) {
+    // Ports need a concrete protocol. Measured on this machine: with
+    // Protocol = ANY, put_LocalPorts and put_RemotePorts return E_INVALIDARG
+    // for every value tried, so the restriction could never be applied.
+    // Refusing is better than creating a rule without its ports.
+    const bool restrictsPorts =
+        rule.localPorts != L"*" || rule.remotePorts != L"*";
+    if (rule.protocol == 0 && restrictsPorts) {
+        SetError(error,
+                 L"a rule that restricts ports must specify a concrete "
+                 L"protocol (tcp or udp): the firewall API rejects port "
+                 L"restrictions on protocol any");
+        return false;
+    }
+    if (rule.protocol != 0 && rule.protocol != 6 && rule.protocol != 17) {
+        SetError(error,
+                 L"protocol must be 6 (tcp), 17 (udp) or 0 (any); got " +
+                     std::to_wstring(static_cast<unsigned>(rule.protocol)));
+        return false;
+    }
+
+    // The address field is passed to the firewall verbatim. It has to be
+    // something: an empty string is not "*", and a rule with no address field
+    // is not a rule the user asked for.
+    if (rule.remoteAddress.empty()) {
+        SetError(error,
+                 L"the remote address must be \"*\" or an address, list, or "
+                 L"CIDR range; an empty field is not the same as any");
+        return false;
+    }
+
+    // An empty port field is not "*" for the same reason.
+    if (rule.localPorts.empty() || rule.remotePorts.empty()) {
+        SetError(error,
+                 L"a port field must be \"*\" or a port list; an empty field "
+                 L"is not the same as any");
+        return false;
+    }
+
+    // The process path becomes the rule's ApplicationName. It has to be a
+    // path: a bare program name is resolved against a working directory this
+    // tool does not control, which is how "block chrome" ends up blocking a
+    // different program that happens to live in the service's cwd.
+    if (!rule.processPath.empty()) {
+        if (rule.processPath.find(L'\\') == std::wstring::npos) {
+            SetError(error,
+                     L"a process rule needs the full image path, not a bare "
+                     L"program name: the firewall resolves a bare name "
+                     L"against a working directory this tool does not control");
+            return false;
+        }
+        if (!IsLabelSafe(rule.processPath)) {
+            SetError(error,
+                     L"the process path contains characters the firewall "
+                     L"refuses in an application name");
+            return false;
+        }
+    }
+
+    // The name cap is the firewall's, and kMaxRuleNameChars is what is enforced.
+    const std::wstring name = BuildFwRuleName(rule);
+    if (name.size() > kMaxRuleNameChars) {
+        SetError(error, L"the rule name would be " +
+                            std::to_wstring(name.size()) +
+                            L" characters, over the " +
+                            std::to_wstring(kMaxRuleNameChars) +
+                            L" the firewall allows; shorten the label");
+        return false;
+    }
+    return true;
+}
+
+std::wstring BuildFwRuleName(const FwRule& rule) {
+    std::wstring name = wintcp::kRuleNamePrefix;
+    name += rule.inbound ? L"in" : L"out";
+    name += L"-";
+    name += rule.allow ? L"allow" : L"block";
+    name += L"-";
+    name += (rule.protocol == 0)   ? L"any"
+             : (rule.protocol == 6) ? L"tcp"
+                                    : L"udp";
+    name += L"-";
+    name += FwRuleNameToken(rule.remoteAddress);
+    name += L"-";
+    name += FwRuleNameToken(rule.localPorts);
+    name += L"-";
+    name += FwRuleNameToken(rule.remotePorts);
+    name += L"-";
+    name += FwRuleNameToken(rule.processPath);
+    if (!rule.service.empty()) {
+        name += L"-";
+        name += FwRuleNameToken(rule.service);
+    }
+    if (name.size() >= kMaxRuleNameChars) {
+        return name;   // identity preserved; the label is what is dropped
+    }
+    if (!rule.label.empty()) {
+        const size_t room = kMaxRuleNameChars - name.size() - 1;
+        const std::wstring label =
+            rule.label.substr(0, (std::min)(room, rule.label.size()));
+        if (!label.empty()) {
+            name += L"-";
+            name += label;
+        }
+    }
+    return name;
+}
+
+FwRuleOutcome AddFwRule(const FwRule& rule, std::wstring* name,
+                        std::wstring* error) {
+    if (name != nullptr) {
+        name->clear();
+    }
+    std::wstring why;
+    if (!ValidateFwRule(rule, &why)) {
+        SetError(error, why);
+        return FwRuleOutcome::kFailed;
+    }
+
+    const std::wstring ruleName = BuildFwRuleName(rule);
+    std::unique_ptr<BStr> procGuard;
+    std::unique_ptr<BStr> svcGuard;
+
+    FwSession session;
+    if (!session.Open(error)) {
+        return FwRuleOutcome::kFailed;
+    }
+    INetFwRules* rules = session.rules();
+
+    // An identity that already exists is not an error: the rule the user asked
+    // for is already in place. Reported distinctly so a caller can say "already
+    // blocked" the way BlockConnection already does.
+    {
+        ComPtr<INetFwRule> existing;
+        BStr bname(ruleName);
+        if (bname.valid() && SUCCEEDED(rules->Item(bname, existing.receive())) &&
+            existing) {
+            if (name != nullptr) {
+                *name = ruleName;
+            }
+            return FwRuleOutcome::kAlreadyPresent;
+        }
+    }
+
+    BStr bname(ruleName);
+    BStr baddr(rule.remoteAddress);
+    BStr blp(rule.localPorts);
+    BStr brp(rule.remotePorts);
+    if (!rule.processPath.empty()) {
+        procGuard.reset(new BStr(rule.processPath));
+        if (!procGuard->valid()) {
+            SetError(error, L"out of memory allocating the process path");
+            return FwRuleOutcome::kFailed;
+        }
+    }
+    if (!rule.service.empty()) {
+        svcGuard.reset(new BStr(rule.service));
+        if (!svcGuard->valid()) {
+            SetError(error, L"out of memory allocating the service name");
+            return FwRuleOutcome::kFailed;
+        }
+    }
+    if (!bname.valid() || !baddr.valid() || !blp.valid() || !brp.valid()) {
+        SetError(error, L"out of memory allocating rule strings");
+        return FwRuleOutcome::kFailed;
+    }
+
+    ComPtr<INetFwRule> fwRule;
+    HRESULT hr = ::CoCreateInstance(kClsidRule, nullptr, CLSCTX_INPROC_SERVER,
+                                    kIidRule,
+                                    reinterpret_cast<void**>(fwRule.receive()));
+    if (FAILED(hr) || !fwRule) {
+        SetError(error,
+                 L"CoCreateInstance(CLSID_NetFwRule) failed: " + FormatHresult(hr));
+        return FwRuleOutcome::kFailed;
+    }
+
+    const NET_FW_RULE_DIRECTION dir =
+        rule.inbound ? NET_FW_RULE_DIR_IN : NET_FW_RULE_DIR_OUT;
+    const NET_FW_ACTION action = rule.allow ? NET_FW_ACTION_ALLOW
+                                            : NET_FW_ACTION_BLOCK;
+
+    struct Prop {
+        const wchar_t* what;
+        HRESULT hr;
+    };
+    // The description carries the netsh incantation, the same as
+    // EnsureRule's, so a user who reads the rule in WF.msc knows how to remove
+    // it by hand without this tool.
+    std::wstring desc = L"Created by WinTCP. ";
+    desc += rule.allow ? L"Allow" : L"Block";
+    desc += rule.inbound ? L" inbound from " : L" outbound to ";
+    desc += rule.remoteAddress;
+    desc += L". Delete via WinTCP or 'netsh advfirewall firewall delete rule "
+            L"name=\"";
+    desc += ruleName;
+    desc += L"\"'.";
+    BStr bdesc(desc);
+    if (!bdesc.valid()) {
+        SetError(error, L"out of memory allocating the rule description");
+        return FwRuleOutcome::kFailed;
+    }
+
+    const Prop props[] = {
+        { L"Name", fwRule.get()->put_Name(bname) },
+        { L"Description", fwRule.get()->put_Description(bdesc) },
+        { L"Protocol", fwRule.get()->put_Protocol(rule.protocol) },
+        { L"LocalPorts", fwRule.get()->put_LocalPorts(blp) },
+        { L"RemotePorts", fwRule.get()->put_RemotePorts(brp) },
+        { L"RemoteAddresses", fwRule.get()->put_RemoteAddresses(baddr) },
+        { L"Direction", fwRule.get()->put_Direction(dir) },
+        { L"Action", fwRule.get()->put_Action(action) },
+        { L"Profiles", fwRule.get()->put_Profiles(kAllProfiles) },
+        { L"Enabled", fwRule.get()->put_Enabled(VARIANT_TRUE) },
+        { L"EdgeTraversal", fwRule.get()->put_EdgeTraversal(VARIANT_FALSE) },
+        // An empty ApplicationName would mean "any program"; a null BSTR is
+        // what passes "any" through.
+        { L"ApplicationName",
+          procGuard ? fwRule.get()->put_ApplicationName(*procGuard)
+                    : fwRule.get()->put_ApplicationName(nullptr) },
+        { L"ServiceName",
+          svcGuard ? fwRule.get()->put_ServiceName(*svcGuard)
+                   : fwRule.get()->put_ServiceName(nullptr) },
+    };
+    for (const Prop& p : props) {
+        if (FAILED(p.hr)) {
+            SetError(error, std::wstring(L"setting rule ") + p.what + L" failed: " +
+                                FormatHresult(p.hr));
+            return FwRuleOutcome::kFailed;
+        }
+    }
+
+    hr = rules->Add(fwRule.get());
+    if (FAILED(hr)) {
+        SetError(error, L"INetFwRules::Add failed: " + FormatHresult(hr));
+        return FwRuleOutcome::kFailed;
+    }
+
+    // Read it back, the same guarantee EnsureRule gives: Add can succeed while
+    // the rule is not retrievable, and a rule that exists but cannot be found
+    // is worse than one that failed - the user believes the peer is blocked.
+    {
+        ComPtr<INetFwRule> readBack;
+        BStr probe(ruleName);
+        const HRESULT item = rules->Item(probe, readBack.receive());
+        if (FAILED(item) || !readBack) {
+            SetError(error, L"INetFwRules::Add reported success but the rule \"" +
+                                ruleName + L"\" is not retrievable (" +
+                                FormatHresult(item) +
+                                L"); Windows Firewall is not accepting new rules "
+                                L"from this process - check that another "
+                                L"firewall product is not enforcing its own "
+                                L"policy");
+            rules->Remove(probe);
+            return FwRuleOutcome::kFailed;
+        }
+    }
+
+    if (name != nullptr) {
+        *name = ruleName;
+    }
+    return FwRuleOutcome::kCreated;
+}
+
 // --- layer 1: connection teardown -------------------------------------------
+
+namespace {
 
 // Enumerate the IPv4 TCP table and hand each row to 'fn' along with its index.
 bool ForEachIpv4TcpRow(bool (*fn)(const MIB_TCPROW&, void*), void* ctx,
