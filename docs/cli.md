@@ -460,8 +460,49 @@ A bookmark pins a **remote address + remote port**. That pair survives a reconne
 | `colour --address A --port P --tag N` | Changes only the color. Tags: `0` none, `1` red, `2` amber, `3` blue, `4` green. |
 | `list [--format json]` | The store. JSON keys: `address`, `port`, `tag`, `note`. |
 | `remove --address A --port P` | Deletes the bookmark; color and note go with it. |
+| `export --out FILE [--force]` | Writes every bookmark as one JSON file (schema `version: 1`). |
+| `import --in FILE [--yes]` | Reads one back and adds what it holds. |
 
 Bookmarks are stored per user in `HKCU`. The note is joined onto live rows, so `note:` is a real filter field, and the `pinned` column prints the color name.
+
+#### Moving bookmarks between machines
+
+`export` and `import` are how bookmarks travel to another machine or into a
+dotfiles repo. The file is a JSON document with an explicit `version`, and the
+keys are the same ones `list --format json` prints:
+
+```json
+{
+  "schema": "wintcp-bookmarks",
+  "version": 1,
+  "count": 2,
+  "bookmarks": [
+    {"address":"203.0.113.7","port":443,"tag":1,"note":"known good","when":1700000000},
+    {"address":"198.51.100.22","port":80,"tag":0,"note":"","when":0}
+  ]
+}
+```
+
+Three rules, all of them deliberate:
+
+- **The file is read IN FULL before anything is written.** A file that fails
+  to parse is refused whole, so a half-broken file can never leave you with
+  half your bookmarks. Verified by hand: a file whose *last* record is missing
+  a field is refused, and the good record before it does not arrive.
+- **`--out` refuses an existing file unless `--force`**, the same guard
+  `export --out` uses. Replacing a bookmark file silently is not something a
+  script should be able to do by accident.
+- **Import needs `--yes`**, like every other act verb, and prints its plan
+  before writing. Re-importing a file cannot discard a note: `add` already
+  refreshes an existing bookmark's timestamp and nothing else.
+
+Refused, with a reason: a missing, unknown or non-numeric `version`; a record
+that is not an object; one missing a field or carrying one of the wrong type;
+a fractional tag (a colour of `1.5` is not a colour); a port outside
+`0..65535`; an address that does not normalise; an unpaired surrogate; a
+control character inside a string; and trailing content or malformed JSON.
+An unknown extra key is **accepted**, so a future version of this file can add
+a field without breaking an older reader.
 
 ### `preset`
 
@@ -474,6 +515,47 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 | `show --name N` | The stored view as JSON. The state includes filter, sort column and direction, grouping, and the column mask (`colVisible`, a bitmask). |
 | `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing prints only its header and exits `0`, exactly as `list` does; `apply` takes no `--quiet` (that is `2`), so there is no match-or-not exit code to branch on. |
 | `delete --name N` | Removes a preset. |
+| `export --out FILE [--force]` | Writes every preset as one JSON file (schema `version: 1`). |
+| `import --in FILE [--yes]` | Reads one back and adds what it holds. |
+
+#### Moving presets between machines
+
+Same file shape and the same three rules as the bookmark file: read in full
+before writing, `--out` refuses an existing file without `--force`, and import
+needs `--yes` and prints its plan first.
+
+```json
+{
+  "schema": "wintcp-presets",
+  "version": 1,
+  "count": 1,
+  "presets": [
+    {"name":"listening sockets","filter":"state:listen exclude:127.","protoMask":15,
+     "stateFilter":4294967295,"sortColumn":6,"sortAsc":true,"grouped":false,
+     "frozen":false,"frozenAtMs":0,"preserveSelection":true,"colVisible":4493311,
+     "sources":0}
+  ]
+}
+```
+
+Every axis the file carries is an axis of the stored view, so a round trip
+restores exactly what was there — including the two that look redundant with a
+default (`sortAsc`, `preserveSelection`), because a preset that dropped one of
+those would open a view you never saved.
+
+Two refusals are preset-specific rather than shared with the bookmark file:
+
+- **The name must be one the storage layer would accept** (`Presets::IsValidName`
+  is the authority, not a second spelling of the rule). A backslash would
+  create a registry subkey and a control character is invisible in a dialog.
+- **A sort column outside the table is refused rather than clamped.** A view
+  that sorts on column 9999 is a view the renderer could not draw, and
+  clamping it would open a differently-sorted table than the file described.
+
+Import **refuses an existing name rather than silently replacing it**, reusing
+the never-overwrite contract `preset save` already has: it reports
+`imported 0 (already present, skipped: 1)` and names the preset it did not
+touch, and you pass `--force` and repeat if you meant to replace it.
 
 `wintcp.exe alert` reads and writes the threshold-alerting configuration. With no
 switches it prints the current state; with them it sets it. `--enable` and
