@@ -22,6 +22,7 @@
 #include "Elevate.h"
 #include "GeoIp.h"
 #include "Opt.h"
+#include "PresetFile.h"  // 9.2.10: the preset export/import codec
 #include "Presets.h"
 #include "ProcessInfo.h"
 #include "SocketTraffic.h"
@@ -3585,6 +3586,132 @@ CommandResult CmdBookmarkImport(const std::wstring& inPath, bool yes) {
         r.exitCode = kExitFail;
         r.err = "bookmark import partly failed: " + WideToUtf8(firstErr) +
                 "\r\n";
+    }
+    return r;
+}
+
+// ---- 9.2.10: preset export / import ------------------------------------------
+
+CommandResult CmdPresetExport(const std::wstring& outPath,
+                              bool forceOverwrite) {
+    CommandResult r;
+    if (outPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "preset export: --out <file> is required.\r\n";
+        return r;
+    }
+    std::wstring existsErr;
+    if (RefuseExistingOutput(L"preset export", outPath, forceOverwrite,
+                             &existsErr)) {
+        r.exitCode = kExitArgs;
+        r.err = WideToUtf8(existsErr);
+        return r;
+    }
+    // Presets::Load is strict - a preset that fails to read is skipped rather
+    // than written half - so a file this exports is a file of readable views.
+    std::vector<PresetRecord> items;
+    size_t unreadable = 0;
+    for (const std::wstring& name : Presets::List()) {
+        PresetRecord rec;
+        rec.name = name;
+        if (Presets::Load(name, &rec.view)) {
+            items.push_back(std::move(rec));
+        } else {
+            ++unreadable;
+        }
+    }
+    std::string json;
+    SerialisePresets(items, &json);
+    const std::wstring werr = WriteUtf8FileWithBom(outPath, json, false);
+    if (!werr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "preset export failed: " + WideToUtf8(werr) + "\r\n";
+        return r;
+    }
+    r.out = "exported " + std::to_string(items.size()) + " presets to " +
+            WideToUtf8(outPath) + "\r\n";
+    if (unreadable != 0) {
+        r.err = "warning: " + std::to_string(unreadable) +
+                " unreadable presets skipped.\r\n";
+    }
+    return r;
+}
+
+CommandResult CmdPresetImport(const std::wstring& inPath, bool yes) {
+    CommandResult r;
+    if (inPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "preset import: --in <file> is required.\r\n";
+        return r;
+    }
+
+    // Parse and plan BEFORE writing anything, exactly like the bookmark
+    // import: a file that will not parse leaves the presets that were there
+    // alone, and loading half a view is a view the user never saved.
+    std::string text;
+    std::wstring readErr = ReadUtf8File(inPath, &text);
+    if (!readErr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "preset import failed: could not read " + WideToUtf8(inPath) +
+                ": " + WideToUtf8(readErr) + "\r\n";
+        return r;
+    }
+    std::vector<PresetRecord> items;
+    std::wstring parseErr;
+    if (!ParsePresets(text, &items, &parseErr)) {
+        r.exitCode = kExitArgs;
+        r.err = "preset import refused " + WideToUtf8(inPath) + ": " +
+                WideToUtf8(parseErr) + "\r\n";
+        return r;
+    }
+
+    std::string plan = "import " + std::to_string(items.size()) +
+                       " presets from " + WideToUtf8(inPath) + "\r\n";
+    if (items.empty()) {
+        plan += "  (the file holds no presets; nothing to do)\r\n";
+    } else {
+        for (size_t i = 0; i < items.size() && i < 5; ++i) {
+            plan += "  " + WideToUtf8(items[i].name) + "\r\n";
+        }
+        if (items.size() > 5) {
+            plan += "  ... and " + std::to_string(items.size() - 5) + " more\r\n";
+        }
+    }
+    // The act-verb contract: 3 for no --yes, after the plan is built so
+    // `--dry-run` without `--yes` still shows what would happen.
+    if (!yes) {
+        return Refused("preset import");
+    }
+
+    // WITHOUT --force an existing name is refused rather than silently
+    // replaced. Presets::Save's default argument already never writes over an
+    // existing preset, and reusing that contract is what makes an import safe:
+    // the user confirms and repeats with --force, exactly as the GUI does.
+    size_t written = 0;
+    size_t skipped = 0;
+    std::wstring firstSkipped;
+    for (const PresetRecord& rec : items) {
+        if (Presets::Exists(rec.name)) {
+            ++skipped;
+            if (firstSkipped.empty()) firstSkipped = rec.name;
+            continue;
+        }
+        if (Presets::Save(rec.name, rec.view) != PresetSave::kCreated) {
+            if (firstSkipped.empty()) firstSkipped = rec.name;
+            continue;
+        }
+        ++written;
+    }
+    r.out = plan;
+    r.out += "imported " + std::to_string(written) +
+             (skipped != 0 ? " (already present, skipped: " +
+                                 std::to_string(skipped) + ")"
+                           : "") +
+             "\r\n";
+    if (skipped != 0) {
+        r.err = "presets already present were NOT replaced; pass --force to "
+                "overwrite them. First skipped: " +
+                WideToUtf8(firstSkipped) + "\r\n";
     }
     return r;
 }

@@ -447,6 +447,14 @@ CommandResult CmdBookmarkColour(const std::wstring& address, UINT port,
 
 // ---- preset ----------------------------------------------------------------
 CommandResult CmdPresetList(const std::string& format);
+
+// 9.2.10: the preset file. Same codec shape and the same all-or-nothing rule as
+// the bookmark one - a preset that loads half is a view the user never saved,
+// and unlike a bookmark the failure is subtle, because it is believed.
+CommandResult CmdPresetExport(const std::wstring& outPath,
+                              bool forceOverwrite);
+CommandResult CmdPresetImport(const std::wstring& inPath, bool yes);
+
 CommandResult CmdPresetSave(const std::wstring& name, const ViewState& view,
                             bool overwrite);
 CommandResult CmdPresetShow(const std::wstring& name);

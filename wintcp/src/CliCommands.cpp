@@ -476,24 +476,35 @@ const CommandHelp kCommandHelps[] = {
      "                              [--sort COL] [--asc|--desc]\r\n"
      "       wintcp.exe preset show --name N\r\n"
      "       wintcp.exe preset delete --name N\r\n"
-     "       wintcp.exe preset apply --name N [--limit N] [--columns SET]\r\n"
-     "                                  [--format S] [--sort COL] [--traffic]\r\n"
-     "\r\n"
+      "       wintcp.exe preset apply --name N [--limit N] [--columns SET]\r\n"
+      "                                  [--format S] [--sort COL] [--traffic]\r\n"
+      "       wintcp.exe preset export --out <file> [--force]\r\n"
+      "       wintcp.exe preset import --in <file> [--yes]\r\n"
+      "\r\n"
      "`save` never overwrites: an existing name exits 3 unless --force is\r\n"
      "given. `apply` prints the current table through the saved view, and the\r\n"
      "output switches you type on the command line are LAYERED OVER it: `apply\r\n"
      "--name web --limit 5 --columns pid,remote` is the web view, five rows,\r\n"
      "two columns. (Before, those switches were parsed and dropped, so the\r\n"
      "whole saved table came out in the preset's own columns.)\r\n"
-     "The same presets appear in the GUI File menu.\r\n"
-     "\r\n"
-     "Examples:\r\n"
-     "  wintcp.exe preset save --name web --filter \"port:443\" --sort pid\r\n"
-     "  wintcp.exe preset list\r\n"
-     "  wintcp.exe preset show --name web\r\n"
-     "  wintcp.exe preset apply --name web\r\n"
-     "  wintcp.exe preset apply --name web --limit 10 --columns pid,process,remote\r\n"
-     "  wintcp.exe preset delete --name web\r\n"},
+      "The same presets appear in the GUI File menu.\r\n"
+      "\r\n"
+      "export / import move the whole set as one JSON file (schema version 1).\r\n"
+      "The file is read IN FULL before anything is written, so a file that\r\n"
+      "fails to parse is refused whole and leaves the presets that were there\r\n"
+      "alone - loading half a view is a view you never saved. import refuses a\r\n"
+      "name that already exists rather than silently replacing it; pass --force\r\n"
+      "to overwrite, exactly like `save`.\r\n"
+      "\r\n"
+      "Examples:\r\n"
+      "  wintcp.exe preset save --name web --filter \"port:443\" --sort pid\r\n"
+      "  wintcp.exe preset list\r\n"
+      "  wintcp.exe preset show --name web\r\n"
+      "  wintcp.exe preset apply --name web\r\n"
+      "  wintcp.exe preset apply --name web --limit 10 --columns pid,process,remote\r\n"
+      "  wintcp.exe preset export --out presets.json\r\n"
+      "  wintcp.exe preset import --in presets.json --yes\r\n"
+      "  wintcp.exe preset delete --name web\r\n"},
     {"export",
      "export - write the table to a file\r\n"
      "\r\n"
@@ -1509,9 +1520,10 @@ const VerbSwitches kVerbSwitches[] = {
      {L"bookmark",
       // 9.2.10: --out/--in/--yes/--force for the export and import subverbs.
       L"--address --port --tag --note --format --out --in --yes --force"},
-    {L"preset",
-     L"--name --filter --sort --asc --desc --force --format --columns "
-     L"--limit --traffic --dns --db --asn-db --group"},
+     {L"preset",
+      // 9.2.10: --out/--in/--yes for the export and import subverbs.
+      L"--name --filter --sort --asc --desc --force --format --columns "
+      L"--limit --traffic --dns --db --asn-db --group --out --in --yes"},
     {L"export",
      // --limit is LISTED even though it is refused further down. That is
      // deliberate: the generic D24 message ("this switch is not one of this
@@ -2270,8 +2282,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         // go through the same codec so a file this tool writes is a file it can
         // read back - pinned by a round-trip test in Bench.cpp.
         if (sub == L"export") {
-            const CommandResult r =
-                CmdBookmarkExport(a.out, a.force);
+            const CommandResult r = CmdBookmarkExport(a.out, a.force);
             Emit(r);
             return r.exitCode;
         }
@@ -2358,6 +2369,17 @@ int RunCliCommand(int argc, wchar_t** argv) {
             SnapshotSource src;
             const CommandResult r = CmdPresetApply(src, a.name, nullptr,
                                                     &over);
+            Emit(r);
+            return r.exitCode;
+        }
+        // 9.2.10: the file, beside bookmark's.
+        if (sub == L"export") {
+            const CommandResult r = CmdPresetExport(a.out, a.force);
+            Emit(r);
+            return r.exitCode;
+        }
+        if (sub == L"import") {
+            const CommandResult r = CmdPresetImport(a.in, a.yes);
             Emit(r);
             return r.exitCode;
         }
