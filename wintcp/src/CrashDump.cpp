@@ -28,12 +28,32 @@ namespace {
 // parsing.
 constexpr int kMaxCrashDumps = 10;
 
+// Every path the crash handler formats goes into a buffer of twice MAX_PATH.
+// Same reasoning Elevate.cpp gives for the same width: a truncated path points
+// at a file that does not exist, and here there is no second attempt. The
+// filter cannot heap-allocate, so the width is one fixed constant rather than
+// something computed from the path.
+constexpr size_t kCrashPathChars = MAX_PATH * 2;
+
+// Prose added around a path. The breadcrumb line needs room for its fixed
+// wording; the stderr line needs a few more for the exception clause.
+constexpr size_t kCrashNoteSlackChars = 64;
+constexpr size_t kCrashMsgSlackChars = 128;
+
+// "YYYY-MM-DD HH:MM:SSZ" is 20 characters, so this is slack. The filter must
+// not depend on a locale to format a timestamp it is about to lose.
+constexpr size_t kCrashStampChars = 64;
+
+// "no minidump (<reason>)" plus NUL: the reason is one of six fixed strings,
+// and none is longer than a short sentence.
+constexpr size_t kCrashWhyChars = 256;
+
 // g_crashDir is resolved ONCE at startup (InstallCrashHandler). The crash
 // filter must NOT call the heap-allocating path that used to build this on
 // every crash: after STATUS_HEAP_CORRUPTION or exhaustion, the very act of
 // allocating can fault again and lose the dump. A plain null-terminated
 // static buffer sidesteps that entirely.
-wchar_t g_crashDir[MAX_PATH * 2] = {0};
+wchar_t g_crashDir[kCrashPathChars] = {0};
 
 std::wstring ResolveCrashDir() {
     // shell32.dll is delay-loaded, and this runs at startup - a DllAvailable
@@ -80,7 +100,7 @@ void EnsureDir(const wchar_t* dir) {
 // Best-effort throughout: any failure leaves the new dump in place, because
 // pruning must never endanger the artefact it was asked to make room for.
 void PruneOldDumps(const wchar_t* dir) {
-    wchar_t pattern[MAX_PATH * 2] = {0};
+    wchar_t pattern[kCrashPathChars] = {0};
     ::swprintf_s(pattern, L"%ls\\wintcp-*.dmp", dir);
     WIN32_FIND_DATAW fd = {};
     const HANDLE h = ::FindFirstFileW(pattern, &fd);
@@ -100,7 +120,7 @@ void PruneOldDumps(const wchar_t* dir) {
     } while (::FindNextFileW(h, &fd) != FALSE);
     ::FindClose(h);
     if (count > kMaxCrashDumps && oldest[0] != L'\0') {
-        wchar_t victim[MAX_PATH * 2] = {0};
+        wchar_t victim[kCrashPathChars] = {0};
         ::swprintf_s(victim, L"%ls\\%ls", dir, oldest);
         ::DeleteFileW(victim);
     }
@@ -134,23 +154,23 @@ void Narrow(const wchar_t* in, char* out, size_t cap) {
 // the path appended while there is progress to name it).
 void WriteCrashNote(const wchar_t* dir, const wchar_t* stamp, DWORD code,
                     const wchar_t* dumpPath, const char* what) {
-    wchar_t note[MAX_PATH * 2] = {0};
+    wchar_t note[kCrashPathChars] = {0};
     ::swprintf_s(note, L"%ls\\wintcp-last-crash.txt", dir);
 
-    char line2[MAX_PATH * 2 + 64] = {0};
+    char line2[kCrashPathChars + kCrashNoteSlackChars] = {0};
     if (what == nullptr && dumpPath != nullptr) {
-        char narrow[MAX_PATH * 2] = {0};
+        char narrow[kCrashPathChars] = {0};
         Narrow(dumpPath, narrow, sizeof(narrow));
         ::sprintf_s(line2, "handler ran; minidump: %s", narrow);
     } else if (what != nullptr && dumpPath != nullptr) {
-        char narrow[MAX_PATH * 2] = {0};
+        char narrow[kCrashPathChars] = {0};
         Narrow(dumpPath, narrow, sizeof(narrow));
         ::sprintf_s(line2, "handler ran; %s %s", what, narrow);
     } else {
         ::sprintf_s(line2, "handler ran; %s", (what != nullptr) ? what : "");
     }
 
-    char text[MAX_PATH * 2 + 256] = {0};
+    char text[kCrashPathChars + kCrashWhyChars] = {0};
     ::sprintf_s(text, "wintcp crashed at %ls UTC; exception 0x%08lX\r\n%s\r\n",
                 stamp, static_cast<unsigned long>(code), line2);
 
@@ -172,8 +192,8 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
     const DWORD code = (xp != nullptr && xp->ExceptionRecord != nullptr)
                            ? xp->ExceptionRecord->ExceptionCode
                            : 0xC0000005u;
-    wchar_t path[MAX_PATH * 2] = {0};
-    wchar_t stamp[64] = {0};
+    wchar_t path[kCrashPathChars] = {0};
+    wchar_t stamp[kCrashStampChars] = {0};
     bool dumped = false;
     // Why there is no dump - named precisely rather than as one catch-all.
     // Every failure used to report "dump directory unavailable", so a missing
@@ -245,7 +265,7 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
         if (dumped) {
             WriteCrashNote(g_crashDir, stamp, code, path, nullptr);
         } else {
-            char noDump[256] = {0};
+            char noDump[kCrashWhyChars] = {0};
             ::sprintf_s(noDump, "no minidump (%s)", why);
             WriteCrashNote(g_crashDir, stamp, code, nullptr, noDump);
         }
@@ -254,9 +274,9 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
     // not when there is not. stderr, not stdout: a crash report is
     // diagnostics, never data (the D4 rule), and a pipeline parsing stdout
     // must not receive it.
-    char msg[MAX_PATH * 2 + 128] = {0};
+    char msg[kCrashPathChars + kCrashMsgSlackChars] = {0};
     if (dumped) {
-        char narrow[MAX_PATH * 2] = {0};
+        char narrow[kCrashPathChars] = {0};
         Narrow(path, narrow, sizeof(narrow));
         ::sprintf_s(msg, "fatal: unhandled exception 0x%08lX; minidump: %s\r\n",
                     code, narrow);
