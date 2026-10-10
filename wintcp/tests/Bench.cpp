@@ -1640,6 +1640,13 @@ void CheckAlertRuleSerialisation(TestResult& r) {
           v.find(L"watch-cloudflare") == std::wstring::npos,
           WideToUtf8(v));
 }
+// 9.5.5: the dialog now has six controls (list + Delete / Enable / Disable /
+// Remove all / Close), up from four. The selftest and the writer share one
+// number so cdit and the capacity arithmetic cannot be edited out of step -
+// a mismatch is an out-of-bounds read inside the dialog manager, not a
+// compile error.
+constexpr int kDialogControls = 6;
+
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -3114,6 +3121,17 @@ TestResult RunSelfTest() {
             BlockedPeersTemplateFits(L"Blocked peers", &right);
         Check(r, "9.2.9.dialog.fills-a-right-sized-buffer",
               filled && right.size() <= cap + 64, "size=" + std::to_string(right.size()));
+
+        // 9.5.5: the editor added two buttons and a shorter list, so cdit
+        // moved from 4 to 6 and the capacity moved with it. A capacity that
+        // did NOT track cdit would be a buffer the dialog manager reads past
+        // the end of, which is the intermittent access violation
+        // PromptDialog.cpp is about - so the two are pinned together rather
+        // than trusted to have been edited in step.
+        Check(r, "9.2.9.dialog.control-count-matches-capacity",
+              BlockedPeersControlCount() == kDialogControls,
+              "cdit=" + std::to_string(BlockedPeersControlCount()) +
+                  " want " + std::to_string(kDialogControls));
     }
 
     // 3e-quart. 9.5.5 - the general firewall rule. Both functions under test
