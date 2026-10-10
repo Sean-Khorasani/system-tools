@@ -221,3 +221,95 @@ bool IsAncestorOf(const std::vector<TreeNodeInfo>& rows, DWORD pid,
 
 }  // namespace wintcp
 
+// ---- killing a tree ---------------------------------------------------------
+
+namespace wintcp {
+namespace {
+
+// Post-order over the tree: a node is appended AFTER all of its children, so
+// the plan is deepest-first. Iterative, with its own visited set, so a cycle
+// cannot loop and a deep chain cannot exhaust the stack.
+void AppendPostOrder(const ProcessTree& tree, std::vector<bool>* visited,
+                     std::vector<size_t>* depth, std::vector<size_t>* out,
+                     size_t node, size_t d) {
+    struct Frame {
+        size_t node;
+        size_t next;
+        size_t depth;
+    };
+    std::vector<Frame> stack;
+    stack.push_back({node, 0, d});
+    while (!stack.empty()) {
+        Frame& top = stack.back();
+        if (top.depth > kProcessTreeNodeMaxDepth) {
+            // Reported by the caller through the partial flag; the node is
+            // skipped rather than walked, because a chain that deep is not a
+            // shape this tool should recurse into on a live machine.
+            stack.pop_back();
+            continue;
+        }
+        const TreeNode& n = tree.nodes[top.node];
+        bool descended = false;
+        while (top.next < n.children.size()) {
+            const size_t child = n.children[top.next];
+            ++top.next;
+            if ((*visited)[child] || (*depth)[child] >= top.depth + 1) continue;
+            (*visited)[child] = true;
+            (*depth)[child] = top.depth + 1;
+            stack.push_back({child, 0, top.depth + 1});
+            descended = true;
+            break;
+        }
+        if (!descended) {
+            out->push_back(top.node);
+            stack.pop_back();
+        }
+    }
+}
+
+}  // namespace
+
+KillTreePlan PlanKillTree(const std::vector<TreeNodeInfo>& rows, DWORD rootPid,
+                          DWORD selfPid) {
+    KillTreePlan plan;
+    plan.rootPid = rootPid;
+    if (rows.empty() || rootPid == 0) return plan;
+
+    const ProcessTree tree = BuildProcessTree(rows);
+
+    // Find the root NODE (not the row): a PID appearing on several rows is one
+    // process, and the tree already deduplicated it by pid.
+    size_t rootNode = tree.nodes.size();
+    for (size_t i = 0; i < tree.nodes.size(); ++i) {
+        if (tree.nodes[i].info.pid == rootPid) {
+            rootNode = i;
+            break;
+        }
+    }
+    if (rootNode == tree.nodes.size()) return plan;   // no such process
+
+    plan.partial = tree.depthExceeded;
+    std::vector<bool> visited(tree.nodes.size(), false);
+    std::vector<size_t> depth(tree.nodes.size(), 0);
+    visited[rootNode] = true;
+    AppendPostOrder(tree, &visited, &depth, &plan.targets, rootNode, 0);
+
+    // 'selfPid' last, not absent: a tree that contains the caller can only be
+    // planned from the top, and a plan that quietly omits the root would read
+    // as "the whole tree died" when the caller is still running.
+    if (selfPid != 0) {
+        for (size_t i = 0; i < plan.targets.size(); ++i) {
+            if (tree.nodes[plan.targets[i]].info.pid == selfPid) {
+                const size_t me = plan.targets[i];
+                plan.targets.erase(plan.targets.begin() +
+                                   static_cast<ptrdiff_t>(i));
+                plan.targets.push_back(me);
+                break;
+            }
+        }
+    }
+    return plan;
+}
+
+}  // namespace wintcp
+

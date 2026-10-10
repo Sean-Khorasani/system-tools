@@ -2622,6 +2622,138 @@ void CheckExposure(TestResult& r) {
     }
 }
 
+// ---- 9.5.6: the kill plan -------------------------------------------------
+//
+// The decision half of a kill-tree: which processes die, in what order, and
+// which are refused. Pure, so it is testable and the ordering rules are
+// pinned. The PID-reuse guard stays the caller's - a plan is a snapshot and
+// the machine it describes has moved on by the time the first process dies.
+
+// ppidKnown defaults to true: a test wants a real parent unless it says
+// otherwise, and an "unknown parent" is a distinct case worth spelling out.
+static TreeNodeInfo TreeNode(DWORD pid, DWORD ppid, bool ppidKnown = true) {
+    TreeNodeInfo n;
+    n.pid = pid;
+    n.ppid = ppid;
+    n.ppidKnown = ppidKnown;
+    return n;
+}
+
+// The plan carries ROW indices; a test that reads it needs PIDs, and the
+// mapping is exactly what a caller does when it works the plan.
+static std::vector<DWORD> Pids(const std::vector<TreeNodeInfo>& rows,
+                               const KillTreePlan& plan) {
+    std::vector<DWORD> out;
+    for (size_t i : plan.targets) out.push_back(rows[i].pid);
+    return out;
+}
+static std::string PidsText(const std::vector<TreeNodeInfo>& rows,
+                            const KillTreePlan& plan) {
+    std::string s;
+    for (DWORD p : Pids(rows, plan)) s += std::to_string(p) + " ";
+    return s;
+}
+
+void CheckKillTree(TestResult& r) {
+    {
+        // A diamond: root 1 with children 2 and 3, both parented by 1, and
+        // 4 parented by 2. The plan must be POST-ORDER: a child always dies
+        // before its parent, so every process still has a living parent to
+        // answer to.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 1), TreeNode(4, 2)};
+        const KillTreePlan plan = PlanKillTree(rows, 1, 0);
+        Check(r, "9.5.6.kill.targets-are-post-order",
+              plan.targets.size() == 4 && Pids(rows, plan) == std::vector<DWORD>({4, 2, 3, 1}),
+              PidsText(rows, plan));
+        Check(r, "9.5.6.kill.root-is-remembered", plan.rootPid == 1, "");
+        Check(r, "9.5.6.kill.complete-plan", !plan.partial, "");
+    }
+    {
+        // A chain 1 -> 2 -> 3 -> 4: the deepest dies first.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 2), TreeNode(4, 3)};
+        const KillTreePlan plan = PlanKillTree(rows, 1, 0);
+        Check(r, "9.5.6.kill.deep-chain-last-in",
+              plan.targets.size() == 4 &&
+                  Pids(rows, plan) == std::vector<DWORD>({4, 3, 2, 1}),
+              PidsText(rows, plan));
+    }
+    {
+        // Killing from a MIDDLE node takes only that subtree: an ancestor
+        // must survive, and a sibling must survive.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 1), TreeNode(4, 2)};
+        const KillTreePlan plan = PlanKillTree(rows, 2, 0);
+        Check(r, "9.5.6.kill.middle-node-takes-only-its-subtree",
+              plan.targets.size() == 2 &&
+                  Pids(rows, plan) == std::vector<DWORD>({4, 2}),
+              PidsText(rows, plan));
+    }
+    {
+        // A forest: killing one root must not touch the other.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(10, 0), TreeNode(11, 10), TreeNode(20, 0),
+            TreeNode(21, 20)};
+        const KillTreePlan plan = PlanKillTree(rows, 20, 0);
+        Check(r, "9.5.6.kill.one-root-of-a-forest",
+              plan.targets.size() == 2 &&
+                  Pids(rows, plan) == std::vector<DWORD>({21, 20}),
+              PidsText(rows, plan));
+    }
+    {
+        // A cycle is planned through, not followed: the walk still terminates
+        // and the plan covers each node once.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(1, 3), TreeNode(2, 1), TreeNode(3, 2)};
+        const KillTreePlan plan = PlanKillTree(rows, 1, 0);
+        Check(r, "9.5.6.kill.cycle-terminates-and-covers-each-node",
+              plan.targets.size() == 3,
+              PidsText(rows, plan));
+    }
+    {
+        // The CALLER goes last, not absent. An absent root would read as "the
+        // whole tree died" while the caller is still running, and the caller
+        // refuses that step rather than exiting itself mid-plan.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 2)};
+        const KillTreePlan plan = PlanKillTree(rows, 1, 1);
+        Check(r, "9.5.6.kill.self-is-last-not-absent",
+              plan.targets.size() == 3 &&
+                  Pids(rows, plan) == std::vector<DWORD>({3, 2, 1}),
+              PidsText(rows, plan));
+    }
+    {
+        // An unknown root plans nothing, rather than planning everything.
+        const std::vector<TreeNodeInfo> rows = {TreeNode(1, 0)};
+        const KillTreePlan plan = PlanKillTree(rows, 999, 0);
+        Check(r, "9.5.6.kill.unknown-root-plans-nothing",
+              plan.targets.empty(), std::to_string(plan.targets.size()));
+    }
+    {
+        // A single-node tree is a one-target plan.
+        const std::vector<TreeNodeInfo> rows = {TreeNode(7, 0)};
+        const KillTreePlan plan = PlanKillTree(rows, 7, 0);
+        Check(r, "9.5.6.kill.single-node",
+              plan.targets.size() == 1 &&
+                  Pids(rows, plan) == std::vector<DWORD>({7}),
+              PidsText(rows, plan));
+    }
+    {
+        // A duplicate PID (two rows, one process) is one target: killing it
+        // twice would report a success the machine did not deliver.
+        const std::vector<TreeNodeInfo> rows = {
+            TreeNode(1, 0), TreeNode(1, 0), TreeNode(2, 1)};
+        const KillTreePlan plan = PlanKillTree(rows, 1, 0);
+        size_t ones = 0;
+        for (DWORD p : Pids(rows, plan)) {
+            if (p == 1) ++ones;
+        }
+        Check(r, "9.5.6.kill.duplicate-pid-is-one-target",
+              ones == 1 && plan.targets.size() == 2, PidsText(rows, plan));
+    }
+}
+
 constexpr int kDialogControls = 6;
 
 // 9.2.10 - the portable wintcp.ini grammar. Pure over a string, so the whole
@@ -10366,6 +10498,7 @@ static const unsigned char kClientHello[] = {
     CheckIniFile(r);
     CheckEmptyState(r);
     CheckProcessTree(r);
+    CheckKillTree(r);
     CheckSha256(r);
     CheckExposure(r);
     r.output += "selftest: ";

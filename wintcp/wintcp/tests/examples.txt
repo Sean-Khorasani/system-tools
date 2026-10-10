@@ -12,6 +12,9 @@ kill --select "local:port:49665" --dry-run
 kill --select "ipv4: local:port:49665" --dry-run
 kill --pid 999999
 kill --pid 999999 --dry-run
+killtree --pid 999999 ;expect=2
+killtree --pid 999999 --dry-run ;expect=2
+killtree --pid 999999 --yes ;expect=2
 # L2310: documented as ALWAYS refused (exit 2) - cli.md says so, because PID 4
 # owns no real image. Without the ;expect= annotation this line could not be
 # gated at all: an rc of 2 is exactly what this harness reads as a rejection.

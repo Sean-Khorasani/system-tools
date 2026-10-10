@@ -1500,10 +1500,11 @@ const VerbSwitches kVerbSwitches[] = {
     {L"stat", L"--format --watch --interval --count"},
     {L"sys", nullptr},    // alias: same as stat
     {L"details", L"--select --traffic --dns --dns-timeout --db --asn-db --signatures"},
-    {L"kill",
-     // 9.3.6: --close (ask only) and --force (terminate at once); the
-     // default stays the documented hybrid.
-     L"--pid --select --yes --dry-run --close --force"},
+     {L"kill",
+      // 9.3.6: --close (ask only) and --force (terminate at once); the
+      // default stays the documented hybrid.
+      L"--pid --select --yes --dry-run --close --force"},
+     {L"killtree", L"--pid --yes --dry-run --close --force"},
     {L"close", L"--select --yes --dry-run"},
      {L"block",
       // 9.5.5: `--rule` takes the six scope switches. They are only listed
@@ -2178,7 +2179,34 @@ int RunCliCommand(int argc, wchar_t** argv) {
             WriteErr("kill: --pid N or --select <filter> is required.\r\n");
             return 2;
         }
-        const CommandResult r = CmdKill(src, a.pid, mo);
+        SnapshotSource src0;
+        const CommandResult killed = CmdKill(src0, a.pid, mo);
+        Emit(killed);
+        return killed.exitCode;
+    }
+    if (cmd == L"killtree") {
+        // 9.5.6: the whole tree under a PID. One verb rather than a --tree
+        // switch on `kill`, because the two have different contracts: `kill`
+        // is all-or-nothing (it refuses before doing anything if the target
+        // cannot be ended), while a tree is best-effort by design - it ends
+        // what it can and reports what survived. A switch that silently
+        // switched contracts would be the swallowed-switch bug in plan form.
+        if (a.closeOnly && a.force) {
+            WriteErr("killtree: --close (never force) and --force (never ask) "
+                     "exclude each other. Pick one.\r\n");
+            return 2;
+        }
+        if (!a.hasPid) {
+            WriteErr("killtree: --pid N is required.\r\n");
+            return 2;
+        }
+        MutateOptions mo;
+        mo.yes = a.yes;
+        mo.dryRun = a.dryRun;
+        mo.closeOnly = a.closeOnly;
+        mo.forceNow = a.force;
+        SnapshotSource src;
+        const CommandResult r = CmdKillTree(src, a.pid, mo);
         Emit(r);
         return r.exitCode;
     }
