@@ -19,6 +19,12 @@ enum : int {
     kIdCancel = IDCANCEL,
 };
 
+// Read-back buffer for the edit control. Sized so it can never be the thing
+// that truncates: the control was limited to maxChars, and this is larger than
+// any caller may pass. The explicit length below keeps that true if a future
+// caller raises maxChars.
+constexpr size_t kEditReadChars = 1024;
+
 struct PromptState {
     std::wstring value;
     size_t maxChars = 0;
@@ -78,7 +84,7 @@ INT_PTR CALLBACK PromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (code != BN_CLICKED) break;
             if (id == kIdOk) {
                 HWND edit = GetDlgItem(hwnd, kIdEdit);
-                wchar_t buf[1024] = {0};
+                wchar_t buf[kEditReadChars] = {0};
                 if (edit != nullptr) {
                     // Bounded read: the control was limited to maxChars, and
                     // this buffer is larger than any caller may pass, so the
