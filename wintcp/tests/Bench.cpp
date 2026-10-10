@@ -3116,6 +3116,180 @@ TestResult RunSelfTest() {
               filled && right.size() <= cap + 64, "size=" + std::to_string(right.size()));
     }
 
+    // 3e-quart. 9.5.5 - the general firewall rule. Both functions under test
+    //        are PURE, so the platform constraints they enforce are verifiable
+    //        without COM and without elevation.
+    //
+    //        The constraint that matters most is one this file can only
+    //        document rather than test: Windows Firewall's conflict resolution
+    //        is BLOCK WINS, so an allow rule does NOT carve a process out of a
+    //        block rule. That is recorded in BlockConn.h and enforced by
+    //        review - nothing here can measure a policy decision the platform
+    //        makes at match time. Excluding a process has to be done by
+    //        scoping the block, which is what the process field is for.
+
+    // The name is the identity: same rule, same name; any difference, a
+    // different name. This is what makes kAlreadyPresent possible, and what
+    // stops two rules colliding on one name.
+    {
+        FwRule base;
+        base.remoteAddress = L"203.0.113.7";
+        base.remotePorts = L"443";
+        const std::wstring a = BuildFwRuleName(base);
+        Check(r, "9.5.5.name.same-rule-same-name",
+              a == BuildFwRuleName(base), WideToUtf8(a));
+
+        struct Diff {
+            const char* name;
+            void (*apply)(FwRule*);
+        };
+        const Diff diffs[] = {
+            {"direction", [](FwRule* r) { r->inbound = true; }},
+            {"action", [](FwRule* r) { r->allow = true; }},
+            {"protocol", [](FwRule* r) { r->protocol = 17; }},
+            {"address", [](FwRule* r) { r->remoteAddress = L"203.0.113.8"; }},
+            {"remote-ports", [](FwRule* r) { r->remotePorts = L"*"; }},
+            {"process",
+             [](FwRule* r) { r->processPath = L"C:\\Windows\\System32\\x.exe"; }},
+            {"service", [](FwRule* r) { r->service = L"MpsSvc"; }},
+        };
+        for (const Diff& d : diffs) {
+            FwRule changed = base;
+            d.apply(&changed);
+            const std::wstring other = BuildFwRuleName(changed);
+            Check(r, (std::string("9.5.5.name.") + d.name +
+                      "-changes-the-name")
+                         .c_str(),
+                  other != a,
+                  WideToUtf8(a) + " vs " + WideToUtf8(other));
+        }
+
+        // A label is on top of the identity, so the scope part must still be
+        // present in the name - not replaced by the label.
+        FwRule labelled = base;
+        labelled.label = L"mylabel";
+        const std::wstring withLabel = BuildFwRuleName(labelled);
+        Check(r, "9.5.5.name.label-is-appended-not-substituted",
+              withLabel.find(L"mylabel") != std::wstring::npos &&
+                  withLabel.find(a) != std::wstring::npos,
+              WideToUtf8(withLabel));
+
+        // A value at each scope's default must not collide with an explicit
+        // one. This catches the base-rule mistake: if a test's base rule
+        // already had local ports at "*", changing them to "*" changes
+        // nothing, and the check would pass for the wrong reason.
+        {
+            FwRule withStar;
+            withStar.remoteAddress = L"1.2.3.4";
+            withStar.localPorts = L"*";
+            withStar.remotePorts = L"*";
+            FwRule withNum = withStar;
+            withNum.localPorts = L"443";
+            Check(r, "9.5.5.name.local-ports-actually-differ",
+                  BuildFwRuleName(withStar) != BuildFwRuleName(withNum),
+                  WideToUtf8(BuildFwRuleName(withStar)) + " vs " +
+                      WideToUtf8(BuildFwRuleName(withNum)));
+        }
+
+        // Two values differing only in characters the firewall would mangle
+        // must not collide. "a/b" and "a_b" are DIFFERENT inputs, so they
+        // must not produce one name for two rules: the sanitiser escapes
+        // per-character rather than substituting a single underscore.
+        FwRule p1;
+        p1.remoteAddress = L"a/b";
+        FwRule p2;
+        p2.remoteAddress = L"a_b";
+        Check(r, "9.5.5.name.sanitises-rather-than-dropping",
+              BuildFwRuleName(p1) != BuildFwRuleName(p2),
+              WideToUtf8(BuildFwRuleName(p1)) + " vs " +
+                  WideToUtf8(BuildFwRuleName(p2)));
+        // The same escape must be applied consistently, so "a/b" and "a\\b"
+        // are also distinct.
+        FwRule p3;
+        p3.remoteAddress = L"a\\b";
+        Check(r, "9.5.5.name.sanitiser-is-consistent",
+              BuildFwRuleName(p1) != BuildFwRuleName(p3),
+              WideToUtf8(BuildFwRuleName(p1)) + " vs " +
+                  WideToUtf8(BuildFwRuleName(p3)));
+
+        // The name cap is the firewall's, so a long label is trimmed rather
+        // than pushing the name over the limit.
+        FwRule huge;
+        huge.label = std::wstring(1000, L'x');
+        Check(r, "9.5.5.name.long-label-is-trimmed",
+              BuildFwRuleName(huge).size() <= kMaxRuleNameChars,
+              "len=" + std::to_string(BuildFwRuleName(huge).size()));
+    }
+
+    // Validation: the platform constraints, refused BEFORE anything is written.
+    {
+        std::wstring err;
+
+        // The one that would silently produce a rule without its ports.
+        FwRule anyPorts;
+        anyPorts.protocol = 0;
+        anyPorts.localPorts = L"443";
+        Check(r, "9.5.5.validate.any-protocol-refuses-ports",
+              !ValidateFwRule(anyPorts, &err) && !err.empty(),
+              WideToUtf8(err));
+
+        FwRule anyOk = anyPorts;
+        anyOk.localPorts = L"*";
+        anyOk.remotePorts = L"*";
+        Check(r, "9.5.5.validate.any-protocol-allows-any-ports",
+              ValidateFwRule(anyOk, &err), WideToUtf8(err));
+
+        FwRule badProto;
+        badProto.protocol = 99;
+        Check(r, "9.5.5.validate.refuses-an-unknown-protocol",
+              !ValidateFwRule(badProto, &err), WideToUtf8(err));
+
+        // An empty field is not "*" and would be a rule nobody asked for.
+        FwRule emptyAddr;
+        emptyAddr.remoteAddress.clear();
+        Check(r, "9.5.5.validate.refuses-an-empty-address",
+              !ValidateFwRule(emptyAddr, &err), WideToUtf8(err));
+
+        FwRule emptyPort;
+        emptyPort.localPorts.clear();
+        Check(r, "9.5.5.validate.refuses-an-empty-port-field",
+              !ValidateFwRule(emptyPort, &err), WideToUtf8(err));
+
+        // A bare program name is the classic "it blocked the wrong thing":
+        // the firewall resolves it against a working directory this tool does
+        // not control.
+        FwRule bareProc;
+        bareProc.processPath = L"chrome.exe";
+        Check(r, "9.5.5.validate.refuses-a-bare-process-name",
+              !ValidateFwRule(bareProc, &err) && !err.empty(),
+              WideToUtf8(err));
+
+        FwRule fullProc;
+        fullProc.processPath = L"C:\\Program Files\\Google\\Chrome\\chrome.exe";
+        Check(r, "9.5.5.validate.accepts-a-full-process-path",
+              ValidateFwRule(fullProc, &err), WideToUtf8(err));
+
+        FwRule badProc;
+        badProc.processPath = L"C:\\a\nb.exe";
+        Check(r, "9.5.5.validate.refuses-an-unsafe-process-path",
+              !ValidateFwRule(badProc, &err), WideToUtf8(err));
+
+        // A CIDR inbound rule is the case that matters most for "stop this
+        // subnet reaching us", so it has to pass.
+        FwRule cidr;
+        cidr.inbound = true;
+        cidr.remoteAddress = L"203.0.113.0/24";
+        cidr.remotePorts = L"*";
+        Check(r, "9.5.5.validate.accepts-a-cidr-inbound-rule",
+              ValidateFwRule(cidr, &err), WideToUtf8(err));
+
+        // The struct's defaults must be a rule the user can actually ask for.
+        FwRule defaults;
+        defaults.remoteAddress = L"*";
+        Check(r, "9.5.5.validate.defaults-are-a-valid-rule",
+              ValidateFwRule(defaults, &err), WideToUtf8(err));
+    }
+
     // 3d3. The pre-join view. A filter with an enrichment clause had NO view
     //      applied when EnrichViewForList returned: the pre-join selection
     //      works off the flat rows (the joined columns were empty then), and
