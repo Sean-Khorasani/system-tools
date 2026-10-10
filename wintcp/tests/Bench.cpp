@@ -143,6 +143,12 @@ constexpr unsigned char kMmMap    = 0xE0;
 // with two different expressions - the drift A2 exists to prevent.
 constexpr size_t kMmMaxInlineSize = 29;
 
+// The extended-size marker: low five bits set to 29 do NOT mean "29 bytes" -
+// they mean "one more byte follows, and the real size is that byte plus 29"
+// (the same 29 for all three extended codes 29/30/31, so it is not the inline
+// limit above by coincidence - 29 IS kSizeExtended29, the first of them).
+constexpr unsigned char kMmSizeExtended = 29;
+
 unsigned char MmControlByte(unsigned char type, size_t size) {
     const size_t n = (size < kMmMaxInlineSize) ? size : kMmMaxInlineSize;
     return static_cast<unsigned char>(type | n);
@@ -214,8 +220,9 @@ void MmStr(std::vector<unsigned char>* out, const char* s) {
         // characters, so the first ASN feature to use this reader hit it
         // immediately, and no fixture could express a real ASN record until
         // this was fixed.
-        out->push_back(static_cast<unsigned char>(kMmString | 29u));
-        out->push_back(static_cast<unsigned char>(n - 29));
+        out->push_back(static_cast<unsigned char>(
+            kMmString | kMmSizeExtended));
+        out->push_back(static_cast<unsigned char>(n - kMmSizeExtended));
     }
     out->insert(out->end(), s, s + n);
 }
@@ -314,9 +321,18 @@ static_assert(kMmPtrTarget2 >= kMmPtr3Base,
 
 // A data-section pointer: control byte 001SSVVV, then SS+1 bytes (four for
 // SS=3, where VVV is IGNORED rather than being the top of the value).
+//
+// The SS field is bits 3-4, so each size code is that field shifted into
+// place. Written as the field rather than the finished mask so the shape of
+// the control byte stays visible: 0x08/0x10/0x18 are 0, 2 and 3 in bits 3-4,
+// not three unrelated magic numbers.
 void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
                size_t target) {
     constexpr unsigned char kCtrl = 0x20;  // 001_00_000: pointer, size code 0
+    constexpr unsigned kPtrSizeShift = 3;  // kPtrSizeShift in GeoIp.cpp:53
+    const auto ss = [kPtrSizeShift](unsigned sizeCode) {
+        return static_cast<unsigned char>((sizeCode << kPtrSizeShift) & 0x18u);
+    };
     if (sizeCode == 0) {
         out->push_back(
             static_cast<unsigned char>(kCtrl | ((target >> 8) & 0x07)));
@@ -324,13 +340,13 @@ void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
     } else if (sizeCode == 1) {
         const size_t v = target - kMmPtr2Base;
         out->push_back(
-            static_cast<unsigned char>(kCtrl | 0x08 | ((v >> 16) & 0x07)));
+            static_cast<unsigned char>(kCtrl | ss(1) | ((v >> 16) & 0x07)));
         out->push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
         out->push_back(static_cast<unsigned char>(v & 0xFF));
     } else if (sizeCode == 2) {
         const size_t v = target - kMmPtr3Base;
         out->push_back(
-            static_cast<unsigned char>(kCtrl | 0x10 | ((v >> 24) & 0x07)));
+            static_cast<unsigned char>(kCtrl | ss(2) | ((v >> 24) & 0x07)));
         out->push_back(static_cast<unsigned char>((v >> 16) & 0xFF));
         out->push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
         out->push_back(static_cast<unsigned char>(v & 0xFF));
@@ -339,7 +355,7 @@ void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
         // It is deliberately written as 111: a reader that used those three
         // bits as the top of the value would turn 1000 into 0x070003E8 and
         // report no country, and this is the only way to notice.
-        out->push_back(static_cast<unsigned char>(kCtrl | 0x18 | 0x07));
+        out->push_back(static_cast<unsigned char>(kCtrl | ss(3) | 0x07));
         for (int i = 3; i >= 0; --i) {
             out->push_back(
                 static_cast<unsigned char>((target >> (8 * i)) & 0xFF));
