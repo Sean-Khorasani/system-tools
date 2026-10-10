@@ -56,6 +56,7 @@
 #include "BookmarkFile.h"         // 9.2.10: the bookmark export/import codec
 #include "PresetFile.h"           // 9.2.10: the preset export/import codec
 #include "IniFile.h"              // 9.2.10: the portable wintcp.ini
+#include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -1989,6 +1990,143 @@ void CheckPresetFile(TestResult& r) {
                        nullptr), "");
     Check(r, "9.2.10.preset.refuse.null-output",
           !ParsePresets("{\"version\":1,\"presets\":[]}", nullptr, nullptr), "");
+}
+
+// 9.4.2 - the empty-state button decision. Pure, so the precedence rule and
+// the elevation rule are both pinned.
+//
+// The one that matters most is that [Run as admin] NEVER appears for a process
+// that is already elevated: offering "restart with more rights" to something
+// that already has them is a button that does nothing, and a user who clicks
+// it and sees nothing happen has been lied to.
+void CheckEmptyState(TestResult& r) {
+    // A quiet machine is NOT an empty state: with no rows at all there is
+    // nothing to measure traffic for and no filter to clear, so it is not a
+    // state regardless of which columns are shown. (Passing the traffic flags
+    // as "nothing measuring" with a visible column WOULD be the traffic state -
+    // that is the third case - so this passes them as "measuring".)
+    {
+        const EmptyStateOffer o = DecideEmptyState(0, 0, false, false, false, true,
+                                                   true, false, false);
+        Check(r, "9.4.2.quiet-machine-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0,
+              "caze=" + std::to_string((int)o.caze));
+    }
+    // A full table is not a state either.
+    {
+        const EmptyStateOffer o = DecideEmptyState(100, 100, false, true, false,
+                                                   false, true, false, true);
+        Check(r, "9.4.2.full-table-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
+    }
+
+    // ---- 1. no filter match ----
+    {
+        const EmptyStateOffer o = DecideEmptyState(50, 0, false, true, false,
+                                                   false, true, false, true);
+        Check(r, "9.4.2.filter-match.picked-first",
+              o.caze == EmptyStateCase::kNoFilterMatch, "");
+        Check(r, "9.4.2.filter-match.offers-clear-and-edit",
+              o.offerClear && o.offerEdit && !o.offerPickGeo &&
+                  !o.offerRunAdmin && o.ButtonCount() == 2,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // The reason it wins: with no rows at all the database and traffic
+        // answers are a question nobody asked, so it must not be shadowed.
+        const EmptyStateOffer o = DecideEmptyState(10, 0, true, false, false, true,
+                                                   false, false, false);
+        Check(r, "9.4.2.filter-match.outranks-geo-and-traffic",
+              o.caze == EmptyStateCase::kNoFilterMatch, "");
+    }
+
+    // ---- 2. no GeoIP database ----
+    {
+        const EmptyStateOffer o = DecideEmptyState(20, 20, true, false, false,
+                                                   false, true, false, false);
+        Check(r, "9.4.2.geo.picked-when-country-shown",
+              o.caze == EmptyStateCase::kNoGeoIp, "");
+        // No elevation button here: elevating does not install a database.
+        Check(r, "9.4.2.geo.offers-only-pick-mmdb",
+              o.offerPickGeo && !o.offerRunAdmin && !o.offerClear &&
+                  o.ButtonCount() == 1,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // Either database fills the cell, so with one loaded there is nothing
+        // to offer.
+        const EmptyStateOffer withGeo =
+            DecideEmptyState(20, 20, true, true, false, false, true, false, false);
+        const EmptyStateOffer withAsn =
+            DecideEmptyState(20, 20, true, false, true, false, true, false, false);
+        Check(r, "9.4.2.geo.either-database-satisfies",
+              withGeo.caze == EmptyStateCase::kNone &&
+                  withAsn.caze == EmptyStateCase::kNone,
+              "");
+    }
+    {
+        // A country column nobody is looking at is not an empty state.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, false, false,
+                                                   false, true, false, false);
+        Check(r, "9.4.2.geo.hidden-column-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
+    }
+
+    // ---- 3. no traffic ----
+    {
+        // NOT elevated: the one click that helps is a relaunch, so it appears.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, true,
+                                                   false, false, false);
+        Check(r, "9.4.2.traffic.picked-when-column-shown",
+              o.caze == EmptyStateCase::kNoTraffic, "");
+        Check(r, "9.4.2.traffic.unelevated-gets-the-relaunch",
+              o.offerRunAdmin && o.ButtonCount() == 1,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // ALREADY elevated: the relaunch button must NOT appear. A process
+        // that already has the rights cannot restart itself into higher ones,
+        // so the button would do nothing and the click would be a lie.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, true,
+                                                   false, false, true);
+        Check(r, "9.4.2.traffic.elevated-gets-no-button",
+              o.caze == EmptyStateCase::kNoTraffic && !o.offerRunAdmin &&
+                  o.ButtonCount() == 0,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // A working source (either one) is not a state.
+        const EmptyStateOffer withEtw = DecideEmptyState(
+            20, 20, false, true, false, true, true, false, false);
+        const EmptyStateOffer withSockets = DecideEmptyState(
+            20, 20, false, true, false, true, false, true, true);
+        Check(r, "9.4.2.traffic.either-source-satisfies",
+              withEtw.caze == EmptyStateCase::kNone &&
+                  withSockets.caze == EmptyStateCase::kNone,
+              "");
+    }
+    {
+        // Nobody is looking at a traffic column.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, false,
+                                                   false, false, false);
+        Check(r, "9.4.2.traffic.hidden-column-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
+    }
+
+    // Every case must carry its sentence, so a caller that shows buttons has
+    // no excuse to show none of the reason.
+    {
+        const EmptyStateOffer a =
+            DecideEmptyState(10, 0, false, true, false, false, true, false, true);
+        const EmptyStateOffer b = DecideEmptyState(
+            10, 10, true, false, false, false, true, false, false);
+        const EmptyStateOffer c = DecideEmptyState(
+            10, 10, false, true, false, true, false, false, false);
+        Check(r, "9.4.2.every-case-carries-a-message",
+              a.message[0] != L'\0' && b.message[0] != L'\0' &&
+                  c.message[0] != L'\0',
+              "");
+    }
 }
 
 constexpr int kDialogControls = 6;
@@ -9733,6 +9871,7 @@ static const unsigned char kClientHello[] = {
     CheckBookmarkFile(r);
     CheckPresetFile(r);
     CheckIniFile(r);
+    CheckEmptyState(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
