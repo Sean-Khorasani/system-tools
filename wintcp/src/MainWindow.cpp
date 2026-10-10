@@ -2602,10 +2602,11 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             LoadGeoIpDatabase();
             break;
         case IDM_VIEW_BLOCKED: {
-            // 9.2.9. Read-only unless the user deletes, so it does not touch
-            // the view's state: a list that could change the rows would have to
-            // say so, and the whole point of this dialog is that it only
-            // affects the firewall.
+            // 9.2.9 / 9.5.5. Read-only unless the user edits, so it does not
+            // touch the view's state: a list that could change the rows would
+            // have to say so, and the whole point of this dialog is that it
+            // only affects the firewall. It stays open across edits now, so
+            // the caller hears once, at the end, about what changed.
             std::wstring failure;
             const BlockedPeersChoice choice =
                 ShowBlockedPeersDialog(hwnd_, &failure);
@@ -2616,10 +2617,12 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
                               MB_OK | MB_ICONERROR);
                 break;
             }
-            if (choice == BlockedPeersChoice::kDeletedOne) {
-                UpdateStatusBar(L"Deleted the selected firewall rule.");
-            } else if (choice == BlockedPeersChoice::kDeletedAll) {
-                UpdateStatusBar(L"Removed every WinTCP firewall rule.");
+            // kChanged means at least one rule was deleted, enabled or
+            // disabled. The dialog already re-read the firewall, so the count
+            // on the status bar is only approximate; say what happened rather
+            // than restating a number that may now be stale.
+            if (choice == BlockedPeersChoice::kChanged) {
+                UpdateStatusBar(L"Firewall rules changed. `blocks` re-counts them.");
             }
             break;
         }

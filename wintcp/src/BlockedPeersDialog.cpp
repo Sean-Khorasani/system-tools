@@ -18,9 +18,14 @@ namespace {
 // has no entry in the .rc - the same reasoning as PromptDialog's ids.
 enum : int {
     kIdList = 2000,
+    // 9.5.5: enable/disable join the editor's actions. They are NOT aliases
+    // for delete: a disabled rule stays installed with its identity, so
+    // "turn this off for an hour" is one step rather than delete-then-rederive.
     kIdDelete = IDOK + 1,
     kIdRemoveAll = IDOK + 2,
     kIdClose = IDCANCEL,
+    kIdEnable = IDOK + 3,
+    kIdDisable = IDOK + 4,
 };
 
 // Control count, in one place. cdit must match it exactly: the dialog manager
@@ -28,7 +33,7 @@ enum : int {
 // inside the dialog loop, which is the failure PromptDialog.cpp documents at
 // length. Any write below that changes the count has to change this too, and
 // the selftest pins the resulting capacity.
-constexpr int kControlCount = 4;
+constexpr int kControlCount = 6;
 
 constexpr size_t Pad4(size_t bytes) { return (bytes + 3) & ~static_cast<size_t>(3); }
 
@@ -141,8 +146,8 @@ std::vector<BYTE> MakeTemplate(const wchar_t* title) {
     dlg->cdit = static_cast<WORD>(kControlCount);
     dlg->x = 0;
     dlg->y = 0;
-    dlg->cx = 320;
-    dlg->cy = 180;
+    dlg->cx = 340;
+    dlg->cy = 190;
     p += sizeof(DLGTEMPLATE);
 
     if (!usable(4)) return std::vector<BYTE>();
@@ -162,25 +167,85 @@ std::vector<BYTE> MakeTemplate(const wchar_t* title) {
     memcpy(p, kFont, (sizeof(kFont) / sizeof(wchar_t)) * sizeof(wchar_t));
     p += fontBytes;
 
-    // List box: the whole working area.
+    // List box: the working area. Slightly shorter than the viewer's was, to
+    // make room for the second button row the editor adds.
     const DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER |
                             LBS_NOTIFY | LBS_HASSTRINGS;
-    if (!WriteItem(&p, end, listStyle, 8, 8, 300, 110, kIdList, 0x83,
+    if (!WriteItem(&p, end, listStyle, 8, 8, 320, 96, kIdList, 0x83,
                    nullptr)) {
         return std::vector<BYTE>();
     }
+    // Row 1: the lifecycle actions.
     if (!WriteItem(&p, end,
-                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 8, 128,
-                   88, 16, kIdDelete, 0x81, L"Delete") ||
-        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 104, 128,
-                   88, 16, kIdRemoveAll, 0x81, L"Remove all") ||
-        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 200, 128,
-                   88, 16, kIdClose, 0x81, L"Close")) {
+                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 8, 112,
+                   76, 16, kIdDelete, 0x81, L"Delete") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 88, 112,
+                   76, 16, kIdEnable, 0x81, L"Enable") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 168, 112,
+                   76, 16, kIdDisable, 0x81, L"Disable") ||
+        // Row 2: Remove all and Close.
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 8, 132,
+                   98, 16, kIdRemoveAll, 0x81, L"Remove all") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 110, 132,
+                   98, 16, kIdClose, 0x81, L"Close")) {
         return std::vector<BYTE>();
     }
 
     buf.resize(static_cast<size_t>(p - begin));
     return buf;
+}
+
+// Repopulate the list from the firewall. Called on init and after every
+// action, so the manager shows what the firewall holds rather than what the
+// dialog believed when it opened.
+//
+// 9.5.5: an action that closed the modal was a reader with extra buttons. The
+// point of an editor is that you change one thing and SEE the result, so this
+// spends the cost of a re-list and keeps the selection on the same rule when
+// it still exists.
+void ReloadRules(HWND list, std::vector<BlockedRule>* rules) {
+    if (list == nullptr || rules == nullptr) {
+        return;
+    }
+    const LRESULT sel = ::SendMessageW(list, LB_GETCURSEL, 0, 0);
+    std::wstring keepName;
+    if (sel != LB_ERR && sel >= 0 &&
+        static_cast<size_t>(sel) < rules->size()) {
+        keepName = (*rules)[static_cast<size_t>(sel)].name;
+    }
+
+    std::wstring error;
+    std::vector<BlockedRule> fresh;
+    if (!ListBlockedRules(&fresh, &error)) {
+        // Leave the list as it was rather than emptying it: an empty list on a
+        // failed read would read as "you have no rules", which is the one
+        // answer this dialog must never give wrongly.
+        if (!error.empty()) {
+            ::MessageBoxW(
+                list,
+                (L"Could not re-read the firewall rules:\r\n" + error).c_str(),
+                L"WinTCP", MB_OK | MB_ICONERROR);
+        }
+        return;
+    }
+    *rules = std::move(fresh);
+
+    ::SendMessageW(list, WM_SETREDRAW, FALSE, 0);
+    ::SendMessageW(list, LB_RESETCONTENT, 0, 0);
+    int restore = -1;
+    for (size_t i = 0; i < rules->size(); ++i) {
+        const std::wstring row = BlockedPeersRowText((*rules)[i]);
+        const LRESULT at =
+            ::SendMessageW(list, LB_ADDSTRING, 0,
+                           reinterpret_cast<LPARAM>(row.c_str()));
+        if (at != LB_ERR && (*rules)[i].name == keepName) {
+            restore = static_cast<int>(at);
+        }
+    }
+    ::SendMessageW(list, LB_SETCURSEL,
+                   restore >= 0 ? restore : (rules->empty() ? -1 : 0), 0);
+    ::SendMessageW(list, WM_SETREDRAW, TRUE, 0);
+    ::InvalidateRect(list, nullptr, TRUE);
 }
 
 INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -194,14 +259,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     switch (msg) {
         case WM_INITDIALOG: {
-            HWND list = GetDlgItem(hwnd, kIdList);
-            if (list != nullptr) {
-                for (size_t i = 0; i < st->rules.size(); ++i) {
-                    const std::wstring row = BlockedPeersRowText(st->rules[i]);
-                    ::SendMessageW(list, LB_ADDSTRING, 0,
-                                   reinterpret_cast<LPARAM>(row.c_str()));
-                }
-            }
+            ReloadRules(GetDlgItem(hwnd, kIdList), &st->rules);
             RECT rc = {};
             ::GetWindowRect(hwnd, &rc);
             RECT own = {};
@@ -218,31 +276,45 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const int id = LOWORD(wp);
             const int code = HIWORD(wp);
             if (id == kIdClose || id == IDCANCEL) {
-                st->choice = BlockedPeersChoice::kClosed;
+                st->choice = BlockedPeersChoice::kChanged;
                 ::EndDialog(hwnd, TRUE);
                 return TRUE;
             }
             if (code != BN_CLICKED) break;
-            if (id == kIdDelete) {
-                HWND list = GetDlgItem(hwnd, kIdList);
-                const LRESULT sel = ::SendMessageW(list, LB_GETCURSEL, 0, 0);
+            HWND list = GetDlgItem(hwnd, kIdList);
+            const LRESULT sel = ::SendMessageW(list, LB_GETCURSEL, 0, 0);
+            if (id == kIdDelete || id == kIdEnable || id == kIdDisable) {
                 if (sel == LB_ERR || sel < 0 ||
                     static_cast<size_t>(sel) >= st->rules.size()) {
                     ::MessageBoxW(hwnd, L"Select a rule first.", L"WinTCP",
                                   MB_OK | MB_ICONINFORMATION);
                     return TRUE;
                 }
-                const std::wstring name = st->rules[static_cast<size_t>(sel)].name;
+                const std::wstring name =
+                    st->rules[static_cast<size_t>(sel)].name;
                 std::wstring error;
-                if (!RemoveBlockedRule(name, &error)) {
-                    ::MessageBoxW(
-                        hwnd,
-                        (L"Could not delete the rule:\r\n" + error).c_str(),
-                        L"WinTCP", MB_OK | MB_ICONERROR);
+                bool ok = false;
+                const wchar_t* what = L"delete";
+                if (id == kIdDelete) {
+                    ok = RemoveBlockedRule(name, &error);
+                } else if (id == kIdEnable) {
+                    ok = SetBlockedRuleEnabled(name, true, &error);
+                    what = L"enable";
+                } else {
+                    ok = SetBlockedRuleEnabled(name, false, &error);
+                    what = L"disable";
+                }
+                if (!ok) {
+                    ::MessageBoxW(hwnd,
+                                  (std::wstring(L"Could not ") + what +
+                                   L" the rule:\r\n" + error)
+                                      .c_str(),
+                                  L"WinTCP", MB_OK | MB_ICONERROR);
                     return TRUE;
                 }
-                st->choice = BlockedPeersChoice::kDeletedOne;
-                ::EndDialog(hwnd, TRUE);
+                // Stay open and re-read. A manager that closes after every
+                // action is three actions per change.
+                ReloadRules(list, &st->rules);
                 return TRUE;
             }
             if (id == kIdRemoveAll) {
@@ -254,14 +326,13 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         L"WinTCP", MB_OK | MB_ICONERROR);
                     return TRUE;
                 }
-                st->choice = BlockedPeersChoice::kDeletedAll;
-                ::EndDialog(hwnd, TRUE);
+                ReloadRules(list, &st->rules);
                 return TRUE;
             }
             break;
         }
         case WM_CLOSE:
-            st->choice = BlockedPeersChoice::kClosed;
+            st->choice = BlockedPeersChoice::kChanged;
             ::EndDialog(hwnd, FALSE);
             return TRUE;
         default:
@@ -269,7 +340,6 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return FALSE;
 }
-
 }  // namespace
 
 // The row for one rule. Exported because the selftest pins it: the one place
@@ -287,6 +357,10 @@ std::wstring BlockedPeersRowText(const BlockedRule& r) {
             TruncateToWidthOpt(WideToUtf8(text), kRowTextChars).c_str());
     }
     return text;
+}
+
+int BlockedPeersControlCount() {
+    return kControlCount;
 }
 
 size_t BlockedPeersTemplateCapacity(size_t titleChars) {

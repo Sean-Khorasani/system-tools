@@ -33,15 +33,17 @@
 
 namespace wintcp {
 
-// What the user chose. kClosed is "looked and left", which is distinct from
-// kRefused - the latter means the dialog could not be shown at all (out of
-// memory building its template, or no rules to show), and a caller that wants
-// to report "nothing to delete" needs the difference.
+// What happened before the dialog closed.
+//
+// kChanged covers every successful edit - delete, enable, disable or remove
+// all - and is distinct from kClosed, which means "looked and left". The
+// distinction exists because the caller sets a status message about what
+// actually happened, and "I changed something" and "I read something" are not
+// the same report.
 enum class BlockedPeersChoice {
-    kClosed,
-    kDeletedOne,
-    kDeletedAll,
-    kRefused,
+    kClosed,    // read and dismissed without changing anything
+    kChanged,   // at least one rule was deleted, enabled or disabled
+    kRefused,   // the dialog could not be shown, or the rules could not be read
 };
 
 // Show the viewer. 'owner' may be null. Returns what happened; 'failure' is
@@ -59,7 +61,14 @@ BlockedPeersChoice ShowBlockedPeersDialog(HWND owner, std::wstring* failure);
 // is labelled, never shown as though it were protection.
 std::wstring BlockedPeersRowText(const BlockedRule& rule);
 
+// How many controls the template declares. Exported so the selftest can pin
+// it against the capacity arithmetic: cdit and the buffer size are two
+// spellings of the same fact, and a mismatch is an out-of-bounds read inside
+// the dialog manager rather than a compile error.
+int BlockedPeersControlCount();
+
 // Bytes the dialog template needs for a title of 'titleChars' characters.
+// Exported for the same reason: it is the arithmetic cdit must agree with.
 size_t BlockedPeersTemplateCapacity(size_t titleChars);
 
 // Build the template into 'buf' if it fits. REFUSES (false, buf untouched)
