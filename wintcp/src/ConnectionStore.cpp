@@ -40,6 +40,48 @@ constexpr unsigned kRttDecimalDivisor = kMsPerSecondU / 10;
 // the three formatters cannot disagree about the widest case.
 constexpr size_t kRttCellChars = 32;
 
+// A filter threshold over a percentage is stored as tenths of a percent, so the
+// comparison is an integer one: `cpu:12.5` has to match a row reading 12.5
+// exactly, and comparing the two as doubles would make the answer depend on how
+// each side had been parsed. Both sites scale by this, so the two cannot
+// disagree about the precision a threshold is expressed to.
+constexpr double kPercentTenthsScale = 10.0;
+
+// Duration suffix multipliers, in seconds - the unit a `duration:` value is
+// stored in, so a bare number and an `s` suffix are the same multiplier. Same
+// reason the millisecond ladder above is named: these appear in a filter
+// grammar the user types, so a wrong one silently matches the wrong time
+// window rather than failing.
+constexpr long long kSecPerMinute = 60;
+constexpr long long kSecPerHour = 3600;
+constexpr long long kSecPerDay = 86400;
+
+// Width of ConnectionStore::Stats::byState, i.e. one histogram slot per
+// MIB_TCP_STATE_* value. This bounds `r.state` DIRECTLY, not a StateRank()
+// result - those are a different numbering (StateRank maps "none" and any
+// unrecognised state onto 12 and 13, so the highest rank is this width, not
+// one below it). The array is `byState[13]` in ConnectionStore.h and the
+// accessor below it uses the same fixed 13; the four must agree.
+constexpr DWORD kByStateEntries = 13;
+
+// Bytes in an address field of a ConnectionKey's packed form. Same name as the
+// copies in TcpReasm.cpp, TcpTable.cpp, StreamCapture.cpp and BlockConn.cpp on
+// purpose, so a grep finds every place an address width is assumed - the key
+// layout static_assert below and the two pushes that fill it must agree.
+constexpr size_t kIpv6AddrBytes = 16;
+
+// Cell capacities for the column text formatters. Each one is the widest value
+// its format can hold plus fixed wording, with slack, and every swprintf_s in
+// this file truncates rather than overruns.
+constexpr size_t kPidTextChars = 16;
+constexpr size_t kCipherTextChars = 16;
+// A port rendered as a decimal string. At most five digits, so this is slack,
+// and the two bookmark-join sites below must agree on it or the join key
+// changes shape between the two halves of the same lookup.
+constexpr size_t kPortTextChars = 16;
+constexpr size_t kTmpTextChars = 24;
+constexpr size_t kCellTextChars = 64;
+
 // ---- small helpers ---------------------------------------------------------
 
 // 'haystack' must already be lowercase; 'needle' too (FilterClause::text).
@@ -53,9 +95,7 @@ bool Has(const std::wstring& haystack, const std::wstring& needle) {
 // The body is wintcp::BuildLowerAllOpt (Opt.cpp), which totals the ten field
 // sizes, reserves once and appends - the original's +-chain built nine
 // intermediate wstrings per row, and a row is finalized on every refresh.
-// The fields are passed as POINTERS so the call does not copy them first;
-// the earlier signature took them by value, which made the optimization a
-// pessimization for exactly the rows it was meant to speed up.
+// The fields are passed as POINTERS so the call does not copy them first.
 //
 // A/B bench, same source: 4.95x on a 10-field row (269 ns -> 54 ns).
 // The shorter-than-10 and longer-than-10 counts are pinned by the bench
@@ -267,7 +307,7 @@ bool ParseStatValue(const std::wstring& v, bool cpuUnit, long long* out) {
     if (errno != 0 || d < 0.0 || end == nullptr || *end != L'\0') return false;
 
     if (cpuUnit) {
-        *out = static_cast<long long>(d * 10.0 + 0.5);   // tenths of a percent
+        *out = static_cast<long long>(d * kPercentTenthsScale + 0.5);   // tenths
         return true;
     }
     long long mult = 1024LL * 1024LL;                     // default: MB
@@ -309,9 +349,9 @@ bool ParseDurationValue(const std::wstring& v, long long* out) {
     long long mult = 1;                          // bare = seconds
     const wchar_t last = v[e - 1];
     if (last == L's' || last == L'S')      { numEnd = e - 1; mult = 1; }
-    else if (last == L'm' || last == L'M') { numEnd = e - 1; mult = 60; }
-    else if (last == L'h' || last == L'H') { numEnd = e - 1; mult = 3600; }
-    else if (last == L'd' || last == L'D') { numEnd = e - 1; mult = 86400; }
+    else if (last == L'm' || last == L'M') { numEnd = e - 1; mult = kSecPerMinute; }
+    else if (last == L'h' || last == L'H') { numEnd = e - 1; mult = kSecPerHour; }
+    else if (last == L'd' || last == L'D') { numEnd = e - 1; mult = kSecPerDay; }
 
     bool digits = false;
     for (size_t i = b; i < numEnd; ++i)
@@ -387,9 +427,9 @@ ConnectionKey KeyOf(const Connection& c) {
     k.bytes[k.len++] = static_cast<unsigned char>(
         c.protocol == IPPROTO_UDP ? 'U' : 'T');
     if (c.family == AF_INET6) {
-        push(&c.local6, 16);
+        push(&c.local6, kIpv6AddrBytes);
         push(&c.localPort, sizeof(UINT));
-        push(&c.remote6, 16);
+        push(&c.remote6, kIpv6AddrBytes);
     } else {
         // Only local4/remote4 are read for IPv4: the v6 fields of an IPv4 row
         // are untouched by the enumerator and may hold stale bytes from a
@@ -450,7 +490,7 @@ ULONGLONG SatAdd(ULONGLONG a, ULONGLONG b) {
 //. Unknown/zero values yield "" so `cpu:12` only matches rows
 // that actually have a reading.
 std::wstring StatFieldText(const Connection& c, FilterField f) {
-    wchar_t buf[64] = {0};
+    wchar_t buf[kCellTextChars] = {0};
     switch (f) {
         case FilterField::Cpu:
             if (c.cpuPct < 0.0) return std::wstring();
@@ -500,7 +540,7 @@ size_t FilterKeywordCount() { return kFilterKeywordCount; }
 // floored rather than rounded so the display never shows "59s" for 59.7s
 // worth of connection and never wraps to "0s" too early.
 std::wstring FormatDuration(ULONGLONG seconds) {
-    wchar_t buf[32] = {0};
+    wchar_t buf[kRttCellChars] = {0};
     if (seconds >= 86400ULL) {
         ::swprintf_s(buf, L"%llud %lluh",
                      seconds / 86400ULL, (seconds % 86400ULL) / 3600ULL);
@@ -529,7 +569,7 @@ std::wstring FormatBpsCell(double rxBps, double txBps, bool known) {
     // and printing "↓ 0 B/s ↑ 0 B/s" for it is noise: the reader's eye goes to
     // a rate and finds a rounding artefact.
     if (rxBps < 0.5 && txBps < 0.5) return L"idle";
-    wchar_t buf[64] = {0};
+    wchar_t buf[kCellTextChars] = {0};
     ::swprintf_s(buf, L"↓ %s/s  ↑ %s/s",
                  FormatBytes(static_cast<ULONGLONG>(rxBps + 0.5)).c_str(),
                  FormatBytes(static_cast<ULONGLONG>(txBps + 0.5)).c_str());
@@ -638,7 +678,7 @@ std::wstring TlsCipherName(USHORT id) {
         case 0x009D: return L"TLS_RSA_WITH_AES_256_GCM_SHA384";
         case 0xCCA8: return L"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256";
         default: {
-            wchar_t buf[16] = {0};
+            wchar_t buf[kCipherTextChars] = {0};
             ::swprintf_s(buf, L"0x%04X", id);
             return buf;
         }
@@ -924,7 +964,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
     }
 
     // Text match against one lowercased key.
-    wchar_t tmp[24] = {0};
+    wchar_t tmp[kTmpTextChars] = {0};
     const std::wstring* hay = nullptr;
     switch (f) {
         // F5.11. `local:private` / `remote:private` and their `global` inverses.
@@ -1029,7 +1069,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
                     case FilterField::Cpu: {
                         if (c.cpuPct < 0.0) return false;
                         const long long v =
-                            static_cast<long long>(c.cpuPct * 10.0 + 0.5);
+                            static_cast<long long>(c.cpuPct * kPercentTenthsScale + 0.5);
                         return v >= cl.lo && v <= cl.hi;
                     }
                     case FilterField::Mem:
@@ -1217,7 +1257,7 @@ void ConnectionStore::FinalizeRow(Connection& c) {
     c.protoLabel += (c.family == AF_INET6) ? L"v6" : L"v4";
     c.stateLabel = (c.protocol == IPPROTO_UDP) ? L"—" : TcpStateToString(c.state);
 
-    wchar_t pidb[16] = {0};
+    wchar_t pidb[kPidTextChars] = {0};
     ::swprintf_s(pidb, L"%lu", static_cast<unsigned long>(c.pid));
     c.pidText = pidb;
 
@@ -1582,7 +1622,7 @@ void ConnectionStore::RebuildIndexes() {
         if (!r.remoteAddress.empty()) addrRows_[r.remoteAddress].push_back(i);
         if (r.family == AF_INET6) ++stats_.ipv6; else ++stats_.ipv4;
         if (r.protocol == IPPROTO_UDP) ++stats_.udp;
-        if (r.state < 13) ++stats_.byState[r.state];
+        if (r.state < kByStateEntries) ++stats_.byState[r.state];
         if (r.pinned || r.tag != kTagNone) ++stats_.pinned;
         if (r.tls.known && r.tls.secure) ++stats_.secure;
     }
@@ -1717,7 +1757,7 @@ void ConnectionStore::JoinBookmarks(const std::vector<BookmarkMark>& known) {
     byEndpoint.reserve(known.size() * 2 + 1);
     for (const BookmarkMark& b : known) {
         if (b.address.empty()) continue;
-        wchar_t port[16] = {0};
+        wchar_t port[kPortTextChars] = {0};
         ::swprintf_s(port, L"%u", b.port);
         byEndpoint.emplace(b.address + L"\x01" + port, &b);
     }
@@ -1725,7 +1765,7 @@ void ConnectionStore::JoinBookmarks(const std::vector<BookmarkMark>& known) {
     for (Connection& r : rows_) {
         const BookmarkMark* hit = nullptr;
         if (!r.remoteAddress.empty() && r.remotePort != 0) {
-            wchar_t port[16] = {0};
+            wchar_t port[kPortTextChars] = {0};
             ::swprintf_s(port, L"%u", r.remotePort);
             const auto it = byEndpoint.find(r.remoteAddress + L"\x01" + port);
             if (it != byEndpoint.end()) hit = it->second;
