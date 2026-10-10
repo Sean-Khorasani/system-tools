@@ -66,6 +66,8 @@ add_executable(wintcp
     wintcp/src/BlockConn.h
     wintcp/src/BlockedPeersDialog.cpp
     wintcp/src/BlockedPeersDialog.h
+    wintcp/src/BookmarkFile.cpp
+    wintcp/src/BookmarkFile.h
     wintcp/src/Elevate.cpp
     wintcp/src/Elevate.h
     wintcp/src/GeoIp.cpp
