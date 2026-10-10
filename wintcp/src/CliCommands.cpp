@@ -35,11 +35,32 @@ namespace {
 // says why slices exist — this names how long one is.
 constexpr DWORD kWatchPollMs = 50;
 
+// Write slice for stdout/stderr. 1 MB is large enough that a redirect to a file
+// or pipe is not doing a syscall per line, and small enough that a partial
+// write on a slow consumer is retried rather than blocking the loop for long.
+constexpr size_t kWriteChunkBytes = 1u << 20;
+
+// The documented ceiling on --dns-timeout. Stated in the help text and in the
+// parser's error message, so it is one constant rather than three spellings
+// that can drift apart.
+constexpr unsigned kDnsTimeoutMaxMs = 60000;
+
+// Bounded Levenshtein. Every switch and command name is far shorter than 64
+// characters, so a longer pair is answered "far" rather than allocated for;
+// the two rows are the cap plus the row 0/first column the DP keeps.
+constexpr size_t kSuggestMaxChars = 64;
+constexpr size_t kEditDistanceFar = 99;
+
+// The "baseline: N rows" line --changes prints once before it reports anything.
+// A fixed sentence around a count, so this is slack; sprintf_s truncates.
+constexpr size_t kBaselineLineChars = 128;
+
 void WriteStream(HANDLE h, const std::string& s) {
     size_t off = 0;
     while (off < s.size()) {
         const DWORD chunk = static_cast<DWORD>(
-            (s.size() - off > (1u << 20)) ? (1u << 20) : (s.size() - off));
+            (s.size() - off > kWriteChunkBytes) ? (kWriteChunkBytes)
+                                                : (s.size() - off));
         DWORD written = 0;
         if (!::WriteFile(h, s.data() + off, chunk, &written, nullptr) ||
             written == 0)
@@ -1071,7 +1092,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
         std::wstring v;
         if (!need(&v)) return "missing value for --dns-timeout";
         unsigned val = 0;
-        if (!ParseUint(v, &val) || val < 1 || val > 60000)
+        if (!ParseUint(v, &val) || val < 1 || val > kDnsTimeoutMaxMs)
             return "bad --dns-timeout (need 1..60000)";
         a->dnsTimeoutMs = val;
     } else if (t == L"--signatures") {
@@ -1246,8 +1267,9 @@ constexpr size_t kSwitchNameCount =
 // answer is "far" rather than an allocation. ASCII case-fold only: every
 // candidate is ASCII, and the parser's own matching is case-insensitive.
 size_t EditDistance(const std::wstring& a, const std::wstring& b) {
-    if (a.size() > 64 || b.size() > 64) return 99;
-    size_t prev[65], cur[65];
+    if (a.size() > kSuggestMaxChars || b.size() > kSuggestMaxChars)
+        return kEditDistanceFar;
+    size_t prev[kSuggestMaxChars + 1], cur[kSuggestMaxChars + 1];
     const size_t n = a.size(), m = b.size();
     for (size_t j = 0; j <= m; ++j) prev[j] = j;
     for (size_t i = 1; i <= n; ++i) {
@@ -1555,7 +1577,7 @@ int RunChangesLoop(const Args& a, const ListOptions& opt) {
         const std::vector<RowChange> ev = store.TakeChangeEvents();
         if (first) {
             first = false;
-            char b[128] = {0};
+            char b[kBaselineLineChars] = {0};
             ::sprintf_s(b, "baseline: %zu rows (further changes below)\r\n",
                         store.Rows().size());
             WriteErr(b);
