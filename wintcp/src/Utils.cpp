@@ -192,6 +192,49 @@ std::wstring WriteUtf8FileWithBom(const std::wstring& path,
     return std::wstring();  // success
 }
 
+std::wstring ReadUtf8File(const std::wstring& path, std::string* content) {
+    if (content == nullptr) {
+        return L"internal error: no output for ReadUtf8File";
+    }
+    content->clear();
+
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                             nullptr, OPEN_EXISTING,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return FormatSystemError(::GetLastError());
+    }
+    LARGE_INTEGER size = {};
+    if (!::GetFileSizeEx(h, &size)) {
+        std::wstring err = FormatSystemError(::GetLastError());
+        ::CloseHandle(h);
+        return err;
+    }
+    if (size.QuadPart < 0) {
+        ::CloseHandle(h);
+        return L"the file reports a negative size, which is not a file this "
+               L"tool can read";
+    }
+    const size_t total = static_cast<size_t>(size.QuadPart);
+    content->resize(total);
+    size_t offset = 0;
+    while (offset < total) {
+        DWORD chunk = static_cast<DWORD>(total - offset);
+        DWORD got = 0;
+        if (!::ReadFile(h, content->data() + offset, chunk, &got, nullptr)) {
+            std::wstring err = FormatSystemError(::GetLastError());
+            ::CloseHandle(h);
+            content->clear();
+            return err;
+        }
+        if (got == 0) break;   // shorter than advertised: keep what arrived
+        offset += got;
+    }
+    content->resize(offset);
+    ::CloseHandle(h);
+    return std::wstring();  // success
+}
+
 // Escape a field for CSV output: quote it when it contains a delimiter,
 // a quote or a newline, and double any quotes inside.
 //

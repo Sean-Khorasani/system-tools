@@ -147,6 +147,16 @@ std::wstring WriteUtf8FileWithBom(const std::wstring& path,
                                   const std::string& utf8Content,
                                   bool withBom = true);
 
+// Read a whole file as UTF-8 bytes. Returns empty string on success and fills
+// 'content'; otherwise a human-readable error message and 'content' is left
+// untouched.
+//
+// The counterpart to WriteUtf8FileWithBom, and deliberately NOT shape-checked
+// here: a reader that accepted "any UTF-8 file" is one that will accept a
+// bookmark file from the future, so the SIZE bound is enforced by the caller
+// that knows its own schema. This only opens, reads and reports.
+std::wstring ReadUtf8File(const std::wstring& path, std::string* content);
+
 // Escape one CSV field according to RFC 4180 (quote if it contains , " \r \n).
 std::string CsvEscapeUtf8(const std::string& field);
 
