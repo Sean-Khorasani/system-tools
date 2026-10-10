@@ -67,6 +67,18 @@ SignatureState StateFromTrustLONG(LONG rc) {
     return kSigError;                                     // the provider failed
 }
 
+// Windows mandatory-integrity RIDs, the values WinNT.h spells as
+// SECURITY_MANDATORY_<LEVEL>_RID: S-1-16-<rid>. Kept as one map from rid to enum
+// rather than a threshold comparison, and spelled as named constants because
+// the numbers alone (4096, 28672) are indistinguishable from tuning values -
+// and a wrong one labels a protected process as a normal one.
+constexpr DWORD kRidUntrusted = 0;
+constexpr DWORD kRidLow = 4096;
+constexpr DWORD kRidMedium = 8192;
+constexpr DWORD kRidHigh = 12288;
+constexpr DWORD kRidSystem = 16384;
+constexpr DWORD kRidProtected = 28672;
+
 // F5.3: a cheap fingerprint of the FILE, so a path whose contents were
 // replaced is re-verified rather than inheriting the old verdict. A path is
 // not a stable identity for a file - which is why Windows ships versioned
@@ -197,13 +209,13 @@ IntegrityLevel IntegrityFromRid(DWORD rid) {
     // model, and an unfamiliar future RID must read as "unknown" rather than
     // silently claiming the nearest known level.
     switch (rid) {
-        case 0:     return kIntegrityUntrusted;
-        case 4096:  return kIntegrityLow;
-        case 8192:  return kIntegrityMedium;
-        case 12288: return kIntegrityHigh;
-        case 16384: return kIntegritySystem;
-        case 28672: return kIntegrityProtected;
-        default:    return kIntegrityUnknown;
+        case kRidUntrusted: return kIntegrityUntrusted;
+        case kRidLow:       return kIntegrityLow;
+        case kRidMedium:    return kIntegrityMedium;
+        case kRidHigh:      return kIntegrityHigh;
+        case kRidSystem:    return kIntegritySystem;
+        case kRidProtected: return kIntegrityProtected;
+        default:            return kIntegrityUnknown;
     }
 }
 
