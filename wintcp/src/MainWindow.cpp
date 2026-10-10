@@ -28,6 +28,7 @@
 #include "Freeze.h"        // FrozenAgeMs (5.5)
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
+#include "BlockedPeersDialog.h"  // 9.2.9: View > Blocked peers...
 #include "FontCache.h"
 #include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
@@ -2600,6 +2601,28 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
         case IDM_VIEW_GEOIP:
             LoadGeoIpDatabase();
             break;
+        case IDM_VIEW_BLOCKED: {
+            // 9.2.9. Read-only unless the user deletes, so it does not touch
+            // the view's state: a list that could change the rows would have to
+            // say so, and the whole point of this dialog is that it only
+            // affects the firewall.
+            std::wstring failure;
+            const BlockedPeersChoice choice =
+                ShowBlockedPeersDialog(hwnd_, &failure);
+            if (choice == BlockedPeersChoice::kRefused) {
+                UpdateStatusBar(failure.empty() ? L"could not list the firewall rules."
+                                                : failure);
+                ::MessageBoxW(hwnd_, failure.c_str(), L"WinTCP",
+                              MB_OK | MB_ICONERROR);
+                break;
+            }
+            if (choice == BlockedPeersChoice::kDeletedOne) {
+                UpdateStatusBar(L"Deleted the selected firewall rule.");
+            } else if (choice == BlockedPeersChoice::kDeletedAll) {
+                UpdateStatusBar(L"Removed every WinTCP firewall rule.");
+            }
+            break;
+        }
         case IDM_VIEW_FREEZE:
             frozen_ = !frozen_;
             // Stamped from GetTickCount64 (a monotonic counter), not from

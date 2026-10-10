@@ -54,6 +54,10 @@
 // the sheet while the About dialog keeps its own command id.
 #define IDM_HELP_SHORTCUTS      40021
 #define IDM_VIEW_GEOIP          40022
+// 9.2.9: the firewall viewer. Reads the rules `blocks` counts. 40065 because
+// 40023 is IDM_FILE_PRESET_SAVE - the View ids are not a contiguous block, and
+// a duplicate #define is a silently-shadowed menu command.
+#define IDM_VIEW_BLOCKED        40065
 #define IDM_VIEW_ASNIP          40040
 
 // 9.4.4 column profiles and F5.11/9.4.3 quick filters. Appended after the

@@ -388,7 +388,12 @@ CommandResult CmdBlock(SnapshotSource& source, const std::wstring& select,
                        const MutateOptions& mo);
 CommandResult CmdUnblock(const std::wstring& address, UINT port,
                          const MutateOptions& mo);
-CommandResult CmdBlocks();
+// `blocks`: the count by default. With 'listRules' the rules themselves are
+// listed instead, in 'format' (table, csv or json). The listing path never
+// calls CountWinTcpRules, so looking cannot change the number the count
+// prints - that is the property 9.2.9 has to preserve.
+CommandResult CmdBlocks(bool listRules = false,
+                        const std::string& format = "table");
 
 // Map a connection row onto a firewall request (binary remote address, not
 // the display string that carries the port). False when the row cannot be

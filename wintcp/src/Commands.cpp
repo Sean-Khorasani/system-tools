@@ -2811,18 +2811,86 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
     return r;
 }
 
-CommandResult CmdBlocks() {
+CommandResult CmdBlocks(bool listRules, const std::string& format) {
     CommandResult r;
     // R3: a count that could not be made must not be reported as zero. Before
     // this, an unreadable ledger - over the 4 MiB cap, or holding a line that
     // is not valid UTF-8 - produced "wintcp-firewall-rules: 0" with nothing on
     // stderr, which is indistinguishable from "you have no blocks".
     std::wstring error;
-    const int n = CountWinTcpRules(&error);
+    if (!listRules) {
+        const int n = CountWinTcpRules(&error);
+        if (!error.empty()) {
+            r.err = WideToUtf8(error) + "\r\n";
+        }
+        r.out = "wintcp-firewall-rules: " + std::to_string(n) + "\r\n";
+        return r;
+    }
+
+    // ---- 9.2.9: the listing half -------------------------------------------
+    // Reads the rules the firewall reports, so the count above is left alone:
+    // this path never calls CountWinTcpRules and never writes the ledger.
+    std::vector<BlockedRule> rules;
+    if (!ListBlockedRules(&rules, &error)) {
+        r.exitCode = kExitFail;
+        r.err = "blocks --list failed: " + WideToUtf8(error) + "\r\n";
+        return r;
+    }
     if (!error.empty()) {
         r.err = WideToUtf8(error) + "\r\n";
     }
-    r.out = "wintcp-firewall-rules: " + std::to_string(n) + "\r\n";
+
+    if (format == "json") {
+        std::string out = "[";
+        for (size_t i = 0; i < rules.size(); ++i) {
+            const BlockedRule& b = rules[i];
+            if (i != 0) out += ",";
+            out += "{\"name\":\"" + JsonEscapeA(b.name) + "\",\"enabled\":" +
+                   (b.enabled ? "true" : "false") + ",\"blocking\":" +
+                   (b.isBlocking ? "true" : "false") + ",\"remote\":\"" +
+                   JsonEscapeA(b.remoteAddrs) + "\",\"localPort\":\"" +
+                   JsonEscapeA(b.localPorts) + "\",\"remotePort\":\"" +
+                   JsonEscapeA(b.remotePorts) + "\"}";
+        }
+        out += "]\r\n";
+        r.out = out;
+        return r;
+    }
+
+    const bool csv = (format == "csv");
+    std::string out;
+    if (!csv) {
+        out += "Rule name                                     En  Block  Remote        LPort RPort\r\n";
+    } else {
+        out += "name,enabled,blocking,remote,localPort,remotePort\r\n";
+    }
+    for (const BlockedRule& b : rules) {
+        const std::string name = WideToUtf8(b.name);
+        if (csv) {
+            out += CsvEscapeUtf8(name) + "," +
+                   std::string(b.enabled ? "1" : "0") + "," +
+                   std::string(b.isBlocking ? "1" : "0") + "," +
+                   CsvEscapeUtf8(WideToUtf8(b.remoteAddrs)) + "," +
+                   CsvEscapeUtf8(WideToUtf8(b.localPorts)) + "," +
+                   CsvEscapeUtf8(WideToUtf8(b.remotePorts)) + "\r\n";
+            continue;
+        }
+        const std::string en = b.enabled ? "yes" : "NO";
+        // A tagged rule the user disabled or flipped to allow is still shown,
+        // and is flagged: a block that is not blocking is the one state this
+        // surface must never pass off as protection.
+        const std::string blk = b.isBlocking ? "yes" : "NOT";
+        out += TruncateToWidth(name, 44) + "  " + TruncateToWidth(en, 4) + "  " +
+               TruncateToWidth(blk, 6) + "  " +
+               TruncateToWidth(WideToUtf8(b.remoteAddrs), 14) + "  " +
+               TruncateToWidth(WideToUtf8(b.localPorts), 6) + "  " +
+               TruncateToWidth(WideToUtf8(b.remotePorts), 6) + "\r\n";
+    }
+    if (rules.empty()) {
+        out += csv ? std::string()
+                   : std::string("(no WinTCP firewall rules)\r\n");
+    }
+    r.out = out;
     return r;
 }
 

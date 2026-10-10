@@ -383,23 +383,31 @@ const CommandHelp kCommandHelps[] = {
      "Examples:\r\n"
      "  wintcp.exe unblock --address 93.184.216.34 --port 443 --dry-run\r\n"
      "  wintcp.exe unblock --address 93.184.216.34 --port 443 --yes\r\n"},
-    {"blocks",
-     "blocks - how many WinTCP firewall rules exist right now\r\n"
-     "\r\n"
-     "Usage: wintcp.exe blocks\r\n"
-     "\r\n"
-     "Counts rules carrying the WinTCP tag, in any direction or family.\r\n"
-     "Always succeeds (exit 0), no elevation needed to count.\r\n"
-     "\r\n"
-     "The count comes from a ledger this tool wrote when `block` succeeded,\r\n"
-     "at %APPDATA%\\WinTCP\\blocked.txt. A ledger that cannot be read with\r\n"
-     "confidence is REFUSED, not counted: over 4 MiB, a line over 4096 bytes,\r\n"
-     "or a line that is not valid UTF-8. The count still prints on stdout so\r\n"
-     "a script keeps its number, and stderr says why it must not be trusted.\r\n"
-     "Treat that as \"unknown\", never as \"you have no blocks\".\r\n"
-     "\r\n"
-     "Examples:\r\n"
-     "  wintcp.exe blocks\r\n"},
+     {"blocks",
+      "blocks - how many WinTCP firewall rules exist right now\r\n"
+      "\r\n"
+      "Usage: wintcp.exe blocks [--list] [--format table|csv|json]\r\n"
+      "\r\n"
+      "Counts rules carrying the WinTCP tag, in any direction or family.\r\n"
+      "Always succeeds (exit 0), no elevation needed to count.\r\n"
+      "\r\n"
+      "The count comes from a ledger this tool wrote when `block` succeeded,\r\n"
+      "at %APPDATA%\\WinTCP\\blocked.txt. A ledger that cannot be read with\r\n"
+      "confidence is REFUSED, not counted: over 4 MiB, a line over 4096 bytes,\r\n"
+      "or a line that is not valid UTF-8. The count still prints on stdout so\r\n"
+      "a script keeps its number, and stderr says why it must not be trusted.\r\n"
+      "Treat that as \"unknown\", never as \"you have no blocks\".\r\n"
+      "\r\n"
+      "--list (9.2.9) prints the rules themselves instead of the count. Each\r\n"
+      "row is the rule the firewall reports, not what the ledger remembers, so\r\n"
+      "a rule the user edited in netsh or WF.msc is shown as it actually is -\r\n"
+      "including a rule that is DISABLED or no longer a block, which is spelled\r\n"
+      "out rather than hidden. The listing cannot change the count.\r\n"
+      "\r\n"
+      "Examples:\r\n"
+      "  wintcp.exe blocks\r\n"
+      "  wintcp.exe blocks --list\r\n"
+      "  wintcp.exe blocks --list --format json\r\n"},
     {"bookmark",
      "bookmark - mark remote peers (stored per-user in HKCU)\r\n"
      "\r\n"
@@ -727,6 +735,10 @@ bool PrintCommandHelp(const std::wstring& cmd) {
 
 struct Args {
     std::wstring filter;
+    // 9.2.9: `blocks --list` lists the rules the count counts. Deliberately
+    // NOT a sub-verb: "blocks" stays one verb with one meaning, and a script
+    // that runs it with no switches keeps the count byte for byte.
+    bool list = false;
     std::wstring sort = L"pid";
     bool hasSort = false;
     bool desc = false;
@@ -1029,6 +1041,10 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             if (!need(&a->db)) return "missing value for --db";
         } else if (t == L"--asn-db") {
             if (!need(&a->asnDb)) return "missing value for --asn-db";
+        } else if (t == L"--list") {
+            // 9.2.9: `blocks --list`. Only `blocks` accepts it (kVerbSwitches),
+            // so this cannot be typed at a verb that would ignore it.
+            a->list = true;
         } else if (t == L"--enable") {
             a->alertEnable = 1;
         } else if (t == L"--disable") {
@@ -1246,6 +1262,8 @@ const wchar_t* const kSwitchNames[] = {
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--asn-db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
+    // 9.2.9: lists the rules the `blocks` count counts.
+    L"--list",
     L"--text", L"--bin", L"--dir",
      L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
      L"--dns-timeout",
@@ -1377,7 +1395,7 @@ const VerbSwitches kVerbSwitches[] = {
     {L"close", L"--select --yes --dry-run"},
     {L"block", L"--select --yes --dry-run"},
     {L"unblock", L"--address --port --yes --dry-run"},
-    {L"blocks", L""},     // takes no switches
+     {L"blocks", L"--list --format"},   // 9.2.9: count, or list the rules
        {L"capture", L"--select --filter --secs --yes --dry-run --text --bin --dir --flags --out --force"},
     {L"follow", nullptr},  // alias: same as capture
     {L"bookmark", L"--address --port --tag --note --format"},
@@ -2069,7 +2087,15 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return r.exitCode;
     }
     if (cmd == L"blocks") {
-        const CommandResult r = CmdBlocks();
+        std::string verr;
+        if (!CheckFormat(a.format, {"table", "csv", "json"}, "blocks", &verr)) {
+            CommandResult bad;
+            bad.exitCode = kExitFail;
+            bad.err = verr + "\r\n";
+            Emit(bad);
+            return bad.exitCode;
+        }
+        const CommandResult r = CmdBlocks(a.list, a.format);
         Emit(r);
         return r.exitCode;
     }
