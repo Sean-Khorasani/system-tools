@@ -59,6 +59,7 @@
 #include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
 #include "ProcessTree.h"          // 9.5.6: the process tree
 #include "Sha256.h"               // 9.5.7: the image hash
+#include "ExposureScore.h"        // 9.5.7: the exposure badge predicate
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -2422,6 +2423,202 @@ void CheckSha256(TestResult& r) {
               !missing.ok && missing.reason == HashFailReason::kOpenFailed &&
                   !missing.message.empty(),
               "");
+    }
+}
+
+// 9.5.5 - the exposure badge's predicate. Pure, so which rows count as
+// exposed is pinned independently of the status bar that reports it.
+//
+// The rule under test is recipe 24's red case, and it has three axes rather
+// than one: a WILDCARD bind (reachable from anywhere), a PRIVILEGED port, and
+// a PRIVILEGED UNKNOWN owner (System + unsigned). Any two of those is a
+// finding; all three is the red case. A badge that only looked at one axis
+// would either miss the red case or cry wolf on every service on the box.
+void CheckExposure(TestResult& r) {
+    const unsigned char kV4Wild[4] = {0, 0, 0, 0};
+    const unsigned char kV4Loop[4] = {127, 0, 0, 1};
+    // NOT 203.0.113/24 - that is the documentation range, which IsGlobalUnicastV4// deliberately rejects. Use a genuine public address.
+    const unsigned char kV4Pub[4] = {1, 1, 1, 1};
+    const unsigned char kV4Priv[4] = {10, 0, 0, 5};      // RFC1918
+
+    // ---- A listener that is not a listener is never exposed ----
+    {
+        // A UDP row that is not a listener, and a TCP row in a non-LISTEN
+        // state. The predicate must reject both rather than trusting the
+        // caller to have filtered them.
+        const ExposureRow a =
+            ScoreListener(kV4Wild, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_ESTAB, true);
+        const ExposureRow b =
+            ScoreListener(kV4Wild, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_CLOSE_WAIT, true);
+        Check(r, "9.5.5.exposure.non-listener-is-never-exposed",
+              a.level == ExposureLevel::kNone &&
+                  b.level == ExposureLevel::kNone,
+              "");
+    }
+
+    // ---- Loopback is not exposed, whatever the port ----
+    {
+        const ExposureRow a =
+            ScoreListener(kV4Loop, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        Check(r, "9.5.5.exposure.loopback-is-not-exposed",
+              a.level == ExposureLevel::kPrivate, "");
+    }
+
+    // ---- Private ranges are not internet-reachable ----
+    {
+        const ExposureRow a =
+            ScoreListener(kV4Priv, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, false);
+        Check(r, "9.5.5.exposure.rfc1918-is-private",
+              a.level == ExposureLevel::kPrivate, "");
+    }
+
+    // ---- A wildcard on a privileged port is the red case ----
+    {
+        const ExposureRow a =
+            ScoreListener(kV4Wild, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        Check(r, "9.5.5.exposure.wildcard-443-is-exposed",
+              a.level == ExposureLevel::kExposed && !a.reason.empty(),
+              "");
+    }
+
+    // ---- A wildcard on a high port is public, not exposed ----
+    {
+        const ExposureRow a =
+            ScoreListener(kV4Wild, 4, false, 51593, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        Check(r, "9.5.5.exposure.wildcard-high-port-is-public",
+              a.level == ExposureLevel::kPublic, "");
+    }
+
+    // ---- A specific public address is public, whatever the port ----
+    {
+        const ExposureRow a =
+            ScoreListener(kV4Pub, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, false);
+        Check(r, "9.5.5.exposure.specific-public-address-is-public",
+              a.level == ExposureLevel::kPublic, "");
+    }
+
+    // ---- The privileged-port ladder ----
+    {
+        // Every port the badge treats as privileged must turn a wildcard
+        // bind red; the first one above 1023 must not.
+        bool ok = IsPrivilegedExposurePort(1);
+        ok = ok && IsPrivilegedExposurePort(443);
+        ok = ok && IsPrivilegedExposurePort(1023);
+        ok = ok && IsPrivilegedExposurePort(3389);
+        ok = ok && IsPrivilegedExposurePort(445);
+        ok = ok && IsPrivilegedExposurePort(5985);
+        ok = ok && IsPrivilegedExposurePort(5986);
+        ok = ok && !IsPrivilegedExposurePort(1024);
+        ok = ok && !IsPrivilegedExposurePort(51593);
+        ok = ok && !IsPrivilegedExposurePort(65535);
+        Check(r, "9.5.5.exposure.privileged-port-ladder", ok, "");
+    }
+
+    // ---- IPv6 ----
+    {
+        const unsigned char v6Wild[16] = {0};
+        const unsigned char v6Loop[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        // NOT 2001:db8::/32 - the documentation range for v6.
+        const unsigned char v6Pub[16] = {0x26, 0x06, 0x47, 0x00,0x47,0,0,0,0,0,0,0,0,0,0,1};
+        const ExposureRow wild =
+            ScoreListener(v6Wild, 16, true, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        const ExposureRow loop =
+            ScoreListener(v6Loop, 16, true, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        const ExposureRow pub =
+            ScoreListener(v6Pub, 16, true, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, false);
+        Check(r, "9.5.5.exposure.v6-wildcard-443-is-exposed",
+              wild.level == ExposureLevel::kExposed, "");
+        Check(r, "9.5.5.exposure.v6-loopback-is-private",
+              loop.level == ExposureLevel::kPrivate, "");
+        Check(r, "9.5.5.exposure.v6-public-is-public",
+              pub.level == ExposureLevel::kPublic, "");
+    }
+
+    // ---- The owner axes ----
+    {
+        // The two axes travel with the row and are reported in the line,
+        // which is the part a caller cannot add after the fact.
+        ExposureRow row =
+            ScoreListener(kV4Wild, 4, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        row.isSystem = true;
+        row.isUnsigned = true;
+        Check(r, "9.5.5.exposure.owner-axes-travel-with-the-row",
+              row.isSystem && row.isUnsigned && row.isSystem == true, "");
+    }
+
+    // ---- The summary ----
+    {
+        std::vector<ExposureRow> rows;
+        // Two red, one public, three private.
+        for (int i = 0; i < 2; ++i) {
+            ExposureRow x;
+            x.level = ExposureLevel::kExposed;
+            x.reason = L"listening on *:443 (tcp/ipv4)";
+            rows.push_back(x);
+        }
+        for (int i = 0; i < 1; ++i) {
+            ExposureRow x;
+            x.level = ExposureLevel::kPublic;
+            x.reason = L"a specific public address";
+            rows.push_back(x);
+        }
+        for (int i = 0; i < 3; ++i) {
+            ExposureRow x;
+            x.level = ExposureLevel::kPrivate;
+            rows.push_back(x);
+        }
+        const ExposureSummary s = SummariseExposure(rows);
+        Check(r, "9.5.5.exposure.summary-counts-every-level",
+              s.exposed == 2 && s.publicRows == 1 && s.privateRows == 3,
+              "exposed=" + std::to_string(s.exposed) +
+                  " public=" + std::to_string(s.publicRows) +
+                  " private=" + std::to_string(s.privateRows));
+        // The bar must name the RED case specifically - "listening on any
+        // address, privileged port" is the recipe-24 wording, and "exposed"
+        // alone would not tell the user which of the two severity lines it is.
+        // Assert on both the severity keyword and the reason.
+        Check(r, "9.5.5.exposure.summary-leads-with-red",
+              WideToUtf8(s.line).find("privileged port") != std::string::npos,
+              WideToUtf8(s.line));
+
+        // Public only: the bar says "reachable" and not "exposed".
+        std::vector<ExposureRow> pubOnly(2);
+        for (auto& x : pubOnly) x.level = ExposureLevel::kPublic;
+        const ExposureSummary sp = SummariseExposure(pubOnly);
+        Check(r, "9.5.5.exposure.summary-public-wording",
+              WideToUtf8(sp.line).find("reachable") != std::string::npos, WideToUtf8(sp.line));
+
+        // All private, or empty: the bar stays SILENT. This is the check that
+        // keeps the badge from becoming noise - a healthy machine has plenty
+        // of loopback listeners.
+        std::vector<ExposureRow> privOnly(3);
+        for (auto& x : privOnly) x.level = ExposureLevel::kPrivate;
+        Check(r, "9.5.5.exposure.summary-silent-when-healthy",
+              SummariseExposure(privOnly).line.empty() &&
+                  SummariseExposure({}).line.empty(),
+              "");
+    }
+
+    // ---- An unknown address is not reported as safe ----
+    {
+        // A caller that cannot say where a listener is bound must not be told
+        // "not exposed": guessing safe is the direction that hides things.
+        const ExposureRow a =
+            ScoreListener(nullptr, 0, false, 443, IPPROTO_TCP,
+                          MIB_TCP_STATE_LISTEN, true);
+        Check(r, "9.5.5.exposure.unknown-address-is-not-safe",
+              a.level != ExposureLevel::kNone && !a.reason.empty(), "");
     }
 }
 
@@ -10170,6 +10367,7 @@ static const unsigned char kClientHello[] = {
     CheckEmptyState(r);
     CheckProcessTree(r);
     CheckSha256(r);
+    CheckExposure(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
