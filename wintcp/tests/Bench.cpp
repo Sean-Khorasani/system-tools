@@ -55,6 +55,7 @@
 #include "BlockedPeersDialog.h"  // 9.2.9: the dialog-template bounds
 #include "BookmarkFile.h"         // 9.2.10: the bookmark export/import codec
 #include "PresetFile.h"           // 9.2.10: the preset export/import codec
+#include "IniFile.h"              // 9.2.10: the portable wintcp.ini
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -1991,6 +1992,124 @@ void CheckPresetFile(TestResult& r) {
 }
 
 constexpr int kDialogControls = 6;
+
+// 9.2.10 - the portable wintcp.ini grammar. Pure over a string, so the whole
+// reader is pinned with no disk and no registry.
+//
+// The property that matters is the ONE the reader is strict about: a line with
+// no '=' is refused rather than skipped, because an ini that is accepted half
+// is a preference that is half set.
+void CheckIniFile(TestResult& r) {
+    std::string err;
+    const std::string good =
+        "[wintcp]\r\n"
+        "interval = 1500\r\n"
+        "autoRefresh = yes\r\n"
+        "resolveHosts = 0\r\n"
+        "topMost = on\r\n";
+    const std::vector<IniValue> v = ParseIniSection(good, "wintcp", &err);
+    Check(r, "9.2.10.ini.parse-ok",
+          err.empty() && v.size() == 4,
+          "n=" + std::to_string(v.size()) + " err=" +
+              std::string(err.begin(), err.end()));
+    if (v.size() == 4) {
+        Check(r, "9.2.10.ini.interval", v[0].key == "interval" && v[0].value == "1500",
+              v[0].key + "=" + v[0].value);
+        Check(r, "9.2.10.ini.boolean-spelling", v[1].value == "yes" && v[2].value == "0",
+              v[1].key + "=" + v[1].value);
+        Check(r, "9.2.10.ini.on-spelling", v[3].value == "on",
+              v[3].key + "=" + v[3].value);
+    }
+
+    // Keys outside the wanted section are ignored, and another tool's section
+    // is skipped rather than refused.
+    const std::string others =
+        "[something-else]\r\n"
+        "interval = 9\r\n"
+        "[wintcp]\r\n"
+        "interval = 3000\r\n";
+    const std::vector<IniValue> w = ParseIniSection(others, "wintcp", &err);
+    Check(r, "9.2.10.ini.other-sections-are-skipped",
+          err.empty() && w.size() == 1 && w[0].value == "3000",
+          "n=" + std::to_string(w.size()));
+
+    // No [wintcp] section at all: empty, not an error.
+    Check(r, "9.2.10.ini.no-section-is-empty",
+          ParseIniSection("[other]\r\na=1\r\n", "wintcp", &err).empty() &&
+              err.empty(),
+          "");
+
+    // Comments, blank lines, whitespace, CRLF and a trailing line with no
+    // newline are all handled - the file is meant to be hand-written.
+    const std::string loose =
+        "; a comment\r\n"
+        "# another\r\n"
+        "  \r\n"
+        "[wintcp]\r\n"
+        "\r\n"
+        "  interval   =   2500   ; trailing\r\n"
+        "autoRefresh=true";
+    const std::vector<IniValue> lv = ParseIniSection(loose, "wintcp", &err);
+    const std::string lvFirst = lv.empty() ? std::string() : lv[0].value;
+    Check(r, "9.2.10.ini.comments-blanks-and-tight-spacing",
+          err.empty() && lv.size() == 2 && lv[0].value == "2500" &&
+              lv[1].value == "true",
+          "n=" + std::to_string(lv.size()) + " v0=" + lvFirst);
+
+    // A repeated key: the last one wins, which is what a user editing by hand
+    // expects.
+    const std::vector<IniValue> dup =
+        ParseIniSection("[wintcp]\r\ninterval=1\r\ninterval=2\r\n", "wintcp", &err);
+    Check(r, "9.2.10.ini.repeated-key-last-wins",
+          err.empty() && dup.size() == 1 && dup[0].value == "2", "");
+
+    // A value containing '=' keeps the part after the FIRST one, so a filter
+    // or a path cannot be truncated at its own '='.
+    const std::vector<IniValue> eq =
+        ParseIniSection("[wintcp]\r\nk=a=b=c\r\n", "wintcp", &err);
+    Check(r, "9.2.10.ini.value-keeps-its-own-equals",
+          err.empty() && eq.size() == 1 && eq[0].value == "a=b=c",
+          eq.empty() ? "" : eq[0].value);
+
+    // ---- refusals ----
+    // The one that matters: a line with no '=' is a line that was MEANT to set
+    // something, and skipping it silently would leave a preference unset while
+    // the file looks fine.
+    const std::vector<IniValue> bad =
+        ParseIniSection("[wintcp]\r\ninterval\r\n", "wintcp", &err);
+    Check(r, "9.2.10.ini.refuse.a-line-with-no-equals",
+          !err.empty() && bad.empty(), "");
+    Check(r, "9.2.10.ini.refuse.no-key-before-equals",
+          ParseIniSection("[wintcp]\r\n=5\r\n", "wintcp", &err).empty() &&
+              !err.empty(),
+          "");
+    Check(r, "9.2.10.ini.refuse.unterminated-section-header",
+          ParseIniSection("[wintcp\r\ninterval=1\r\n", "wintcp", &err).empty(),
+          "");
+    Check(r, "9.2.10.ini.refuse.empty-section-name",
+          ParseIniSection("[]\r\ninterval=1\r\n", "wintcp", &err).empty(), "");
+
+    // The size bound, the same shape the other files use.
+    Check(r, "9.2.10.ini.refuse.over-the-size-bound",
+          ParseIniSection(std::string(70 * 1024, 'x'), "wintcp", &err).empty() &&
+              !err.empty(),
+          "");
+
+    // Known keys are the six behaviour ones, and an unknown key is refused
+    // NOWHERE - a newer build may have added it, and refusing over it would be
+    // this reader's guess made into the user's problem.
+    Check(r, "9.2.10.ini.known-keys", IsKnownIniKey("interval") &&
+              IsKnownIniKey("autoRefresh") && IsKnownIniKey("resolveHosts") &&
+              IsKnownIniKey("topMost") && IsKnownIniKey("trayEnabled") &&
+              IsKnownIniKey("trafficEnabled"), "");
+    Check(r, "9.2.10.ini.unknown-key-is-not-known",
+          !IsKnownIniKey("windowWidth"), "");
+    const std::vector<IniValue> extra =
+        ParseIniSection("[wintcp]\r\ninterval=1\r\nsomeFutureKey=7\r\n", "wintcp",
+                        &err);
+    Check(r, "9.2.10.ini.accepts.an-unknown-key",
+          err.empty() && extra.size() == 2, "n=" + std::to_string(extra.size()));
+}
 
 TestResult RunSelfTest() {
     TestResult r;
@@ -9613,6 +9732,7 @@ static const unsigned char kClientHello[] = {
     CheckFontCache(r);
     CheckBookmarkFile(r);
     CheckPresetFile(r);
+    CheckIniFile(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";

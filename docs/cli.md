@@ -590,6 +590,53 @@ matching is a case-insensitive substring.
 Rules are stored one-per-registry-value under `HKCU\Software\WinTCP\AlertRules`, so
 they survive a relaunch and `alert rule list` is the same view the window has.
 
+## Running portably: `wintcp.ini`
+
+Preferences live in `HKCU`, which is per user and per machine — so a copy of
+`wintcp.exe` on a USB stick carries none of them. A `wintcp.ini` placed
+**beside the executable** is how they travel:
+
+```ini
+[wintcp]
+interval = 2500
+autoRefresh = yes
+resolveHosts = on
+topMost = off
+trayEnabled = yes
+trafficEnabled = no
+```
+
+| Key | Applies to |
+|---|---|
+| `interval` | Refresh period, ms. Must be in the tool's own range or it is ignored. |
+| `autoRefresh` | Refresh automatically. |
+| `resolveHosts` | Resolve hostnames for remote addresses. |
+| `topMost` | Keep the window above others. |
+| `trayEnabled` | Show a tray icon. |
+| `trafficEnabled` | Collect the ETW traffic counters. Never honoured as true unless the kernel logger actually starts, which needs elevation. |
+
+**The ini supplies defaults only.** It is read *before* the registry, so an
+existing user's saved settings always win. That ordering is deliberate: the
+alternative — the ini overriding the registry — means a setting changed in the
+GUI silently reverts on the next launch, which is the bug that gets reported as
+"the app forgets my settings". With this ordering the ini is exactly "what to
+use on a machine I have never run this on".
+
+Only the behaviour preferences are in scope. **Window placement, column widths
+and the column order are deliberately not** — a window rectangle from a 4K
+display is wrong on a 1366x768 laptop, and a column mask persisted against a
+different column count is a migration problem rather than a preference. Use
+`preset export` / `preset import` for views.
+
+The reader is strict, for the same reason the bookmark and preset files are: a
+line with no `=` is refused rather than skipped, because an ini accepted half
+is a preference half set. A file that exists but cannot be read or parsed is
+reported on the status line and on the `alert` note rather than swallowed, so
+a portable copy that quietly does nothing is impossible. Comments (`;` and
+`#`), blank lines and CRLF are fine; another tool's `[section]` is skipped
+rather than refused; and an unknown key inside `[wintcp]` is ignored rather
+than refused, so a newer build's key does not break an older reader.
+
 ### Quick filters and column profiles (GUI)
 
 **Filter -> All / TCP / UDP / Listeners / Established / Mine** writes a filter into
