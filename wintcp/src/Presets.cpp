@@ -53,6 +53,10 @@ constexpr size_t kSubKeyNameProbeChars = 64;
 constexpr int kSubKeyNameAttempts = 4;
 constexpr size_t kSubKeyNameGrowth = 4;
 
+// Bounded so a pathological or corrupt key cannot spin a caller loop forever.
+// Same value and the same name as Bookmarks.cpp's kMaxSubKeys on purpose.
+constexpr DWORD kMaxSubKeys = 65536u;
+
 bool ReadSubKeyName(HKEY key, DWORD index, std::wstring* out) {
     size_t cap = kSubKeyNameProbeChars;
     for (int attempt = 0; attempt < kSubKeyNameAttempts; ++attempt) {
@@ -286,7 +290,7 @@ std::vector<std::wstring> Presets::List() {
         return names;   // no presets saved yet is not a failure
 
     // Bounded so a pathological or corrupt key cannot spin here.
-    for (DWORD index = 0; index < 65536u; ++index) {
+    for (DWORD index = 0; index < kMaxSubKeys; ++index) {
         std::wstring name;
         if (!ReadSubKeyName(key, index, &name)) break;   // end, or unreadable
         names.push_back(name);
