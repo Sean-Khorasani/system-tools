@@ -7,6 +7,20 @@
 #include "DetailModel.h"
 
 namespace wintcp {
+namespace {
+
+// Width of the "YYYY-MM-DD HH:MM:SS" text, plus NUL. Same fixed format as the
+// window's own timestamp cell, and swprintf_s truncates rather than overruns.
+constexpr size_t kLocalTimeChars = 32;
+
+// Column the plain-text renderer pads labels to, so the Copy button produces
+// something that lines up in a monospace editor. A fixed width rather than the
+// longest label seen, because the widest label is data-dependent and a sheet
+// whose indentation moves as content changes looks broken - the same reasoning
+// as BuildInfo.cpp's kKeyColumn.
+constexpr size_t kPlainTextLabelChars = 22;
+
+}  // namespace
 
 std::wstring FormatFileTimeLocal(const FILETIME& ft, bool known) {
     if (!known) return std::wstring();
@@ -14,7 +28,7 @@ std::wstring FormatFileTimeLocal(const FILETIME& ft, bool known) {
     SYSTEMTIME st = {};
     if (!::FileTimeToLocalFileTime(&ft, &local)) return std::wstring();
     if (!::FileTimeToSystemTime(&local, &st)) return std::wstring();
-    wchar_t buf[32] = {0};
+    wchar_t buf[kLocalTimeChars] = {0};
     ::swprintf_s(buf, L"%04u-%02u-%02u %02u:%02u:%02u",
                  static_cast<unsigned>(st.wYear), static_cast<unsigned>(st.wMonth),
                  static_cast<unsigned>(st.wDay), static_cast<unsigned>(st.wHour),
@@ -42,7 +56,7 @@ std::wstring DetailModel::ToPlainText() const {
             // pad is applied to the label, not the value, so a value with
             // an em-dash still reads as "this value is unknown".
             std::wstring label = f.label;
-            while (label.size() < 22) label += L' ';
+            while (label.size() < kPlainTextLabelChars) label += L' ';
             out += label;
             out += L"  ";
             out += f.value.empty() ? L"—" : f.value;
