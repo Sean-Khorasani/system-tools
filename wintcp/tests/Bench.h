@@ -6,13 +6,23 @@
 
 #pragma once
 
+#include <map>
 #include <string>
+#include <vector>
 
 namespace wintcp {
 
 struct TestResult {
     int exitCode = 0;           // 0 = all checks passed, 1 = failures
     std::string output;         // ready to print (CRLF line endings)
+
+    // V3. How many checks were written, bucketed by the area their name
+    // carries (every check name is "<area>.<...>"). This is a COUNT OF
+    // CHECKS, not coverage and not branch coverage - the harness has no
+    // instrumentation, so this is the only figure it can honestly produce.
+    // It says where the checks are concentrated and where they are thin,
+    // which is what the count is always being asked to answer.
+    std::map<std::string, size_t> checkArea;
 };
 
 // Runs the internal checks: filter parser/matcher, snapshot diff + change

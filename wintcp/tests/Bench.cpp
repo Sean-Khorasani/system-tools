@@ -117,6 +117,65 @@ void Check(TestResult& r, const char* name, bool ok,
     // (CliCommands returns it verbatim), so this is the same vocabulary as the
     // CLI's and already has a name for it.
     if (!ok) r.exitCode = kExitFail;
+
+    // V3: count the check by the area its NAME carries. Every check name is
+    // "<area>.<...>", so the area is everything before the first dot.
+    //
+    // This is NOT coverage. It says how much was WRITTEN, which is the only
+    // thing a harness with no instrumentation can honestly claim. It is
+    // recorded so a reader can see where the checks are concentrated and
+    // where they are thin, which is the question the count was always being
+    // asked to answer. The ticket's stated scope - "an explicitly labelled
+    // approximate number, never a figure presented as branch coverage" - is
+    // exactly this: labelled, by construction.
+    if (name != nullptr && name[0] != '\0') {
+        std::string area(name);
+        const size_t dot = area.find('.');
+        if (dot != std::string::npos) area = area.substr(0, dot);
+        if (area.empty()) area = "unknown";
+        r.checkArea[area] = (r.checkArea.count(area) != 0) ? r.checkArea[area] + 1
+                                                          : 1;
+    }
+}
+
+// V3: the check count by area, for the summary line.
+//
+// Deliberately NOT a fixed table of areas: the checks carry over 90 distinct
+// name prefixes (ticket ids like "f5" and "c10", product names like "chrome"
+// and "svchost", engine names like "geoip" and "asm"). A fixed table would
+// silently drop everything it did not list, which is how a "coverage" number
+// ends up being a number about the table's completeness instead.
+//
+// So this prints EVERY area it was given, and the count it prints is the
+// number of checks the selftest actually ran - which the caller can compare
+// against the pass/fail total to see that nothing was dropped.
+std::string FormatCheckAreas(const std::map<std::string, size_t>& areas) {
+    // Total first, so a reader can check the parts sum to it.
+    size_t total = 0;
+    for (const auto& kv : areas) total += kv.second;
+
+    std::string out = std::to_string(total) + " checks over " +
+                      std::to_string(areas.size()) + " areas:";
+    // Sorted by count descending so the thick areas read first, which is the
+    // question the number is asked ("where are the checks concentrated").
+    std::vector<std::pair<std::string, size_t>> sorted(areas.begin(),
+                                                       areas.end());
+    std::sort(sorted.begin(), sorted.end(),
+              [](const std::pair<std::string, size_t>& a,
+                 const std::pair<std::string, size_t>& b) {
+                  if (a.second != b.second) return a.second > b.second;
+                  return a.first < b.first;
+              });
+    for (size_t i = 0; i < sorted.size() && i < 12; ++i) {
+        out += " ";
+        out += sorted[i].first;
+        out += "=";
+        out += std::to_string(sorted[i].second);
+    }
+    if (sorted.size() > 12) {
+        out += " (+" + std::to_string(sorted.size() - 12) + " more)";
+    }
+    return out;
 }
 
 // ---- synthetic GeoIP database -------------------------------------------------
@@ -10503,6 +10562,12 @@ static const unsigned char kClientHello[] = {
     CheckExposure(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
+    r.output += "\r\n";
+    // V3. The count by area, printed at the end where a reader finishing the
+    // log sees it. Deliberately labelled "checks", never "coverage": the
+    // harness has no instrumentation, and presenting a check count as branch
+    // coverage is the vanity this ticket was written to stop.
+    r.output += FormatCheckAreas(r.checkArea);
     r.output += "\r\n";
     return r;
 }
