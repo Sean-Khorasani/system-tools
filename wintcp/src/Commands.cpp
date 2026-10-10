@@ -2516,11 +2516,137 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     return r;
 }
 
+// 9.5.6: kill a process and everything it started. The SHAPE of the plan is
+// ProcessTree's (pure, tested); this is only the wiring that works it, so the
+// CLI and the GUI apply one rule rather than two that can drift.
+//
+// The order is deepest-first (PlanKillTree is post-order) and the PID-reuse
+// guard is re-applied per target BY THIS CALLER, because a plan is a snapshot:
+// by the time the second process dies the third may have exited and its PID
+// been reused, and killing a recycled PID kills an innocent process.
+CommandResult CmdKillTree(SnapshotSource& source, DWORD rootPid,
+                          const MutateOptions& mo) {
+    // Resolve the create times for the PID-reuse check.
+    SnapshotOptions so;
+    so.resolveProcesses = true;
+    Snapshot snap;
+    if (!source.Build(so, &snap)) {
+        CommandResult r;
+        r.exitCode = kExitFail;
+        r.err = "Enumeration failed: " + WideToUtf8(snap.error) + "\r\n";
+        return r;
+    }
+
+    // The plan is built from ROWS, not the view: a tree built from a filtered
+    // view is a broken tree, because the parents are missing.
+    std::vector<TreeNodeInfo> rows;
+    rows.reserve(snap.rows.size());
+    for (const Connection& c : snap.rows) {
+        if (c.pid == 0) continue;   // not resolvable, so not a tree node
+        TreeNodeInfo n;
+        n.pid = c.pid;
+        n.ppid = c.ppid;
+        n.ppidKnown = c.ppidKnown;
+        n.processCreate = c.processCreate;
+        rows.push_back(n);
+    }
+    const KillTreePlan plan =
+        PlanKillTree(rows, rootPid, ::GetCurrentProcessId());
+    if (plan.targets.empty()) {
+        CommandResult r;
+        r.exitCode = kExitArgs;
+        r.err = "killtree: no such process (" + std::to_string(rootPid) +
+                "), so there is no tree to kill.\r\n";
+        return r;
+    }
+
+    CommandResult r;
+    std::string text = "killtree: PID " + std::to_string(rootPid) +
+                       " and " + std::to_string(plan.targets.size()) +
+                       " process(es) beneath it\r\n";
+    if (plan.partial) {
+        // A partial plan must be said out loud: acting on it silently would
+        // leave processes the user asked for still running.
+        text += "  WARNING: the walk hit its depth ceiling, so some "
+                "descendants are NOT in this plan.\r\n";
+    }
+    for (size_t i : plan.targets) {
+        const TreeNodeInfo& n = rows[i];
+        text += "  PID " + std::to_string(n.pid);
+        if (plan.rootPid != n.pid && n.ppidKnown) {
+            text += " (parent " + std::to_string(n.ppid) + ")";
+        }
+        if (n.pid == ::GetCurrentProcessId()) text += " [this process - last]";
+        text += "\r\n";
+    }
+    r.out = text;
+    if (mo.dryRun) return r;
+    if (!mo.yes) return Refused("killtree PID " + std::to_string(rootPid));
+
+    // Work the plan, deepest-first. Each step is a fresh verification because
+    // the machine moved between steps; a step that fails is REPORTED and the
+    // plan CONTINUES, because a tree with one stubborn child should still lose
+    // the rest of it. That is different from kill's all-or-nothing contract
+    // and is deliberate: "kill the tree" means kill as much of it as can be
+    // killed, and the report is what says which parts survived.
+    size_t ended = 0;
+    std::vector<std::wstring> failures;
+    for (size_t i : plan.targets) {
+        const TreeNodeInfo& n = rows[i];
+        if (n.pid == ::GetCurrentProcessId()) {
+            // Ending ourselves would abandon the rest of the plan mid-way and
+            // report a success the machine did not deliver.
+            failures.push_back(L"refusing to end this process");
+            continue;
+        }
+        const PidVerdict verdict = PidKillVerdict(n.pid, ::GetCurrentProcessId(),
+                                                  true);
+        if (verdict != PidVerdict::Ok) {
+            failures.push_back(std::wstring(L"refused: ") +
+                               PidKillRefusal(verdict));
+            continue;
+        }
+        std::wstring verr;
+        if (n.processCreate.dwLowDateTime != 0 ||
+            n.processCreate.dwHighDateTime != 0) {
+            if (!ProcessResolver::VerifyProcess(n.pid, n.processCreate, true,
+                                                verr)) {
+                failures.push_back(L"PID reused: " + verr);
+                continue;
+            }
+        }
+        std::wstring label;
+        for (const Connection& c : snap.rows) {
+            if (c.pid == n.pid && !c.processName.empty()) {
+                label = c.processName;
+                break;
+            }
+        }
+        const CommandResult one = KillPid(n.pid, n.processCreate, true, label,
+                                          mo);
+        if (one.exitCode == kExitOk) {
+            ++ended;
+        } else {
+            failures.push_back(std::wstring(one.err.begin(), one.err.end()));
+        }
+    }
+    r.out += "ended " + std::to_string(ended) + " of " +
+             std::to_string(plan.targets.size()) + "\r\n";
+    if (!failures.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "killtree: " + std::to_string(failures.size()) +
+                " process(es) could not be ended:\r\n";
+        for (const std::wstring& f : failures) {
+            r.err += "  " + WideToUtf8(f) + "\r\n";
+        }
+    }
+    return r;
+}
+
 CommandResult CmdKill(SnapshotSource& source, DWORD pid,
-                      const MutateOptions& mo) {
+                       const MutateOptions& mo) {
     // D29. This used to carry its own copy of the pseudo-PID rule
     // (`if (pid == 0 || pid == 4)`) alongside the one in KillPid, and the two
-    // had already drifted: the copy said "refusing PID 4." and the original
     // explained why. Two guards for one rule in one file is exactly the drift
     // the 5.3 review exists to catch, and it was only visible because a golden
     // check asserted on the MESSAGE rather than the exit code.

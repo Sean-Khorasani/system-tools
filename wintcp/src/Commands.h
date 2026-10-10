@@ -30,6 +30,7 @@
 #include "Connection.h"
 #include "ConnectionStore.h"
 #include "DetailModel.h"
+#include "ProcessTree.h"   // 9.5.6: CmdKillTree's plan
 #include "Snapshot.h"
 #include "SysStats.h"
 #include "TcpReasm.h"
@@ -379,7 +380,14 @@ std::string RenderJsonRows(const std::vector<Connection>& rows,
 std::vector<int> DefaultExportColumns();
 
 CommandResult CmdKill(SnapshotSource& source, DWORD pid,
-                      const MutateOptions& mo);
+                       const MutateOptions& mo);
+// 9.5.6: kill a process and everything under it. Best-effort by contract -
+// it ends what it can and reports what survived, where `kill` is
+// all-or-nothing. The plan's shape lives in ProcessTree (pure, tested); this
+// builds it from the snapshot and works it deepest-first, re-checking the
+// PID-reuse guard per target because the machine moves between steps.
+CommandResult CmdKillTree(SnapshotSource& source, DWORD pid,
+                          const MutateOptions& mo);
 CommandResult CmdClose(SnapshotSource& source, const std::wstring& select,
                        const MutateOptions& mo);
 

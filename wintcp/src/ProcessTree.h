@@ -43,6 +43,8 @@
 #include <windows.h>
 
 #include <cstddef>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace wintcp {
@@ -100,5 +102,44 @@ bool IsAncestorOf(const std::vector<TreeNodeInfo>& rows, DWORD pid,
 // A "root" is defined by observation rather than by a PPID value, because a
 // stale PPID is the one way a real root can look like an orphan.
 std::vector<size_t> ProcessTreeRoots(const std::vector<TreeNodeInfo>& rows);
+
+// ---- killing a tree ---------------------------------------------------------
+//
+// The decision half of a kill-tree: WHICH processes die, in what order, and
+// which are refused and why. It is pure so it is testable and so the CLI and
+// the GUI apply one rule rather than two that can drift.
+//
+// The order is deliberately DEPTH-FIRST, DEEPEST FIRST (a leaf before its
+// parent). Killing a parent first orphans its children, and an orphaned child
+// can be re-parented to something else or survive as a zombie; killing the
+// leaves first means every process still has a living parent to answer to
+// when it dies, which is the order a user expects from "kill the tree".
+//
+// THE PID-REUSE GUARD IS THE CALLER'S, not this module's. This module decides
+// the shape of the plan; the caller re-checks each PID against the create
+// time captured with the row (ProcessResolver::VerifyProcess) before ending
+// anything, because a plan is a SNAPSHOT and the machine it describes has
+// moved on by the time the first process dies.
+struct KillTreePlan {
+    // Row indices to end, deepest-first. Never empty for a valid root.
+    std::vector<size_t> targets;
+    DWORD rootPid = 0;
+    // True when the walk hit the depth ceiling or a cycle, so some processes
+    // that should have been in the plan are not. A caller MUST say so rather
+    // than acting on a partial plan silently.
+    bool partial = false;
+    // Which targets the caller must NOT end, with the reason. Filled by
+    // the caller as it works the plan (an exited process, a PID that was
+    // reused); this module only reserves the field so the plan is one object.
+    std::vector<std::pair<size_t, std::wstring>> refusals;
+};
+
+// Build the plan for killing 'rootPid' and everything under it.
+// 'rows' must be every row, as above. 'selfPid' is the calling process: a tree
+// that contains it can only be killed from the top, so this plans to end
+// 'selfPid' LAST (it is the root) and the caller refuses that step rather
+// than exiting itself mid-plan.
+KillTreePlan PlanKillTree(const std::vector<TreeNodeInfo>& rows, DWORD rootPid,
+                          DWORD selfPid);
 
 }  // namespace wintcp
