@@ -18,6 +18,18 @@ constexpr uint8_t kFin = 0x01;
 constexpr uint8_t kSyn = 0x02;
 constexpr uint8_t kRst = 0x04;
 
+// Bytes in the address field of a TcpKey. Both endpoints are stored as full
+// 128-bit values regardless of family - a v4 peer occupies the low four bytes
+// of a zeroed 16 - so every compare and copy in this file uses the same width.
+// Typing 16 at seven call sites is how the key stops matching its own copies.
+constexpr size_t kIpv6AddrBytes = 16;
+
+// Width of the diagnostic "addr:port <-> addr:port" line. The longest case is
+// two v6 peers with five-digit ports, which lands well under this; swprintf_s
+// truncates rather than overruns, so an unexpectedly long one cannot corrupt
+// anything.
+constexpr size_t kKeyDescChars = 128;
+
 // The capture is user-triggered and short-lived, but a hostile or merely
 // broken peer could still make us hold a very large stream in memory. Cap it
 // rather than letting one connection exhaust the process.
@@ -38,7 +50,7 @@ struct Segment {
 };
 
 int CmpAddr(const unsigned char* a, const unsigned char* b) {
-    return std::memcmp(a, b, 16);
+    return std::memcmp(a, b, kIpv6AddrBytes);
 }
 
 // Build a key in a canonical orientation so both directions of one
@@ -49,13 +61,13 @@ TcpKey Canonical(const unsigned char* addrA, uint16_t portA,
     const int c = CmpAddr(addrA, addrB);
     const bool swap = (c > 0) || (c == 0 && portA > portB);
     if (swap) {
-        std::memcpy(k.addrA, addrB, 16);
-        std::memcpy(k.addrB, addrA, 16);
+        std::memcpy(k.addrA, addrB, kIpv6AddrBytes);
+        std::memcpy(k.addrB, addrA, kIpv6AddrBytes);
         k.portA = portB;
         k.portB = portA;
     } else {
-        std::memcpy(k.addrA, addrA, 16);
-        std::memcpy(k.addrB, addrB, 16);
+        std::memcpy(k.addrA, addrA, kIpv6AddrBytes);
+        std::memcpy(k.addrB, addrB, kIpv6AddrBytes);
         k.portA = portA;
         k.portB = portB;
     }
@@ -211,8 +223,8 @@ private:
 
 bool TcpKey::operator==(const TcpKey& o) const {
     return portA == o.portA && portB == o.portB &&
-           std::memcmp(addrA, o.addrA, 16) == 0 &&
-           std::memcmp(addrB, o.addrB, 16) == 0;
+           std::memcmp(addrA, o.addrA, kIpv6AddrBytes) == 0 &&
+           std::memcmp(addrB, o.addrB, kIpv6AddrBytes) == 0;
 }
 
 TcpKey MakeTcpKey(const ParsedPacket& p) {
@@ -223,7 +235,7 @@ std::wstring DescribeTcpKey(const TcpKey& k) {
     // Formatting IPv6 properly is fiddly and not worth it here: the low
     // 32 bits plus an ellipsis identify the peer well enough for a
     // diagnostic line, and a v4 address renders exactly.
-    wchar_t buf[128] = {0};
+    wchar_t buf[kKeyDescChars] = {0};
     const bool v4 = (k.addrA[0] == 0 && k.addrA[1] == 0 && k.addrA[2] == 0);
     if (v4) {
         ::swprintf_s(buf, L"%u.%u.%u.%u:%u <-> %u.%u.%u.%u:%u",
