@@ -301,6 +301,46 @@ The default end-mode is the hybrid: `WM_CLOSE`, then terminate if the process is
 
 `unblock --address A --port P` removes the rules for that peer. It cannot take `--select`: by the time you want to undo, the connection is usually gone, so there is no row to select. Address and port are the rule's identity.
 
+#### Writing a rule you state
+
+`block --rule` writes **one** rule instead of deriving two from a live row, so you can block an address that is not connected right now, or scope a block to one process.
+
+```bat
+wintcp.exe block --rule --inbound --address 203.0.113.0/24 --proto tcp --dry-run
+wintcp.exe block --rule --address "*" --process "C:\Windows\System32\svchost.exe" --remote-ports 443 --dry-run
+```
+
+```text
+rule WinTCP block: in-block-tcp-203.0.113.0_002F24-_002A-_002A--
+  block inbound from 203.0.113.0/24  proto=tcp
+```
+
+| Switch | What it scopes |
+|---|---|
+| `--inbound` | Inbound instead of outbound — the way to stop an address *reaching* you. Outbound is the default. |
+| `--allow` | An ALLOW rule rather than a block. **It does not carve a process out of an existing block** — see below. |
+| `--address` | Required. `"*"`, an address, a comma-separated list, or a CIDR range (`203.0.113.0/24`). There is deliberately no default: `"*"` is a real choice and has to be stated, so a rule is never created broader than you asked for by accident. |
+| `--proto` | `tcp` (default), `udp`, or `any`. |
+| `--local-ports`, `--remote-ports` | Port lists in the firewall's own syntax: `"*"`, `443`, `1-1024`, `80,443`. |
+| `--process PATH` | Scopes the rule to one program. Needs the **full image path**. |
+| `--rule-label TEXT` | Appended to the rule name, within the 255-character cap. |
+
+**`--proto any` with a port restriction is refused**, because the firewall API rejects port restrictions on protocol any with `E_INVALIDARG` for every value tried — measured, not inferred. A rule that would silently lose its ports is worse than a refusal.
+
+**`--process` needs the full image path.** A bare program name is refused: the firewall resolves it against a working directory this tool does not control, which is how "block chrome" ends up blocking a different program that happens to live in the service's cwd.
+
+#### Why `--allow` is not an exclusion
+
+Windows Firewall's default conflict resolution is **block wins**. When a block rule and an allow rule both match a packet, the block applies — so adding `--allow --process X` does **not** carve X out of a block rule, no matter which order the rules were created in.
+
+That is a property of the platform, not of this tool, and it is the reason `--allow` is documented as a positive permit rather than an exclusion. To let one process *through* a block, scope the **block** itself (by address or port) rather than adding an allow — that is what `--process` and the port fields are for. `blocks --list` shows every rule with its direction and whether it is still an outbound block, so a rule the user disabled or flipped to allow in `netsh advfirewall` shows up as it actually is rather than as protection.
+
+#### What `blocks` and the viewer show
+
+`blocks --list` prints every tagged rule with its `En` and `Block` state; the GUI's **View → Blocked peers…** shows the same list with per-rule delete. Both read the rule from the firewall rather than from the ledger, so a rule edited outside this tool reads as it is.
+
+Rules this tool creates are named `WinTCP block: …` and carry that tag, which is how `blocks` counts, `blocks --list` finds, and **Remove all WinTCP blocks** cleans them up — without touching rules any other tool or the user wrote. `wintcp.exe blocks` still prints exactly the count it always printed, and listing never writes anything, so a script that parses the count is unaffected.
+
 `blocks` counts rules carrying the WinTCP tag, in any direction and family.
 
 `blocks --list` prints the rules themselves instead of the count, in `--format table|csv|json` (default `table`). Each row is read from the rule the firewall actually holds rather than from what the ledger remembers, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up as it really is — an `En` of `NO` and a `Block` of `NOT` — instead of being reported as protection. A rule that was deleted out from under the ledger is simply absent from the list.
