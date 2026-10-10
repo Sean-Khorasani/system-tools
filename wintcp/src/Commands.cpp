@@ -50,6 +50,16 @@ constexpr DWORD kKillGraceMs = 3000;   // B4: dev constant, no --wait flag:
 constexpr DWORD kStatSampleGapMs = 1000;   // B4: dev constant, no --sample-ms:
 // delta == per-second keeps the arithmetic readable; shorter quantises.
 
+// Milliseconds per second, and bytes in an address field of a BlockRequest.
+// Both appear in this file as well as in MainWindow.cpp / ConnectionStore.cpp
+// and TcpReasm.cpp / TcpTable.cpp / StreamCapture.cpp / BlockConn.cpp, so the
+// names are identical on purpose - a grep should find every site that assumes
+// either width. 1000 here divides a millisecond age or grace into seconds,
+// which is the "factor-of-1000" failure the file-level comment on kMsPerSecond
+// in MainWindow.cpp describes.
+constexpr DWORD kMsPerSecond = 1000;
+constexpr size_t kIpv6AddrBytes = 16;
+
 // Escape a wide string for a JSON string literal.
 //
 // The conversion to UTF-8 stays here - WideToUtf8 is the owner of the
@@ -77,6 +87,47 @@ std::string TsvCell(const std::wstring& w) {
 const int kDefaultCols[] = {COL_PROTO, COL_LOCAL, COL_LPORT, COL_REMOTE,
                             COL_RPORT, COL_STATE, COL_PID, COL_PROCESS,
                             COL_SERVICE, COL_PATH};
+
+// Element count of kDefaultCols. The export column set is built as a pointer
+// pair, so the length is a second spelling of the array's own size; a literal
+// here that drifts from the initialiser silently drops or gains a column, and
+// the only symptom is an export with the wrong number of fields.
+constexpr size_t kDefaultColCount = sizeof(kDefaultCols) / sizeof(kDefaultCols[0]);
+
+// ---- text-buffer bounds ---------------------------------------------------
+// Each swprintf_s / snprintf / sprintf_s site below bounds its own buffer, and
+// every one of them truncates rather than overruns - so these are the widest
+// value each format can hold plus its fixed wording, with slack, rather than a
+// shared maximum. They are named because the numbers sat bare at a dozen sites
+// and a wrong one reads as a plausible truncated number rather than as a
+// failure.
+
+// A short number on its own: "%.1f", "TID %u", "%.1f%%".
+constexpr size_t kNumTextChars = 32;
+
+// One details value, e.g. "cpu 12.34 s   started 3m 2s ago".
+constexpr size_t kThreadDetailChars = 96;
+
+// The two-direction rate cell: "down 1.2 MB/s   up 3.4 MB/s".
+constexpr size_t kRateTextChars = 64;
+
+// An error line, which carries a system message of unbounded length.
+constexpr size_t kErrLineChars = 128;
+
+// One numeric field on the `stat` line ("%.1f%%").
+constexpr size_t kStatFieldChars = 128;
+
+// An IPv6 literal in its narrow form: INET6_ADDRSTRLEN plus slack.
+constexpr size_t kIpv6TextChars = 64;
+
+// A GeoIP description line: version string plus two counts and a byte total.
+constexpr size_t kGeoIpDescChars = 256;
+
+// A capture summary line: four counters with labels.
+constexpr size_t kCaptureLineChars = 256;
+
+// The whole `stat --json` object on one line.
+constexpr size_t kStatJsonChars = 512;
 
 // THE refusal wording, exit 3. Every "we will not do that without being told
 // twice" answer goes through here (C5), so a script can match one shape.
@@ -826,7 +877,8 @@ std::string RenderJsonRows(const std::vector<Connection>& rows,
 }
 
 std::vector<int> DefaultExportColumns() {
-    return std::vector<int>(kDefaultCols, kDefaultCols + 10);
+    return std::vector<int>(kDefaultCols,
+                            kDefaultCols + static_cast<ptrdiff_t>(kDefaultColCount));
 }
 
 bool BuildStoreSnapshot(SnapshotSource& source, ConnectionStore& store,
@@ -1834,7 +1886,7 @@ CommandResult RenderPs(ConnectionStore& store, const PsOptions& opt) {
     std::vector<std::vector<std::string>> cells;
     for (const Row& row : rows) {
         if (opt.limit != 0 && cells.size() >= opt.limit) break;
-        wchar_t cpu[32] = {0};
+        wchar_t cpu[kNumTextChars] = {0};
         if (row.a.cpu >= 0.0)
             ::swprintf_s(cpu, L"%.1f", row.a.cpu);
         else
@@ -1962,12 +2014,12 @@ DetailModel BuildDetailModel(const Connection& c,
                 (static_cast<ULONGLONG>(nowFt.dwHighDateTime) << 32) |
                 nowFt.dwLowDateTime;
 
-            wchar_t label[32] = {0};
+            wchar_t label[kNumTextChars] = {0};
             for (const ThreadInfo& t : threads) {
                 ::swprintf_s(label, L"TID %u", t.tid);
                 std::wstring value;
                 if (t.timesKnown) {
-                    wchar_t buf[96] = {0};
+                    wchar_t buf[kThreadDetailChars] = {0};
                     // CPU as a duration, not bytes: this is the number a reader
                     // compares against the others, and "1.2 s" says that where
                     // "12000000" would only say that we counted.
@@ -1998,7 +2050,7 @@ DetailModel BuildDetailModel(const Connection& c,
             // misreading.
             std::wstring note;
             if (threadsAgeMs != UINT_MAX) {
-                note = L"sampled " + FormatDuration(threadsAgeMs / 1000) +
+                note = L"sampled " + FormatDuration(threadsAgeMs / kMsPerSecond) +
                        L" ago; CPU time is total since each thread started, "
                        L"not since this window opened.";
             } else {
@@ -2036,7 +2088,7 @@ DetailModel BuildDetailModel(const Connection& c,
     live.title = L"Live stats (this refresh)";
     live.tab = kTabProcess;
     if (c.cpuPct >= 0.0) {
-        wchar_t cpu[32] = {0};
+        wchar_t cpu[kNumTextChars] = {0};
         ::swprintf_s(cpu, L"%.1f %%", c.cpuPct);
         add(live, L"CPU", cpu);
     } else {
@@ -2063,7 +2115,7 @@ DetailModel BuildDetailModel(const Connection& c,
         add(live, L"Network sent", FormatBytes(c.trafficTx));
         add(live, L"Network total", FormatBytes(total));
         if (c.bpsKnown) {
-            wchar_t rate[64] = {0};
+            wchar_t rate[kRateTextChars] = {0};
             ::swprintf_s(rate, L"↓ %s/s   ↑ %s/s",
                          FormatBytes(static_cast<ULONGLONG>(c.rxBps + 0.5)).c_str(),
                          FormatBytes(static_cast<ULONGLONG>(c.txBps + 0.5)).c_str());
@@ -2419,7 +2471,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     if (h == nullptr) {
         CommandResult r;
         r.exitCode = kExitFail;
-        wchar_t buf[128] = {0};
+        wchar_t buf[kErrLineChars] = {0};
         ::swprintf_s(buf, L"kill: OpenProcess(%lu) failed: %ls.\r\n", pid,
                      FormatSystemError(::GetLastError()).c_str());
         r.err = WideToUtf8(buf);
@@ -2445,7 +2497,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
             rr.exitCode = kExitFail;
             rr.err = "kill: PID " + std::to_string(pid) +
                      " is still running after " +
-                     std::to_string(kKillGraceMs / 1000) +
+                     std::to_string(kKillGraceMs / kMsPerSecond) +
                      " s of WM_CLOSE; --close never forces. Retry with "
                      "--force to terminate it.\r\n";
             return rr;
@@ -2629,7 +2681,7 @@ bool ConnectionToBlockRequest(const Connection& c, BlockRequest* out,
     req.remotePort = static_cast<uint16_t>(c.remotePort);
     req.label = c.localEndpoint + L" -> " + c.remoteEndpoint;
     if (req.ipv6) {
-        ::memcpy(req.remoteAddr, c.remote6.s6_addr, 16);
+        ::memcpy(req.remoteAddr, c.remote6.s6_addr, kIpv6AddrBytes);
     } else {
         ::memcpy(req.remoteAddr, &c.remote4, 4);
     }
@@ -2729,7 +2781,7 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
             r.err = "unblock: cannot parse IPv6 address.\r\n";
             return r;
         }
-        ::memcpy(req.remoteAddr, a6.s6_addr, 16);
+        ::memcpy(req.remoteAddr, a6.s6_addr, kIpv6AddrBytes);
     } else {
         IN_ADDR a4 = {};
         if (::InetPtonW(AF_INET, norm.c_str(), &a4) != 1) {
@@ -2799,7 +2851,7 @@ CommandResult CmdBlocks() {
 std::string NumberNoTrailingZeros(double v) {
     const long long whole = static_cast<long long>(v < 0 ? v - 0.5 : v + 0.5);
     if (static_cast<double>(whole) == v) return std::to_string(whole);
-    char buf[64] = {0};
+    char buf[kRateTextChars] = {0};
     ::snprintf(buf, sizeof(buf), "%.3f", v);
     std::string s(buf);
     while (!s.empty() && s.back() == '0') s.pop_back();
@@ -3653,7 +3705,7 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
         code = db.LookupV4(ntohl(a4.S_un.S_addr));
         asn = db.LookupAsnV4(ntohl(a4.S_un.S_addr));
     } else if (::InetPtonW(AF_INET6, ip.c_str(), &a6) == 1) {
-        char a6s[64] = {0};
+        char a6s[kIpv6TextChars] = {0};
         ::InetNtopA(AF_INET6, &a6, a6s, sizeof(a6s));
         code = db.LookupV6(a6.s6_addr);
         asn = db.LookupAsnV6(a6.s6_addr);
@@ -3692,7 +3744,7 @@ CommandResult CmdGeoIpInfo(SnapshotSource& /*source*/,
     // an empty database. `swprintf_s` with %llu cannot say that, and the buffer is
     // sized for the shorter, honest form.
     const uint64_t recs = db.RecordCount();
-    wchar_t buf[256] = {0};
+    wchar_t buf[kGeoIpDescChars] = {0};
     if (recs == 0) {
         ::swprintf_s(buf, L"%ls, record count not stated, %llu nodes, %zu bytes",
                      db.DatabaseVersion().c_str(),
@@ -3757,7 +3809,8 @@ size_t TlsRecordChainRun(const std::string& bytes, size_t from) {
     size_t off = from;
     size_t run = 0;
     while (off + 5 <= n) {
-        if (p[off] < 20 || p[off] > 23) break;
+        if (p[off] < kTlsChangeCipherSpec || p[off] > kTlsApplicationData)
+            break;
         if (p[off + 1] != 0x03) break;
         const size_t len =
             (static_cast<size_t>(p[off + 3]) << 8) | p[off + 4];
@@ -4096,7 +4149,7 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         r.err = "capture failed: " + WideToUtf8(cr.error) + "\r\n";
         return r;
     }
-    char buf[256] = {0};
+    char buf[kCaptureLineChars] = {0};
     ::sprintf_s(buf, "packets=%llu toServer=%llu toClient=%llu blocks=%llu\r\n",
                 static_cast<unsigned long long>(cr.packetsParsed),
                 static_cast<unsigned long long>(cr.toServer.bytes.size()),
@@ -4322,7 +4375,7 @@ bool ViewStateFromPreset(const PresetView& v, ViewState* out) {
 
 std::string FormatSystemStatsLine(const SystemStats& s) {
     std::string line = "CPU ";
-    char buf[256] = {0};
+    char buf[kStatFieldChars] = {0};
     if (s.cpuKnown)
         ::sprintf_s(buf, "%.1f%%", s.cpuPct);
     else
@@ -4330,7 +4383,7 @@ std::string FormatSystemStatsLine(const SystemStats& s) {
     line += buf;
     line += "  MEM ";
     if (s.memKnown) {
-        char mb[128] = {0};
+        char mb[kStatFieldChars] = {0};
         ::sprintf_s(mb, "%.1f%%", s.memPct);
         line += WideToUtf8(FormatBytes(s.memUsed)) + "/" +
                 WideToUtf8(FormatBytes(s.memTotal)) + " (" + mb + ")";
@@ -4359,7 +4412,7 @@ std::string FormatSystemStatsLine(const SystemStats& s) {
 }
 
 std::string SystemStatsToJson(const SystemStats& s) {
-    char buf[512] = {0};
+    char buf[kStatJsonChars] = {0};
     ::sprintf_s(buf,
                 "{\"cpu\":%.1f,\"cpuKnown\":%s,\"memUsed\":%llu,\"memTotal\":"
                 "%llu,\"memPct\":%.1f,\"memKnown\":%s,\"diskReadBps\":%.0f,"
