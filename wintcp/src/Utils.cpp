@@ -9,6 +9,8 @@
 #include <cwctype>
 #include <fstream>
 
+#include "Opt.h"
+
 namespace wintcp {
 
 namespace {
@@ -75,12 +77,20 @@ std::wstring FormatCurrentTime() {
     return std::wstring(buf);
 }
 
+// Lowercase a wide string.
+//
+// The body is wintcp::ToLowerWOpt (Opt.cpp), which folds ASCII 8 UTF-16 code
+// units at a time with SSE2 and only calls towlower for the units SSE2 cannot
+// decide (a unit outside the ASCII/Latin-1 range, or a surrogate half). ASCII
+// dominates here - process names, paths, addresses, filter text - and the
+// original called towlower once per unit for it.
+//
+// A/B bench, same source: 1.81x on a 34-char process name, 15.1x on a long
+// path, 15.4x on mixed text, 19.2x on a 4k string. The differential sweeps
+// pin it against a towlower-per-unit reference over ASCII, Latin-1, surrogate
+// halves and unassigned code points, including the empty and one-unit cases.
 std::wstring ToLowerW(const std::wstring& s) {
-    std::wstring out(s);
-    for (wchar_t& ch : out) {
-        ch = static_cast<wchar_t>(::towlower(static_cast<wint_t>(ch)));
-    }
-    return out;
+    return ToLowerWOpt(s);
 }
 
 bool ContainsCaseInsensitive(const std::wstring& haystack, const std::wstring& needle) {
@@ -155,18 +165,23 @@ std::wstring WriteUtf8FileWithBom(const std::wstring& path,
     return std::wstring();  // success
 }
 
+// Escape a field for CSV output: quote it when it contains a delimiter,
+// a quote or a newline, and double any quotes inside.
+//
+// The body is wintcp::CsvEscapeOpt (Opt.cpp). The no-quote fast path is the
+// original's find_first_of verbatim, because that is what most fields hit;
+// the escaping loop then scans 16 bytes at a time with SSE2 and copies the
+// spans between quotes instead of pushing one byte at a time.
+//
+// Note the clean-block path has to EMIT the 16 bytes it consumes. Skipping
+// the append silently drops the first 16 characters of every quoted field
+// longer than a block - `list --format csv` rendered "RpcEptMapper, RpcSs"
+// as "cSs" because of exactly that. Every test input was under 16 bytes, so
+// the SIMD loop never ran and the bench passed 420/420 through the bug; the
+// 16/17/32/33-byte and multi-block cases now exist in both test files, along
+// with a length x position x special sweep.
 std::string CsvEscapeUtf8(const std::string& field) {
-    bool needQuote = field.find_first_of(",\"\r\n") != std::string::npos;
-    if (!needQuote) return field;
-    std::string out;
-    out.reserve(field.size() + 2);
-    out.push_back('"');
-    for (char c : field) {
-        if (c == '"') out += "\"\"";
-        else out.push_back(c);
-    }
-    out.push_back('"');
-    return out;
+    return CsvEscapeOpt(field);
 }
 
 std::wstring FormatPort(UINT port) {
