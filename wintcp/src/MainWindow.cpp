@@ -31,6 +31,7 @@
 #include "BlockedPeersDialog.h"  // 9.2.9: View > Blocked peers...
 #include "EmptyStateActions.h"   // 9.4.2: the empty-state button decision
 #include "Elevate.h"             // 9.4.2: Reelevate for the traffic case
+#include "ExposureScore.h"       // 9.5.5: the exposure badge predicate
 #include "FontCache.h"
 #include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
@@ -2368,7 +2369,69 @@ void MainWindow::RestoreSelection(const std::vector<std::uint64_t>& ids,
     }
 }
 
+// 9.5.5: does this row carry a wildcard bind - 0.0.0.0 or :: - rather than a
+// resolvable specific address? The store prints the local address for most
+// rows, so this is only the case for the fallback path that could not
+// resolve one; the wildcard check itself lives in ExposureScore's predicates
+// and the printable form is what the fallback actually carries.
+static bool IsUnspecifiedAddress(const Connection& c) {
+    // An empty or wildcard printable address is the same thing: the row does
+    // not say where it is bound, and a caller that cannot say must not be
+    // told "not exposed".
+    return c.localAddress.empty() || c.localAddress == L"*" ||
+           c.localAddress == L"0.0.0.0" || c.localAddress == L"::";
+}
+
+// 9.5.5: the exposure badge's decision half, run per refresh.
+//
+// Walks the store once - not the view: an exposure finding is a property of
+// the MACHINE, not of the current filter, so hiding a row with a filter must
+// not hide the finding. The per-row predicate is wintcp::ScoreListener
+// (ExposureScore.cpp), pure and pinned, so this is only the wiring.
+void MainWindow::UpdateExposure() {
+    exposureLine_.clear();
+    exposureDetail_.clear();
+    if (store_.Rows().empty()) return;
+
+    std::vector<ExposureRow> rows;
+    rows.reserve(store_.Rows().size());
+    for (const Connection& c : store_.Rows()) {
+        if (c.pid == 0 && c.processName.empty()) continue;
+        const bool isV6 = (c.family == AF_INET6);
+        ExposureRow row = ScoreListener(
+            reinterpret_cast<const unsigned char*>(
+                isV6 ? c.local6.s6_addr : (const unsigned char*)&c.local4),
+            isV6 ? sizeof(c.local6) : sizeof(c.local4), isV6,
+            static_cast<unsigned short>(c.localPort), c.protocol, c.state,
+            IsUnspecifiedAddress(c));
+        // The two owner axes. A System process is a service, which can only
+        // exist because something gave it the right; an unsigned image is the
+        // one that has not been vouched for by anyone. The two together, on a
+        // wildcard privileged port, is the recipe-24 red case.
+        row.isSystem = (c.integrity == kIntegritySystem);
+        row.isUnsigned = (c.signature == kSigUnsigned);
+        if (row.level != ExposureLevel::kNone) {
+            rows.push_back(row);
+            if (row.level == ExposureLevel::kExposed && !row.reason.empty()) {
+                if (exposureDetail_.size() < 200) {
+                    exposureDetail_ += row.reason;
+                    exposureDetail_ += L"\r\n";
+                }
+            }
+        }
+    }
+    if (rows.empty()) return;
+    const ExposureSummary sum = SummariseExposure(rows);
+    exposureLine_ = sum.line;
+}
+
 void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
+    // 9.5.5: recompute the exposure badge here rather than at each
+    // UpdateStatusBar call site. This function runs on every debounced
+    // keystroke via ApplyView() and once a second from OnTimer, so the
+    // badge stays current without a timer of its own - and no caller has to
+    // remember to call it.
+    UpdateExposure();
     // Counts come from the snapshot pass, not from rescanning every row -
     // this runs on every debounced keystroke via ApplyView().
     const RowStats& st = store_.Stats();
@@ -2456,11 +2519,30 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // deliberately NOT stored: nothing about an alert survives a refresh, so a
     // cleared alert stops being reported without anyone removing it.
     if (!alertHint_.empty()) {
-        if (!right.empty()) right += L"  \xB7  ";
+        if (!right.empty()) right += L"  ·  ";
         right += alertHint_;
-    }    if (!emptyStateHint_.empty()) {
+    }
+    if (!emptyStateHint_.empty()) {
         if (!right.empty()) right += L"  ";
         right += emptyStateHint_;
+    }
+
+    // 9.5.5: the exposure badge. Recipe 24's red case - a listener on a
+    // wildcard address and a privileged port - needs a surface that is not a
+    // column, because COL_COUNT is exactly 32 and a 33rd requires the
+    // eight-part UINT64 mask change the architecture note forbids arriving
+    // as a side effect. The status bar costs nothing and cannot break the
+    // mask, so the badge lives here, after the traffic and empty-state
+    // messages that answer "is the tool working" and before anything that
+    // would bury it.
+    //
+    // Silent on a healthy machine: loopback and RFC1918 listeners are the
+    // default state of a Windows box, and a badge that fires on every
+    // svchost teaches users to ignore the bar. Failure outranks everything
+    // on this bar because a misreport is worse than a silence.
+    if (exposureLine_.empty() == false) {
+        if (!right.empty()) right += L"  ·  ";
+        right += exposureLine_;
     }
 
     // 5.5: while frozen, pane 2 must say so AND say how stale it is. Showing
