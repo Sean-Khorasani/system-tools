@@ -112,6 +112,8 @@ add_executable(wintcp
     wintcp/src/CrashDump.h
     wintcp/src/WinCaps.cpp
     wintcp/src/WinCaps.h
+    wintcp/src/Opt.cpp
+    wintcp/src/Opt.h
     wintcp/src/resource.h
     wintcp/src/wintcp.rc
 )

@@ -211,6 +211,7 @@
     <ClCompile Include="..\src\ChartsWindow.cpp" />
     <ClCompile Include="..\src\CrashDump.cpp" />
     <ClCompile Include="..\src\WinCaps.cpp" />
+    <ClCompile Include="..\src\Opt.cpp" />
   </ItemGroup>
   <ItemGroup>
     <!-- REQUIRED, not cosmetic: MainWindow::RegisterClass loads IDR_MAINMENU

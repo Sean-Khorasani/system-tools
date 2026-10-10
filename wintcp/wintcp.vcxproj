@@ -251,6 +251,7 @@
   <ClCompile Include="src\FontCache.cpp" />
     <ClCompile Include="src\CrashDump.cpp" />
     <ClCompile Include="src\WinCaps.cpp" />
+    <ClCompile Include="src\Opt.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\MainWindow.h" />
@@ -296,6 +297,7 @@
   <ClInclude Include="src\FontCache.h" />
     <ClInclude Include="src\CrashDump.h" />
     <ClInclude Include="src\WinCaps.h" />
+    <ClInclude Include="src\Opt.h" />
     <ClInclude Include="src\resource.h" />
   </ItemGroup>
   <ItemGroup>
