@@ -26,6 +26,12 @@
 
 #pragma comment(lib, "comctl32.lib")
 
+// The two startup-failure MessageBox bodies, which differ only in the API name
+// and the error number that follow the fixed wording. One constant because the
+// two sites were the same bare 256, and swprintf_s truncates rather than
+// overruns so a longer message cannot corrupt anything.
+constexpr size_t kStartupMsgChars = 256;
+
 // wmain, not wWinMain: build.bat links /SUBSYSTEM:CONSOLE so an interactive
 // cmd.exe waits for this process and prints its next prompt only after the
 // command has really finished. A WINDOWS-subsystem exe hands the prompt back
@@ -156,7 +162,7 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
 
     if (!wintcp::MainWindow::RegisterClass(hInstance)) {
         DWORD err = ::GetLastError();
-        wchar_t msg[256] = {0};
+        wchar_t msg[kStartupMsgChars] = {0};
         ::swprintf_s(msg, L"RegisterClassEx failed (error %lu).", static_cast<unsigned long>(err));
         ::MessageBoxW(nullptr, msg, L"WinTCP", MB_OK | MB_ICONERROR);
         ::WSACleanup();
@@ -167,7 +173,7 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
     HWND hwnd = window.Create(hInstance, nCmdShow);
     if (hwnd == nullptr) {
         DWORD err = ::GetLastError();
-        wchar_t msg[256] = {0};
+        wchar_t msg[kStartupMsgChars] = {0};
         ::swprintf_s(msg, L"CreateWindowEx failed (error %lu).", static_cast<unsigned long>(err));
         ::MessageBoxW(nullptr, msg, L"WinTCP", MB_OK | MB_ICONERROR);
         ::WSACleanup();
