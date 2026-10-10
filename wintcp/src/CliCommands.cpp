@@ -438,25 +438,36 @@ const CommandHelp kCommandHelps[] = {
     {"bookmark",
      "bookmark - mark remote peers (stored per-user in HKCU)\r\n"
      "\r\n"
-     "Usage: wintcp.exe bookmark list [--format table|csv|json]\r\n"
-     // Keep-in-step: 0..4 restates kMinTag..kMaxTag (Commands.h), pinned by
-     // static_assert to kBookmarkTagNone..Green (Commands.cpp).
-     "       wintcp.exe bookmark add --address <ip> --port N [--tag 0..4]\r\n"
-     "                               [--note TEXT]\r\n"
-     "       wintcp.exe bookmark remove --address <ip> --port N\r\n"
-     "       wintcp.exe bookmark note --address <ip> --port N --note TEXT\r\n"
-     "       wintcp.exe bookmark colour --address <ip> --port N --tag 0..4\r\n"
-     "\r\n"
-     "Identity is remote address + remote port (what survives a reconnect).\r\n"
-     "Tags: 0 none, 1 red, 2 amber, 3 blue, 4 green. Addresses normalise\r\n"
-     "(::ffff:1.2.3.4 becomes 1.2.3.4); placeholders like 0.0.0.0 refuse.\r\n"
-     "\r\n"
-     "Examples:\r\n"
-     "  wintcp.exe bookmark list\r\n"
-     "  wintcp.exe bookmark add --address 93.184.216.34 --port 443 --tag 1 --note \"suspicious\"\r\n"
-     "  wintcp.exe bookmark note --address 93.184.216.34 --port 443 --note \"cleared by netops\"\r\n"
-     "  wintcp.exe bookmark colour --address 93.184.216.34 --port 443 --tag 4\r\n"
-     "  wintcp.exe bookmark remove --address 93.184.216.34 --port 443\r\n"},
+      "Usage: wintcp.exe bookmark list [--format table|csv|json]\r\n"
+      // Keep-in-step: 0..4 restates kMinTag..kMaxTag (Commands.h), pinned by
+      // static_assert to kBookmarkTagNone..Green (Commands.cpp).
+      "       wintcp.exe bookmark add --address <ip> --port N [--tag 0..4]\r\n"
+      "                               [--note TEXT]\r\n"
+      "       wintcp.exe bookmark remove --address <ip> --port N\r\n"
+      "       wintcp.exe bookmark note --address <ip> --port N --note TEXT\r\n"
+      "       wintcp.exe bookmark colour --address <ip> --port N --tag 0..4\r\n"
+      "       wintcp.exe bookmark export --out <file> [--force]\r\n"
+      "       wintcp.exe bookmark import --in <file> [--yes]\r\n"
+      "\r\n"
+      "Identity is remote address + remote port (what survives a reconnect).\r\n"
+      "Tags: 0 none, 1 red, 2 amber, 3 blue, 4 green. Addresses normalise\r\n"
+      "(::ffff:1.2.3.4 becomes 1.2.3.4); placeholders like 0.0.0.0 refuse.\r\n"
+      "\r\n"
+      "export / import move the whole set as one JSON file (schema version 1),\r\n"
+      "which is how bookmarks travel to another machine or into a dotfiles\r\n"
+      "repo. The file is read IN FULL before anything is written: a file that\r\n"
+      "fails to parse is refused whole, so a half-broken import can never\r\n"
+      "leave you with half your bookmarks. --out refuses an existing file\r\n"
+      "unless --force; import needs --yes like every other act verb.\r\n"
+      "\r\n"
+      "Examples:\r\n"
+      "  wintcp.exe bookmark list\r\n"
+      "  wintcp.exe bookmark add --address 93.184.216.34 --port 443 --tag 1 --note \"suspicious\"\r\n"
+      "  wintcp.exe bookmark note --address 93.184.216.34 --port 443 --note \"cleared by netops\"\r\n"
+      "  wintcp.exe bookmark colour --address 93.184.216.34 --port 443 --tag 4\r\n"
+      "  wintcp.exe bookmark remove --address 93.184.216.34 --port 443\r\n"
+      "  wintcp.exe bookmark export --out bookmarks.json\r\n"
+      "  wintcp.exe bookmark import --in bookmarks.json --yes\r\n"},
     {"preset",
      "preset - saved views (filter, sort, columns; stored per-user in HKCU)\r\n"
      "\r\n"
@@ -709,7 +720,9 @@ t == L"--rule-name" || t == L"--rule-address" ||
             // matching the alert group's note above - a boolean that consumed
             // a value would swallow the next argument.
             t == L"--proto" || t == L"--local-ports" ||
-            t == L"--remote-ports" || t == L"--process" || t == L"--rule-label";
+            t == L"--remote-ports" || t == L"--process" || t == L"--rule-label" ||
+            // 9.2.10: the file a verb reads.
+            t == L"--in";
 }
 
 // D25: "appear", "disappear", "state", in any case, comma-separated, in any
@@ -768,6 +781,8 @@ bool PrintCommandHelp(const std::wstring& cmd) {
 
 struct Args {
     std::wstring filter;
+    // 9.2.10: the file a verb reads, beside 'out' which it writes.
+    std::wstring in;
     // 9.2.9: `blocks --list` lists the rules the count counts. Deliberately
     // NOT a sub-verb: "blocks" stays one verb with one meaning, and a script
     // that runs it with no switches keeps the count byte for byte.
@@ -1027,6 +1042,11 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             a->verbose = true;
         } else if (t == L"--out") {
             if (!need(&a->out)) return "missing value for --out";
+        } else if (t == L"--in") {
+            // 9.2.10: the file a verb READS, beside --out which it writes. Only
+            // `bookmark import` accepts it (kVerbSwitches), so typing it
+            // elsewhere is refused rather than ignored.
+            if (!need(&a->in)) return "missing value for --in";
         } else if (t == L"--text") {
             // capture only. No value: the only question is whether to print the
             // stream, and "how much of it" is --dir's job, not this switch's.
@@ -1336,9 +1356,11 @@ const wchar_t* const kSwitchNames[] = {
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--asn-db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
-    // 9.2.9: lists the rules the `blocks` count counts.
-    L"--list",
-    L"--text", L"--bin", L"--dir",
+     // 9.2.9: lists the rules the `blocks` count counts.
+     L"--list",
+     // 9.2.10: the file a verb reads, beside --out which it writes.
+     L"--in",
+     L"--text", L"--bin", L"--dir",
      L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
      L"--dns-timeout",
      L"--dns-timeout",
@@ -1484,7 +1506,9 @@ const VerbSwitches kVerbSwitches[] = {
      {L"blocks", L"--list --format"},   // 9.2.9: count, or list the rules
        {L"capture", L"--select --filter --secs --yes --dry-run --text --bin --dir --flags --out --force"},
     {L"follow", nullptr},  // alias: same as capture
-    {L"bookmark", L"--address --port --tag --note --format"},
+     {L"bookmark",
+      // 9.2.10: --out/--in/--yes/--force for the export and import subverbs.
+      L"--address --port --tag --note --format --out --in --yes --force"},
     {L"preset",
      L"--name --filter --sort --asc --desc --force --format --columns "
      L"--limit --traffic --dns --db --asn-db --group"},
@@ -2239,6 +2263,20 @@ int RunCliCommand(int argc, wchar_t** argv) {
         if (sub == L"note") {
             const CommandResult r =
                 CmdBookmarkNote(a.address, a.port, a.note);
+            Emit(r);
+            return r.exitCode;
+        }
+        // 9.2.10: the file. `export` writes it and `import` reads it, and both
+        // go through the same codec so a file this tool writes is a file it can
+        // read back - pinned by a round-trip test in Bench.cpp.
+        if (sub == L"export") {
+            const CommandResult r =
+                CmdBookmarkExport(a.out, a.force);
+            Emit(r);
+            return r.exitCode;
+        }
+        if (sub == L"import") {
+            const CommandResult r = CmdBookmarkImport(a.in, a.yes);
             Emit(r);
             return r.exitCode;
         }

@@ -1,3 +1,7 @@
+bookmark export --out bookmarks.json --force
+bookmark export --out bookmarks.json --force
+bookmark import --in bookmarks.json
+bookmark import --in bookmarks.json --yes
 list --filter "process:AnyDesk.exe state:estab" --columns pid,process,local,remote,rport,state
 close --select "pid:5168 remote:107.155.105.90" --dry-run
 kill --select "local:port:49665" --dry-run
