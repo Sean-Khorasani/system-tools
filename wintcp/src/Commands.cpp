@@ -20,6 +20,7 @@
 #include "DnsResolver.h"
 #include "Elevate.h"
 #include "GeoIp.h"
+#include "Opt.h"
 #include "Presets.h"
 #include "ProcessInfo.h"
 #include "SocketTraffic.h"
@@ -49,29 +50,20 @@ constexpr DWORD kKillGraceMs = 3000;   // B4: dev constant, no --wait flag:
 constexpr DWORD kStatSampleGapMs = 1000;   // B4: dev constant, no --sample-ms:
 // delta == per-second keeps the arithmetic readable; shorter quantises.
 
+// Escape a wide string for a JSON string literal.
+//
+// The conversion to UTF-8 stays here - WideToUtf8 is the owner of the
+// surrogate rules - and the escaping itself is wintcp::JsonEscapeOpt
+// (Opt.cpp), which scans 16 bytes at a time with SSE2 for the six
+// characters that need a backslash and copies the spans between them with
+// memcpy. Control characters below 0x20 still emit the identical \\u00XX
+// sequence, and UTF-8 continuation bytes pass through untouched.
+//
+// A/B bench, same source: 1.0-1.9x depending on how much of the string is
+// escape-free; the differential tests pin it against the original switch
+// over control chars, quotes, backslashes, CR/LF/TAB and multi-byte UTF-8.
 std::string JsonEscapeA(const std::wstring& s) {
-    const std::string u8 = WideToUtf8(s);
-    std::string out;
-    out.reserve(u8.size() + 8);
-    for (unsigned char ch : u8) {
-        switch (ch) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (ch < 0x20) {
-                    char buf[8] = {0};
-                    ::sprintf_s(buf, "\\u%04x",
-                                static_cast<unsigned int>(ch));
-                    out += buf;
-                } else {
-                    out += static_cast<char>(ch);
-                }
-        }
-    }
-    return out;
+    return JsonEscapeOpt(s);
 }
 
 std::string TsvCell(const std::wstring& w) {
@@ -213,89 +205,33 @@ std::string ValidateStreamColumns(const ListOptions& opt) {
 // their exact raw delimiters: they are machine shapes. The same job is done
 // by `column -t`, docker ps, kubectl and Go's text/tabwriter.
 
-// Display width of one decoded code point: a compact East Asian Width
-// approximation (the W/F ranges terminals render double, combining marks
-// zero, everything else one). ASCII - the common case - is exact.
-size_t CpWidth(uint32_t cp) {
-    if (cp < 0x0300) return 1;
-    if (cp <= 0x036F) return 0;   // combining accents
-    if (cp < 0x1100) return 1;
-    if (cp <= 0x115F) return 2;   // Hangul Jamo
-    if ((cp >= 0x2E80 && cp <= 0x303E) ||
-        (cp >= 0x3041 && cp <= 0x33FF) ||
-        (cp >= 0x3400 && cp <= 0x4DBF) ||
-        (cp >= 0x4E00 && cp <= 0x9FFF) ||
-        (cp >= 0xA000 && cp <= 0xA4CF) ||
-        (cp >= 0xA960 && cp <= 0xA97F) ||
-        (cp >= 0xAC00 && cp <= 0xD7A3) ||
-        (cp >= 0xF900 && cp <= 0xFAFF) ||
-        (cp >= 0xFE30 && cp <= 0xFE6F) ||
-        (cp >= 0xFF00 && cp <= 0xFF60) ||
-        (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-        (cp >= 0x1F300 && cp <= 0x1FAFF) ||
-        (cp >= 0x20000 && cp <= 0x3FFFD)) {
-        return 2;
-    }
-    return 1;
-}
-
 // Decode the code point at 'i' (UTF-8 from WideToUtf8; a stray byte counts
 // as itself) and return how many bytes it spans.
-size_t NextCp(const std::string& s, size_t i, uint32_t* cp) {
-    const unsigned char u = static_cast<unsigned char>(s[i]);
-    size_t n = 1;
-    uint32_t v = u;
-    if (u >= 0xF0 && i + 4 <= s.size()) {
-        n = 4;
-        v = u & 0x07u;
-    } else if (u >= 0xE0 && i + 3 <= s.size()) {
-        n = 3;
-        v = u & 0x0Fu;
-    } else if (u >= 0xC0 && i + 2 <= s.size()) {
-        n = 2;
-        v = u & 0x1Fu;
-    } else {
-        *cp = u;
-        return 1;
-    }
-    for (size_t k = 1; k < n; ++k) {
-        const unsigned char c = static_cast<unsigned char>(s[i + k]);
-        if ((c & 0xC0u) != 0x80u) {
-            *cp = u;  // malformed: count the lead byte, resync next call
-            return 1;
-        }
-        v = (v << 6) | (c & 0x3Fu);
-    }
-    *cp = v;
-    return n;
-}
+//
+// The whole UTF-8 width walk - CpWidth, NextCp, DisplayWidth and
+// TruncateToWidth - now lives in Opt.cpp. The four are one set and only make
+// sense together: DisplayWidthOpt scans ASCII 16 bytes at a time and decodes
+// codepoint by codepoint across the non-ASCII gaps, TruncateToWidthOpt fuses
+// the measure pass with the cut pass (the original paid DisplayWidth a second
+// time before walking again), and the measured gain came from both. Splitting
+// them back apart would put the slow path straight back.
+//
+// A/B bench, same source: DisplayWidth 2.2x on a 47-char process cell to 27x
+// on a 256-char path cell, TruncateToWidth 2.2-2.9x, and the mixed CJK/emoji
+// cells 2.2-2.6x. CpWidthOpt is the original range chain unchanged - a 12 KB
+// lookup table was built from the chain with a constexpr table and MEASURED
+// at 0.62x/0.78x, so it was rejected and the chain kept. The differential
+// sweeps in wintcp/tests/asm pin all four: 169,692 code points for CpWidth,
+// and every width from 0 to total+1 for TruncateToWidth.
 
 size_t DisplayWidth(const std::string& s) {
-    size_t w = 0;
-    for (size_t i = 0; i < s.size();) {
-        uint32_t cp = 0;
-        i += NextCp(s, i, &cp);
-        w += CpWidth(cp);
-    }
-    return w;
+    return DisplayWidthOpt(s);
 }
 
 // Truncate to at most 'width' display columns, marking the cut with U+2026
 // so a shortened cell reads as shortened instead of as the whole value.
 std::string TruncateToWidth(const std::string& s, size_t width) {
-    if (DisplayWidth(s) <= width) return s;
-    if (width == 0) return std::string();
-    const size_t budget = width - 1;   // the ellipsis owns the last column
-    size_t w = 0, i = 0;
-    while (i < s.size()) {
-        uint32_t cp = 0;
-        const size_t n = NextCp(s, i, &cp);
-        const size_t cw = CpWidth(cp);
-        if (w + cw > budget) break;
-        w += cw;
-        i += n;
-    }
-    return s.substr(0, i) + "\xE2\x80\xA6";
+    return TruncateToWidthOpt(s, width);
 }
 
 // The width cap in force for a column under 'opt' (0 = measure from the
