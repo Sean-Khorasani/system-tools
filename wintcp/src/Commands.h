@@ -425,6 +425,18 @@ CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes);
 
 // ---- bookmark --------------------------------------------------------------
 CommandResult CmdBookmarkList(const std::string& format);
+
+// 9.2.10: the bookmark file. Export writes every bookmark as a Version=1 JSON
+// document; import reads one and adds what it holds, refusing the WHOLE file
+// when the codec refuses it (so a partial import cannot happen).
+//
+// Both follow the act-verb contract: 2 for a bad argument, 3 for no --yes,
+// 0 when done, 1 when the target could not be read. Import parses and plans
+// before anything is written, so a file that will not parse leaves the
+// bookmarks that were there alone.
+CommandResult CmdBookmarkExport(const std::wstring& outPath,
+                                bool forceOverwrite);
+CommandResult CmdBookmarkImport(const std::wstring& inPath, bool yes);
 CommandResult CmdBookmarkAdd(const std::wstring& address, UINT port,
                              unsigned tag, const std::wstring& note);
 CommandResult CmdBookmarkRemove(const std::wstring& address, UINT port);

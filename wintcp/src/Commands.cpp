@@ -15,6 +15,7 @@
 
 #include "BlockConn.h"
 #include "Bookmarks.h"
+#include "BookmarkFile.h"  // 9.2.10: the export/import codec
 #include "BuildInfo.h"
 #include "ColumnsWin.h"
 #include "DnsResolver.h"
@@ -3460,6 +3461,130 @@ CommandResult CmdBookmarkList(const std::string& format) {
     if (unreadable != 0) {
         r.err = "warning: " + std::to_string(unreadable) +
                 " unreadable bookmark entries skipped.\r\n";
+    }
+    return r;
+}
+
+// ---- 9.2.10: bookmark export / import ---------------------------------------
+
+CommandResult CmdBookmarkExport(const std::wstring& outPath,
+                                bool forceOverwrite) {
+    CommandResult r;
+    if (outPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "bookmark export: --out <file> is required.\r\n";
+        return r;
+    }
+    std::wstring existsErr;
+    if (RefuseExistingOutput(L"bookmark export", outPath, forceOverwrite,
+                             &existsErr)) {
+        r.exitCode = kExitArgs;
+        r.err = WideToUtf8(existsErr);
+        return r;
+    }
+    size_t unreadable = 0;
+    const std::vector<Bookmark> all = Bookmarks::List(&unreadable);
+    // No BOM: this is a JSON document, and a BOM in front of it breaks every
+    // parser that follows the spec - including this tool's own reader.
+    std::string json;
+    SerialiseBookmarks(all, &json);
+    const std::wstring werr = WriteUtf8FileWithBom(outPath, json, false);
+    if (!werr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "bookmark export failed: " + WideToUtf8(werr) + "\r\n";
+        return r;
+    }
+    r.out = "exported " + std::to_string(all.size()) + " bookmarks to " +
+            WideToUtf8(outPath) + "\r\n";
+    if (unreadable != 0) {
+        r.err = "warning: " + std::to_string(unreadable) +
+                " unreadable bookmark entries skipped.\r\n";
+    }
+    return r;
+}
+
+CommandResult CmdBookmarkImport(const std::wstring& inPath, bool yes) {
+    CommandResult r;
+    if (inPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "bookmark import: --in <file> is required.\r\n";
+        return r;
+    }
+
+    // Read and parse BEFORE touching the registry. A file that will not parse
+    // must leave the bookmarks that were already there alone - importing half
+    // a file is the failure the codec exists to prevent, and a partial import
+    // followed by a fatal one is the same failure with extra steps.
+    std::string text;
+    std::wstring readErr = ReadUtf8File(inPath, &text);
+    if (!readErr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "bookmark import failed: could not read " +
+                WideToUtf8(inPath) + ": " + WideToUtf8(readErr) + "\r\n";
+        return r;
+    }
+    std::vector<Bookmark> items;
+    std::wstring parseErr;
+    if (!ParseBookmarks(text, &items, &parseErr)) {
+        r.exitCode = kExitArgs;
+        r.err = "bookmark import refused " + WideToUtf8(inPath) + ": " +
+                WideToUtf8(parseErr) + "\r\n";
+        return r;
+    }
+
+    // The plan is printed before anything is written, so a dry run shows
+    // exactly what would be imported and the count is checkable by eye.
+    std::string plan = "import " + std::to_string(items.size()) +
+                       " bookmarks from " + WideToUtf8(inPath) + "\r\n";
+    if (items.empty()) {
+        plan += "  (the file holds no bookmarks; nothing to do)\r\n";
+    } else {
+        for (size_t i = 0; i < items.size() && i < 5; ++i) {
+            plan += "  " +
+                    WideToUtf8(JoinEndpoint(items[i].address, items[i].port,
+                                            items[i].address.find(L':') !=
+                                                std::wstring::npos)) +
+                    "\r\n";
+        }
+        if (items.size() > 5) {
+            plan += "  ... and " + std::to_string(items.size() - 5) + " more\r\n";
+        }
+    }
+    // The refusal contract is the one every act verb follows: 3 for "no --yes",
+    // after the plan is built so `--dry-run` without `--yes` still shows it.
+    if (!yes) {
+        return Refused("bookmark import");
+    }
+
+    size_t added = 0;
+    size_t already = 0;
+    std::wstring firstErr;
+    for (const Bookmark& b : items) {
+        // Add refreshes the timestamp of an existing bookmark and nothing
+        // else, so re-importing a file cannot discard a note the user typed -
+        // the contract Bookmarks::Add already documents.
+        if (Bookmarks::IsBookmarked(b.address, b.port)) {
+            ++already;
+            continue;
+        }
+        if (!Bookmarks::Add(b.address, b.port, b.tag, b.note)) {
+            if (firstErr.empty()) {
+                firstErr = L"could not import " + b.address;
+            }
+            continue;
+        }
+        ++added;
+    }
+    r.out = plan;
+    r.out += "imported " + std::to_string(added) +
+             (already != 0 ? " (already present: " + std::to_string(already) +
+                                 ")"
+                           : "") +
+             "\r\n";
+    if (!firstErr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "bookmark import partly failed: " + WideToUtf8(firstErr) +
+                "\r\n";
     }
     return r;
 }
