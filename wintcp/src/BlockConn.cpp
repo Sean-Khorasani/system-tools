@@ -1876,4 +1876,63 @@ bool RemoveBlockedRule(const std::wstring& name, std::wstring* error) {
     return true;
 }
 
+bool SetBlockedRuleEnabled(const std::wstring& name, bool enabled,
+                           std::wstring* error) {
+    if (error != nullptr) {
+        error->clear();
+    }
+    if (name.empty()) {
+        SetError(error, L"internal error: no rule name to enable/disable");
+        return false;
+    }
+    FwSession session;
+    if (!session.Open(error)) {
+        return false;
+    }
+    INetFwRules* rules = session.rules();
+
+    BStr bname(name);
+    if (!bname.valid()) {
+        SetError(error, L"out of memory allocating rule name");
+        return false;
+    }
+    ComPtr<INetFwRule> rule;
+    const HRESULT found = rules->Item(bname, rule.receive());
+    if (FAILED(found) || rule.get() == nullptr) {
+        // 0x80070490 is how a missing rule surfaces. Disabling something that
+        // is already gone is not an error - the state the caller wants is the
+        // state the firewall is in.
+        if (found == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ||
+            found == REGDB_E_CLASSNOTREG) {
+            return true;
+        }
+        SetError(error, L"could not read the rule \"" + name + L"\": " +
+                            FormatHresult(found));
+        return false;
+    }
+
+    const HRESULT hr = rule.get()->put_Enabled(
+        enabled ? VARIANT_TRUE : VARIANT_FALSE);
+    if (FAILED(hr)) {
+        SetError(error, L"could not set Enabled on \"" + name + L"\": " +
+                            FormatHresult(hr));
+        return false;
+    }
+
+    // Read it back. put_Enabled is the one property where a silent no-op would
+    // be invisible: the manager would show "enabled" while the firewall held
+    // "disabled", and the user would believe they had turned a block back on.
+    VARIANT_BOOL now = VARIANT_FALSE;
+    if (FAILED(rule.get()->get_Enabled(&now))) {
+        SetError(error, L"could not read back Enabled on \"" + name + L"\"");
+        return false;
+    }
+    if ((now != VARIANT_FALSE) != enabled) {
+        SetError(error, L"the firewall accepted the change to \"" + name +
+                            L"\" but Enabled reads back the other way");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace wintcp

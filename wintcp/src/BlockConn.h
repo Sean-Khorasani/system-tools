@@ -162,6 +162,20 @@ bool ListBlockedRules(std::vector<BlockedRule>* out, std::wstring* error);
 // viewer is not allowed to change that number as a side effect of looking.
 bool RemoveBlockedRule(const std::wstring& name, std::wstring* error);
 
+// Enable or disable ONE tagged rule, leaving it installed.
+//
+// Disabling is a different operation from deleting, and the difference is the
+// point: a disabled rule can be re-enabled with its identity intact, so "turn
+// this off for an hour and put it back" is one step instead of delete-then-
+// re-derive. A rule that has to be recreated is a rule whose name might change
+// and whose description is lost.
+//
+// The rule is read back after the write, so a caller is told when the
+// firewall accepted the change and when it refused it - a silent no-op here
+// would leave the manager showing a state the firewall is not in.
+bool SetBlockedRuleEnabled(const std::wstring& name, bool enabled,
+                           std::wstring* error);
+
 // 9.2.9, two PURE helpers so the viewer's ledger handling is testable
 // without touching the real file. Both are the reason RemoveBlockedRule can
 // promise not to change what `blocks` counts: the ledger's shape is decided
