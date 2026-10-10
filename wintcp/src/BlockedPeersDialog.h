@@ -1,0 +1,70 @@
+// BlockedPeersDialog.h
+// SPDX-License-Identifier: Apache-2.0
+// 9.2.9 - View > Blocked peers...
+//
+// A modal that lists the firewall rules `blocks` counts, with per-rule delete
+// and "remove all". The rules come from ListBlockedRules (BlockConn.h), which
+// reports what the firewall actually holds rather than what the ledger
+// remembers, so a rule the user disabled or flipped to allow shows up as
+// disabled rather than as protection.
+//
+// The LAYOUT is built in memory, the same as PromptDialog, and the bounds are
+// pinned by a selftest in the same way: the writer refuses rather than
+// overrunning, and the test drives it with deliberately small buffers. See the
+// long note in PromptDialog.cpp for why a dialog template writer needs that
+// treatment - the failure mode is an out-of-bounds read inside the dialog
+// manager, which presents as an intermittent access violation rather than as a
+// crash at the site that caused it.
+//
+// No HWND crosses this interface: MainWindow passes an owner and gets back
+// what the user did, so nothing below this header depends on the window.
+
+#pragma once
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+#include <string>
+#include <vector>
+
+#include "BlockConn.h"
+
+namespace wintcp {
+
+// What the user chose. kClosed is "looked and left", which is distinct from
+// kRefused - the latter means the dialog could not be shown at all (out of
+// memory building its template, or no rules to show), and a caller that wants
+// to report "nothing to delete" needs the difference.
+enum class BlockedPeersChoice {
+    kClosed,
+    kDeletedOne,
+    kDeletedAll,
+    kRefused,
+};
+
+// Show the viewer. 'owner' may be null. Returns what happened; 'failure' is
+// set with a human-readable reason on kRefused and is never set on success.
+// Never throws.
+BlockedPeersChoice ShowBlockedPeersDialog(HWND owner, std::wstring* failure);
+
+// The two pieces the selftest pins, exposed for the same reason
+// PromptDialog's TemplateFits is: the one place the layout runs is a modal
+// the UI harness cannot dismiss, so every capacity rule in it would otherwise
+// go unverified. What is tested is what ships, because these are the
+// definitions the product links against too.
+//
+// The row text for one rule. A rule that is disabled or is no longer a block
+// is labelled, never shown as though it were protection.
+std::wstring BlockedPeersRowText(const BlockedRule& rule);
+
+// Bytes the dialog template needs for a title of 'titleChars' characters.
+size_t BlockedPeersTemplateCapacity(size_t titleChars);
+
+// Build the template into 'buf' if it fits. REFUSES (false, buf untouched)
+// rather than writing past the end - see PromptDialog.cpp for why that
+// property is the whole point.
+bool BlockedPeersTemplateFits(const wchar_t* title, std::vector<BYTE>* buf);
+
+}  // namespace wintcp
