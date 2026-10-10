@@ -52,6 +52,13 @@
 #include "ChangeLogWindow.h"  // change-log buffer cap (5.4)
 #include "Commands.h"    // abstract layer: details/preset/select helpers
 #include "BlockConn.h"   // R3: ParseLedgerBytes - the pure ledger parser
+#include "BlockedPeersDialog.h"  // 9.2.9: the dialog-template bounds
+#include "BookmarkFile.h"         // 9.2.10: the bookmark export/import codec
+#include "PresetFile.h"           // 9.2.10: the preset export/import codec
+#include "IniFile.h"              // 9.2.10: the portable wintcp.ini
+#include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
+#include "ProcessTree.h"          // 9.5.6: the process tree
+#include "Sha256.h"               // 9.5.7: the image hash
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -136,6 +143,12 @@ constexpr unsigned char kMmMap    = 0xE0;
 // with two different expressions - the drift A2 exists to prevent.
 constexpr size_t kMmMaxInlineSize = 29;
 
+// The extended-size marker: low five bits set to 29 do NOT mean "29 bytes" -
+// they mean "one more byte follows, and the real size is that byte plus 29"
+// (the same 29 for all three extended codes 29/30/31, so it is not the inline
+// limit above by coincidence - 29 IS kSizeExtended29, the first of them).
+constexpr unsigned char kMmSizeExtended = 29;
+
 unsigned char MmControlByte(unsigned char type, size_t size) {
     const size_t n = (size < kMmMaxInlineSize) ? size : kMmMaxInlineSize;
     return static_cast<unsigned char>(type | n);
@@ -207,8 +220,9 @@ void MmStr(std::vector<unsigned char>* out, const char* s) {
         // characters, so the first ASN feature to use this reader hit it
         // immediately, and no fixture could express a real ASN record until
         // this was fixed.
-        out->push_back(static_cast<unsigned char>(kMmString | 29u));
-        out->push_back(static_cast<unsigned char>(n - 29));
+        out->push_back(static_cast<unsigned char>(
+            kMmString | kMmSizeExtended));
+        out->push_back(static_cast<unsigned char>(n - kMmSizeExtended));
     }
     out->insert(out->end(), s, s + n);
 }
@@ -307,9 +321,18 @@ static_assert(kMmPtrTarget2 >= kMmPtr3Base,
 
 // A data-section pointer: control byte 001SSVVV, then SS+1 bytes (four for
 // SS=3, where VVV is IGNORED rather than being the top of the value).
+//
+// The SS field is bits 3-4, so each size code is that field shifted into
+// place. Written as the field rather than the finished mask so the shape of
+// the control byte stays visible: 0x08/0x10/0x18 are 0, 2 and 3 in bits 3-4,
+// not three unrelated magic numbers.
 void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
                size_t target) {
     constexpr unsigned char kCtrl = 0x20;  // 001_00_000: pointer, size code 0
+    constexpr unsigned kPtrSizeShift = 3;  // kPtrSizeShift in GeoIp.cpp:53
+    const auto ss = [kPtrSizeShift](unsigned sizeCode) {
+        return static_cast<unsigned char>((sizeCode << kPtrSizeShift) & 0x18u);
+    };
     if (sizeCode == 0) {
         out->push_back(
             static_cast<unsigned char>(kCtrl | ((target >> 8) & 0x07)));
@@ -317,13 +340,13 @@ void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
     } else if (sizeCode == 1) {
         const size_t v = target - kMmPtr2Base;
         out->push_back(
-            static_cast<unsigned char>(kCtrl | 0x08 | ((v >> 16) & 0x07)));
+            static_cast<unsigned char>(kCtrl | ss(1) | ((v >> 16) & 0x07)));
         out->push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
         out->push_back(static_cast<unsigned char>(v & 0xFF));
     } else if (sizeCode == 2) {
         const size_t v = target - kMmPtr3Base;
         out->push_back(
-            static_cast<unsigned char>(kCtrl | 0x10 | ((v >> 24) & 0x07)));
+            static_cast<unsigned char>(kCtrl | ss(2) | ((v >> 24) & 0x07)));
         out->push_back(static_cast<unsigned char>((v >> 16) & 0xFF));
         out->push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
         out->push_back(static_cast<unsigned char>(v & 0xFF));
@@ -332,7 +355,7 @@ void MmPointer(std::vector<unsigned char>* out, unsigned sizeCode,
         // It is deliberately written as 111: a reader that used those three
         // bits as the top of the value would turn 1000 into 0x070003E8 and
         // report no country, and this is the only way to notice.
-        out->push_back(static_cast<unsigned char>(kCtrl | 0x18 | 0x07));
+        out->push_back(static_cast<unsigned char>(kCtrl | ss(3) | 0x07));
         for (int i = 3; i >= 0; --i) {
             out->push_back(
                 static_cast<unsigned char>((target >> (8 * i)) & 0xFF));
@@ -1639,6 +1662,889 @@ void CheckAlertRuleSerialisation(TestResult& r) {
           v.find(L"watch-cloudflare") == std::wstring::npos,
           WideToUtf8(v));
 }
+// 9.5.5: the dialog now has six controls (list + Delete / Enable / Disable /
+// Remove all / Close), up from four. The selftest and the writer share one
+// number so cdit and the capacity arithmetic cannot be edited out of step -
+// a mismatch is an out-of-bounds read inside the dialog manager, not a
+// compile error.
+// 9.2.10 - the bookmark file codec. Both directions, because a hand-rolled
+// JSON reader is exactly the kind of code that works on the happy path and
+// silently accepts (or silently drops) everything else.
+//
+// The property that matters most is ALL-OR-NOTHING: an import is either the
+// whole file or nothing. A partial import is the failure this module exists
+// to make impossible, so several checks refuse a file whose LAST record is
+// corrupt and require that the good records before it do not arrive.
+void CheckBookmarkFile(TestResult& r) {
+    Bookmark a;
+    a.address = L"203.0.113.7";
+    a.port = 443;
+    a.tag = 3;
+    a.note = L"known good";
+    a.when = 1700000000;
+    Bookmark b;
+    b.address = L"198.51.100.22";
+    b.port = 80;
+    b.tag = kBookmarkTagNone;
+    b.when = 0;
+    const std::vector<Bookmark> items = {a, b};
+
+    // The writer is deterministic: same input, same bytes. That is what makes
+    // the file usable in a dotfiles repo, where an export that reordered
+    // itself would produce a diff on every run.
+    std::string json;
+    SerialiseBookmarks(items, &json);
+    std::string json2;
+    SerialiseBookmarks(items, &json2);
+    Check(r, "9.2.10.serialise.deterministic", json == json2,
+          "len=" + std::to_string(json.size()));
+    Check(r, "9.2.10.serialise.declares-its-version",
+          json.find("\"version\": 1") != std::string::npos, "");
+    std::string empty;
+    SerialiseBookmarks({}, &empty);
+    Check(r, "9.2.10.serialise.empty-list-is-valid",
+          empty.find("\"count\": 0") != std::string::npos, empty);
+
+    // Round trip, including a note with a quote, a backslash, a newline and a
+    // tab - the case a hand-rolled reader gets wrong.
+    Bookmark tricky;
+    tricky.address = L"203.0.113.9";
+    tricky.port = 8443;
+    tricky.tag = 5;
+    tricky.note = L"quote \" backslash \\ newline \n tab \t end";
+    tricky.when = 42;
+    std::string tj;
+    SerialiseBookmarks({tricky}, &tj);
+    std::vector<Bookmark> back;
+    std::wstring err;
+    Check(r, "9.2.10.roundtrip.parse-ok", ParseBookmarks(tj, &back, &err),
+          WideToUtf8(err));
+    Check(r, "9.2.10.roundtrip.one-record", back.size() == 1,
+          "n=" + std::to_string(back.size()));
+    if (back.size() == 1) {
+        const Bookmark& q = back[0];
+        Check(r, "9.2.10.roundtrip.address", q.address == tricky.address,
+              WideToUtf8(q.address));
+        Check(r, "9.2.10.roundtrip.port", q.port == tricky.port,
+              std::to_string(q.port));
+        Check(r, "9.2.10.roundtrip.tag", q.tag == tricky.tag,
+              std::to_string(q.tag));
+        Check(r, "9.2.10.roundtrip.note-with-escapes",
+              q.note == tricky.note, WideToUtf8(q.note));
+        Check(r, "9.2.10.roundtrip.when", q.when == tricky.when,
+              std::to_string(q.when));
+    }
+
+    // A non-ASCII note must survive: the reader decodes \uXXXX and its UTF-8
+    // decoder must agree with the encoder's.
+    Bookmark uni;
+    uni.address = L"2001:db8::1";
+    uni.port = 443;
+    uni.note = L"caf\u00e9 \u4e2d\u6587 \U0001F600";
+    uni.when = 7;
+    std::string uj;
+    SerialiseBookmarks({uni}, &uj);
+    std::vector<Bookmark> ub;
+    Check(r, "9.2.10.roundtrip.unicode-note",
+          ParseBookmarks(uj, &ub, nullptr) && ub.size() == 1 &&
+              ub[0].note == uni.note,
+          WideToUtf8(ub.empty() ? L"no record" : ub[0].note));
+
+    std::vector<Bookmark> nv;
+    Check(r, "9.2.10.refuse.missing-version",
+          !ParseBookmarks("{\"schema\":\"wintcp-bookmarks\",\"bookmarks\":[]}",
+                          &nv, &err) && !err.empty(),
+          WideToUtf8(err));
+    Check(r, "9.2.10.refuse.future-version",
+          !ParseBookmarks("{\"version\":2,\"bookmarks\":[]}", &nv, &err) &&
+              WideToUtf8(err).find("2") != std::string::npos,
+          WideToUtf8(err));
+    Check(r, "9.2.10.refuse.non-numeric-version",
+          !ParseBookmarks("{\"version\":\"1\",\"bookmarks\":[]}", &nv, nullptr),
+          "");
+    Check(r, "9.2.10.refuse.missing-array",
+          !ParseBookmarks("{\"version\":1}", &nv, nullptr), "");
+
+    // THE ONE THAT MATTERS: a corrupt LAST record must not let the good
+    // records before it through.
+    Check(r, "9.2.10.refuse.bad-last-record-refuses-the-whole-file",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"203.0.113.7\",\"port\":443,\"tag\":0,\"note\":"
+                          "\"\"},{\"address\":\"198.51.100.22\",\"port\":"
+                          "\"nope\",\"tag\":0,\"note\":\"\"}]}",
+                          &nv, &err) && nv.empty(),
+          "arrived=" + std::to_string(nv.size()));
+    Check(r, "9.2.10.refuse.missing-required-field",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"port\":443}]}", &nv,
+                          &err) &&
+              WideToUtf8(err).find("missing") != std::string::npos,
+          WideToUtf8(err));
+    Check(r, "9.2.10.refuse.record-not-an-object",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[\"203.0.113.7\"]}",
+                          &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.unterminated-array",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[}", &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.unterminated-string",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[\"abc]}", &nv,
+                          nullptr), "");
+    Check(r, "9.2.10.refuse.unterminated-document",
+          !ParseBookmarks("{\"version\":1", &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.trailing-content",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[]} garbage", &nv,
+                          nullptr), "");
+    Check(r, "9.2.10.refuse.not-an-object",
+          !ParseBookmarks("[1,2,3]", &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.empty-document",
+          !ParseBookmarks("", &nv, nullptr), "");
+
+    // A control character inside a string is not valid JSON.
+    std::string ctrl = "{\"version\":1,\"bookmarks\":[{\"address\":\"a\tb\","
+                       "\"port\":1,\"tag\":0,\"note\":\"\"}]}";
+    Check(r, "9.2.10.refuse.control-char-in-string",
+          !ParseBookmarks(ctrl, &nv, nullptr), "");
+    // An unpaired surrogate has no UTF-8 encoding.
+    Check(r, "9.2.10.refuse.unpaired-surrogate",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"\\ud800\",\"port\":1,\"tag\":0,\"note\":\"\"}]}",
+                          &nv, nullptr), "");
+    // A correct surrogate PAIR is accepted.
+    std::vector<Bookmark> pr;
+    Check(r, "9.2.10.accepts.a-surrogate-pair",
+          ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                         "\"1.2.3.4\",\"port\":1,\"tag\":0,\"note\":"
+                         "\"\\ud83d\\ude00\"}]}",
+                         &pr, nullptr) &&
+              pr.size() == 1 &&
+              pr[0].note == std::wstring(1, static_cast<wchar_t>(0xD83D)) +
+                                std::wstring(1, static_cast<wchar_t>(0xDE00)),
+          "");
+
+    // A fractional tag is refused rather than truncated to 1, which would be
+    // a bookmark with a colour the user never picked.
+    Check(r, "9.2.10.refuse.fractional-tag",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"1.2.3.4\",\"port\":1,\"tag\":1.5,\"note\":\"\"}]}",
+                          &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.port-out-of-range",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"1.2.3.4\",\"port\":70000,\"tag\":0,\"note\":"
+                          "\"\"}]}",
+                          &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.negative-port",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"1.2.3.4\",\"port\":-1,\"tag\":0,\"note\":\"\"}]}",
+                          &nv, nullptr), "");
+
+    // An address that does not normalise. Importing a bookmark whose key
+    // differs from the key the GUI computes is importing a bookmark that can
+    // never be found again.
+    Check(r, "9.2.10.refuse.address-does-not-normalise",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"not-an-ip\",\"port\":1,\"tag\":0,\"note\":\"\"}]}",
+                          &nv, &err) && !WideToUtf8(err).empty(),
+          WideToUtf8(err));
+
+    // An unknown extra key is ACCEPTED: the schema reserves the right to add
+    // fields, and a reader that rejected unknown keys would make every future
+    // addition a breaking change.
+    std::vector<Bookmark> ek;
+    Check(r, "9.2.10.accepts.unknown-top-level-key",
+          ParseBookmarks("{\"version\":1,\"future\":{\"x\":[1,2]},"
+                         "\"bookmarks\":[]}",
+                         &ek, nullptr), "");
+    Check(r, "9.2.10.refuse.null-output",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[]}", nullptr,
+                          nullptr), "");
+}
+
+// 9.2.10 - the preset file codec. The sibling of BookmarkFile's, over the same
+// all-or-nothing rule: a preset that loads half is a view the user never saved,
+// and unlike a bookmark the failure is subtle - it is believed.
+void CheckPresetFile(TestResult& r) {
+    PresetRecord a;
+    a.name = L"listening sockets";
+    a.view.grouped = true;
+    a.view.filter = L"state:listen exclude:127.";
+
+    PresetRecord b;
+    b.name = L"chrome by traffic";
+    b.view.filter = L"process:chrome.exe";
+    b.view.sortColumn = COL_TRAFFIC;
+    b.view.sortAsc = false;
+    b.view.colVisible = 0x0000000Fu;
+    b.view.sources = 3;
+
+    const std::vector<PresetRecord> items = {a, b};
+    std::string json;
+    SerialisePresets(items, &json);
+    std::string json2;
+    SerialisePresets(items, &json2);
+    Check(r, "9.2.10.preset.deterministic", json == json2,
+          "len=" + std::to_string(json.size()));
+    Check(r, "9.2.10.preset.declares-its-version",
+          json.find("\"version\": 1") != std::string::npos, "");
+    std::string empty;
+    SerialisePresets({}, &empty);
+    Check(r, "9.2.10.preset.empty-list-is-valid",
+          empty.find("\"count\": 0") != std::string::npos, empty);
+
+    // Round trip: every axis of ViewState survives, including the two that
+    // look redundant with a default (sortAsc, preserveSelection) - a preset
+    // that dropped one of those would open a view the user did not save.
+    std::vector<PresetRecord> back;
+    std::wstring err;
+    Check(r, "9.2.10.preset.roundtrip.parse-ok",
+          ParsePresets(json, &back, &err), WideToUtf8(err));
+    Check(r, "9.2.10.preset.roundtrip.two-records", back.size() == 2,
+          "n=" + std::to_string(back.size()));
+    if (back.size() == 2) {
+        const PresetRecord& x = back[0];
+        Check(r, "9.2.10.preset.roundtrip.name", x.name == a.name,
+              WideToUtf8(x.name));
+        Check(r, "9.2.10.preset.roundtrip.grouped", x.view.grouped, "");
+        Check(r, "9.2.10.preset.roundtrip.filter", x.view.filter == a.view.filter,
+              WideToUtf8(x.view.filter));
+        const PresetRecord& y = back[1];
+        Check(r, "9.2.10.preset.roundtrip.sort-column",
+              y.view.sortColumn == COL_TRAFFIC,
+              std::to_string(y.view.sortColumn));
+        Check(r, "9.2.10.preset.roundtrip.sort-asc",
+              !y.view.sortAsc, "");
+        Check(r, "9.2.10.preset.roundtrip.col-visible",
+              y.view.colVisible == b.view.colVisible,
+              std::to_string(y.view.colVisible));
+        Check(r, "9.2.10.preset.roundtrip.sources",
+              y.view.sources == b.view.sources,
+              std::to_string(y.view.sources));
+    }
+
+    // A frozen view carries its frozen-at time, and a frozen view WITHOUT one
+    // is refused rather than half-loaded - it could not be unfrozen correctly.
+    const char* kFrozenNoTime =
+        "{\"version\":1,\"presets\":[{\"name\":\"x\",\"frozen\":true}]}";
+    std::vector<PresetRecord> nv;
+    Check(r, "9.2.10.preset.refuse.frozen-without-time",
+          !ParsePresets(kFrozenNoTime, &nv, &err) && !WideToUtf8(err).empty(),
+          WideToUtf8(err));
+
+    // A name the storage layer would refuse is refused here too, decided by
+    // Presets::IsValidName rather than a second spelling of the rule: a
+    // backslash would create a subkey, and a control character is invisible in
+    // a dialog.
+    const char* kBadName =
+        "{\"version\":1,\"presets\":[{\"name\":\"a\\\\b\",\"filter\":\"\"}]}";
+    Check(r, "9.2.10.preset.refuse.name-with-a-backslash",
+          !ParsePresets(kBadName, &nv, nullptr), "");
+    const char* kEmptyName =
+        "{\"version\":1,\"presets\":[{\"name\":\"\",\"filter\":\"\"}]}";
+    Check(r, "9.2.10.preset.refuse.empty-name",
+          !ParsePresets(kEmptyName, &nv, nullptr), "");
+
+    // A sort column outside the table is a view the renderer could not draw,
+    // so it is refused rather than clamped.
+    const char* kBadSort =
+        "{\"version\":1,\"presets\":[{\"name\":\"x\",\"filter\":\"\","
+        "\"sortColumn\":9999}]}";
+    Check(r, "9.2.10.preset.refuse.sort-column-out-of-range",
+          !ParsePresets(kBadSort, &nv, nullptr), "");
+    const char* kNegSort =
+        "{\"version\":1,\"presets\":[{\"name\":\"x\",\"filter\":\"\","
+        "\"sortColumn\":-1}]}";
+    Check(r, "9.2.10.preset.refuse.negative-sort-column",
+          !ParsePresets(kNegSort, &nv, nullptr), "");
+
+    // THE ONE THAT MATTERS: a corrupt last record refuses the whole file.
+    const char* kBadTail =
+        "{\"version\":1,\"presets\":[{\"name\":\"good\",\"filter\":\"\"},"
+        "{\"name\":\"bad\",\"filter\":123}]}";
+    Check(r, "9.2.10.preset.refuse.bad-last-record-refuses-the-whole-file",
+          !ParsePresets(kBadTail, &nv, &err) && nv.empty(),
+          "arrived=" + std::to_string(nv.size()));
+    Check(r, "9.2.10.preset.refuse.missing-required-field",
+          !ParsePresets("{\"version\":1,\"presets\":[{\"name\":\"x\"}]}", &nv,
+                        &err) &&
+              WideToUtf8(err).find("missing") != std::string::npos,
+          WideToUtf8(err));
+
+    // Version and document rules, same as the bookmark file's.
+    Check(r, "9.2.10.preset.refuse.missing-version",
+          !ParsePresets("{\"presets\":[]}", &nv, &err) && !err.empty(),
+          WideToUtf8(err));
+    Check(r, "9.2.10.preset.refuse.future-version",
+          !ParsePresets("{\"version\":2,\"presets\":[]}", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.missing-array",
+          !ParsePresets("{\"version\":1}", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.record-not-an-object",
+          !ParsePresets("{\"version\":1,\"presets\":[\"x\"]}", &nv, nullptr),
+          "");
+    Check(r, "9.2.10.preset.refuse.unterminated-array",
+          !ParsePresets("{\"version\":1,\"presets\":[}", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.unterminated-document",
+          !ParsePresets("{\"version\":1", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.trailing-content",
+          !ParsePresets("{\"version\":1,\"presets\":[]} junk", &nv, nullptr),
+          "");
+    Check(r, "9.2.10.preset.refuse.not-an-object",
+          !ParsePresets("[1,2,3]", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.empty-document",
+          !ParsePresets("", &nv, nullptr), "");
+    std::string ctrl = "{\"version\":1,\"presets\":[{\"name\":\"a\tb\","
+                       "\"filter\":\"\"}]}";
+    Check(r, "9.2.10.preset.refuse.control-char-in-string",
+          !ParsePresets(ctrl, &nv, nullptr), "");
+
+    // A boolean field must be true or false, not a number: "frozen":1 is not
+    // a state anything can act on.
+    Check(r, "9.2.10.preset.refuse.boolean-as-a-number",
+          !ParsePresets("{\"version\":1,\"presets\":[{\"name\":\"x\","
+                        "\"filter\":\"\",\"grouped\":1}]}",
+                        &nv, nullptr), "");
+
+    // An unknown extra key is accepted, so adding an axis later is not a
+    // breaking change.
+    std::vector<PresetRecord> ek;
+    Check(r, "9.2.10.preset.accepts.unknown-top-level-key",
+          ParsePresets("{\"version\":1,\"future\":1,\"presets\":[]}", &ek,
+                       nullptr), "");
+    Check(r, "9.2.10.preset.refuse.null-output",
+          !ParsePresets("{\"version\":1,\"presets\":[]}", nullptr, nullptr), "");
+}
+
+// 9.4.2 - the empty-state button decision. Pure, so the precedence rule and
+// the elevation rule are both pinned.
+//
+// The one that matters most is that [Run as admin] NEVER appears for a process
+// that is already elevated: offering "restart with more rights" to something
+// that already has them is a button that does nothing, and a user who clicks
+// it and sees nothing happen has been lied to.
+void CheckEmptyState(TestResult& r) {
+    // A quiet machine is NOT an empty state: with no rows at all there is
+    // nothing to measure traffic for and no filter to clear, so it is not a
+    // state regardless of which columns are shown. (Passing the traffic flags
+    // as "nothing measuring" with a visible column WOULD be the traffic state -
+    // that is the third case - so this passes them as "measuring".)
+    {
+        const EmptyStateOffer o = DecideEmptyState(0, 0, false, false, false, true,
+                                                   true, false, false);
+        Check(r, "9.4.2.quiet-machine-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0,
+              "caze=" + std::to_string((int)o.caze));
+    }
+    // A full table is not a state either.
+    {
+        const EmptyStateOffer o = DecideEmptyState(100, 100, false, true, false,
+                                                   false, true, false, true);
+        Check(r, "9.4.2.full-table-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
+    }
+
+    // ---- 1. no filter match ----
+    {
+        const EmptyStateOffer o = DecideEmptyState(50, 0, false, true, false,
+                                                   false, true, false, true);
+        Check(r, "9.4.2.filter-match.picked-first",
+              o.caze == EmptyStateCase::kNoFilterMatch, "");
+        Check(r, "9.4.2.filter-match.offers-clear-and-edit",
+              o.offerClear && o.offerEdit && !o.offerPickGeo &&
+                  !o.offerRunAdmin && o.ButtonCount() == 2,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // The reason it wins: with no rows at all the database and traffic
+        // answers are a question nobody asked, so it must not be shadowed.
+        const EmptyStateOffer o = DecideEmptyState(10, 0, true, false, false, true,
+                                                   false, false, false);
+        Check(r, "9.4.2.filter-match.outranks-geo-and-traffic",
+              o.caze == EmptyStateCase::kNoFilterMatch, "");
+    }
+
+    // ---- 2. no GeoIP database ----
+    {
+        const EmptyStateOffer o = DecideEmptyState(20, 20, true, false, false,
+                                                   false, true, false, false);
+        Check(r, "9.4.2.geo.picked-when-country-shown",
+              o.caze == EmptyStateCase::kNoGeoIp, "");
+        // No elevation button here: elevating does not install a database.
+        Check(r, "9.4.2.geo.offers-only-pick-mmdb",
+              o.offerPickGeo && !o.offerRunAdmin && !o.offerClear &&
+                  o.ButtonCount() == 1,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // Either database fills the cell, so with one loaded there is nothing
+        // to offer.
+        const EmptyStateOffer withGeo =
+            DecideEmptyState(20, 20, true, true, false, false, true, false, false);
+        const EmptyStateOffer withAsn =
+            DecideEmptyState(20, 20, true, false, true, false, true, false, false);
+        Check(r, "9.4.2.geo.either-database-satisfies",
+              withGeo.caze == EmptyStateCase::kNone &&
+                  withAsn.caze == EmptyStateCase::kNone,
+              "");
+    }
+    {
+        // A country column nobody is looking at is not an empty state.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, false, false,
+                                                   false, true, false, false);
+        Check(r, "9.4.2.geo.hidden-column-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
+    }
+
+    // ---- 3. no traffic ----
+    {
+        // NOT elevated: the one click that helps is a relaunch, so it appears.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, true,
+                                                   false, false, false);
+        Check(r, "9.4.2.traffic.picked-when-column-shown",
+              o.caze == EmptyStateCase::kNoTraffic, "");
+        Check(r, "9.4.2.traffic.unelevated-gets-the-relaunch",
+              o.offerRunAdmin && o.ButtonCount() == 1,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // ALREADY elevated: the relaunch button must NOT appear. A process
+        // that already has the rights cannot restart itself into higher ones,
+        // so the button would do nothing and the click would be a lie.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, true,
+                                                   false, false, true);
+        Check(r, "9.4.2.traffic.elevated-gets-no-button",
+              o.caze == EmptyStateCase::kNoTraffic && !o.offerRunAdmin &&
+                  o.ButtonCount() == 0,
+              "n=" + std::to_string(o.ButtonCount()));
+    }
+    {
+        // A working source (either one) is not a state.
+        const EmptyStateOffer withEtw = DecideEmptyState(
+            20, 20, false, true, false, true, true, false, false);
+        const EmptyStateOffer withSockets = DecideEmptyState(
+            20, 20, false, true, false, true, false, true, true);
+        Check(r, "9.4.2.traffic.either-source-satisfies",
+              withEtw.caze == EmptyStateCase::kNone &&
+                  withSockets.caze == EmptyStateCase::kNone,
+              "");
+    }
+    {
+        // Nobody is looking at a traffic column.
+        const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, false,
+                                                   false, false, false);
+        Check(r, "9.4.2.traffic.hidden-column-is-not-a-state",
+              o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
+    }
+
+    // Every case must carry its sentence, so a caller that shows buttons has
+    // no excuse to show none of the reason.
+    {
+        const EmptyStateOffer a =
+            DecideEmptyState(10, 0, false, true, false, false, true, false, true);
+        const EmptyStateOffer b = DecideEmptyState(
+            10, 10, true, false, false, false, true, false, false);
+        const EmptyStateOffer c = DecideEmptyState(
+            10, 10, false, true, false, true, false, false, false);
+        Check(r, "9.4.2.every-case-carries-a-message",
+              a.message[0] != L'\0' && b.message[0] != L'\0' &&
+                  c.message[0] != L'\0',
+              "");
+    }
+}
+
+// 9.5.6 - the process tree. Pure, so the cycle rule, the root rule and the
+// ancestor rule are all pinned without spawning a process or an elevation
+// prompt - and the cycle rule is the one that matters, because following a
+// spurious PID cycle is an infinite loop or a stack overflow.
+void CheckProcessTree(TestResult& r) {
+    auto node = [](DWORD pid, DWORD ppid, bool known = true) {
+        TreeNodeInfo n;
+        n.pid = pid;
+        n.ppid = ppid;
+        n.ppidKnown = known;
+        return n;
+    };
+
+    // A tiny chain: shell -> svchost -> w3wp.
+    {
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 1), node(200, 100), node(300, 200), node(900, 1)};
+        const ProcessTree t = BuildProcessTree(rows);
+        Check(r, "9.5.6.chain.root-count", t.rootCount == 2,
+              "roots=" + std::to_string(t.rootCount));
+        Check(r, "9.5.6.chain.no-depth-exceeded", !t.depthExceeded, "");
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 200);
+        Check(r, "9.5.6.chain.descendants-of-middle",
+              d.size() == 2 && d[0] == 1 && d[1] == 2,
+              "n=" + std::to_string(d.size()));
+        // Roots: the two whose parent pid is not in the set.
+        const std::vector<size_t> roots = ProcessTreeRoots(rows);
+        Check(r, "9.5.6.chain.roots-in-row-order",
+              roots.size() == 2 && roots[0] == 0 && roots[1] == 3,
+              "n=" + std::to_string(roots.size()));
+    }
+
+    // ---- a CYCLE is refused, not followed ----
+    {
+        // 100 -> 200 -> 300 -> 100 (a stale-parent cycle, which Windows can
+        // produce during a teardown). Following it would not terminate.
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 300), node(200, 100), node(300, 200)};
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 100);
+        // The whole set is reachable, so the set is the answer - but the walk
+        // must still TERMINATE, which is what reaching here proves.
+        Check(r, "9.5.6.cycle.walk-terminates",
+              d.size() == 3, "n=" + std::to_string(d.size()));
+        const ProcessTree t = BuildProcessTree(rows);
+        // No node in a pure cycle can be a root, so nothing is visited and
+        // nothing is rendered - the cycle is reported rather than drawn.
+        Check(r, "9.5.6.cycle.build-does-not-loop",
+              t.nodes.size() == 3, "n=" + std::to_string(t.nodes.size()));
+    }
+    {
+        // A self-parent is not a parent: it must not make the row its own
+        // child, which would make it its own root and its own subtree.
+        const std::vector<TreeNodeInfo> rows = {node(100, 100)};
+        const ProcessTree t = BuildProcessTree(rows);
+        Check(r, "9.5.6.cycle.self-parent-is-not-a-parent",
+              t.rootCount == 1 && t.nodes[0].children.empty(),
+              "roots=" + std::to_string(t.rootCount));
+    }
+
+    // ---- an unknown parent is not a parent (and not a root by accident) ----
+    {
+        // 200's parent 999 is gone: 200 becomes a root, because a root is
+        // defined by observation ("nobody claims me") rather than by PPID.
+        const std::vector<TreeNodeInfo> rows = {node(200, 999), node(100, 1)};
+        const std::vector<size_t> roots = ProcessTreeRoots(rows);
+        Check(r, "9.5.6.roots.parent-exited-makes-a-root",
+              roots.size() == 2, "n=" + std::to_string(roots.size()));
+    }
+    {
+        // ppid NOT known: still a root, and never claimed.
+        const std::vector<TreeNodeInfo> rows = {node(200, 0, false)};
+        const std::vector<size_t> roots = ProcessTreeRoots(rows);
+        Check(r, "9.5.6.roots.unknown-ppid-is-a-root",
+              roots.size() == 1, "n=" + std::to_string(roots.size()));
+    }
+
+    // ---- the ancestor rule ----
+    {
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 1), node(200, 100), node(300, 200), node(400, 300)};
+        Check(r, "9.5.6.ancestor.direct-and-transitive",
+              IsAncestorOf(rows, 100, 200) && IsAncestorOf(rows, 100, 400) &&
+                  !IsAncestorOf(rows, 200, 100),
+              "");
+        // A PID we have never heard of is not an ancestor: refusing to walk
+        // into a process outside the set is what stops the answer being a
+        // guess.
+        Check(r, "9.5.6.ancestor.unknown-pid-is-not-one",
+              !IsAncestorOf(rows, 999, 300) && !IsAncestorOf(rows, 100, 999), "");
+        // A self cannot be its own ancestor, and 0 is never a process.
+        Check(r, "9.5.6.ancestor.self-and-zero-rejected",
+              !IsAncestorOf(rows, 300, 300) && !IsAncestorOf(rows, 0, 300),
+              "");
+        // An ancestor cycle terminates too: 100 -> 300 -> 100 must not loop.
+        const std::vector<TreeNodeInfo> cyclic = {
+            node(100, 300), node(200, 100), node(300, 200)};
+        Check(r, "9.5.6.ancestor.cycle-terminates",
+              IsAncestorOf(cyclic, 100, 200) &&
+                  !IsAncestorOf(cyclic, 300, 300) &&
+                  IsAncestorOf(cyclic, 100, 300)   /* via the cycle back to 300 */
+                ,
+              "");
+    }
+
+    // ---- a PID that is not in the set ----
+    {
+        const std::vector<TreeNodeInfo> rows = {node(100, 1)};
+        Check(r, "9.5.6.descendants.unknown-root-is-empty",
+              ProcessTreeDescendants(rows, 999).empty() &&
+                  ProcessTreeDescendants(rows, 0).empty(),
+              "");
+        Check(r, "9.5.6.tree.empty-set-is-empty",
+              BuildProcessTree({}).nodes.empty() &&
+                  ProcessTreeDescendants({}, 100).empty() &&
+                  ProcessTreeRoots({}).empty(),
+              "");
+    }
+
+    // ---- a wide fan-out ----
+    {
+        // One parent, many children (a service host). Every child is a
+        // descendant of the root and none of them is the root's ancestor.
+        std::vector<TreeNodeInfo> rows;
+        rows.push_back(node(1, 0));
+        for (DWORD i = 2; i < 82; ++i) rows.push_back(node(i, 1));
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 1);
+        Check(r, "9.5.6.fanout.every-child-is-a-descendant",
+              d.size() == rows.size(),
+              "n=" + std::to_string(d.size()));
+        const ProcessTree t = BuildProcessTree(rows);
+        Check(r, "9.5.6.fanout.one-root-many-children",
+              t.rootCount == 1, "roots=" + std::to_string(t.rootCount));
+    }
+
+    // ---- a deep chain is walked, and the ceiling is reported ----
+    {
+        // A chain deep enough to be interesting but bounded well under the
+        // ceiling: the whole thing must be reachable.
+        std::vector<TreeNodeInfo> rows;
+        for (DWORD i = 1; i <= 40; ++i) {
+            rows.push_back(node(i, i == 1 ? 0 : i - 1));
+        }
+        const ProcessTree t = BuildProcessTree(rows);
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 1);
+        Check(r, "9.5.6.deep.whole-chain-reachable",
+              d.size() == rows.size() && !t.depthExceeded,
+              "n=" + std::to_string(d.size()));
+    }
+
+    // ---- a PID appearing on two rows (two connections, one process) ----
+    {
+        // The first row bearing the pid is the root, so the tree and
+        // Descendants agree about which row a pid means.
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 1), node(200, 100), node(100, 1)};
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 100);
+        Check(r, "9.5.6.duplicate-pid.first-row-wins",
+              d.size() >= 2 && d[0] == 0,
+              "n=" + std::to_string(d.size()));
+    }
+}
+
+// 9.5.7 - the SHA-256 core. The vectors are FIPS 180-4's own, plus the
+// exact-multiple-of-64 cases that are the only place an accumulate-and-compress
+// accumulator can go wrong. The hex formatter is checked with exact strings
+// because a case or separator slip here is invisible in every other check.
+void CheckSha256(TestResult& r) {
+    auto HS = [](const std::string& s) {
+        return Sha256HexA(Sha256Bytes(
+            reinterpret_cast<const unsigned char*>(s.data()), s.size()));
+    };
+    auto H = [](const unsigned char* p, size_t n) {
+        return Sha256HexA(Sha256Bytes(p, n));
+    };
+
+    Check(r, "9.5.7.sha256.fips-empty", HS("") ==
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    Check(r, "9.5.7.sha256.fips-abc", HS("abc") ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    // The FIPS 56-byte vector (FIPS 180-4 Example 1).
+    Check(r, "9.5.7.sha256.fips-56",
+          HS("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+              "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+
+    // Exact multiples of the block size: the accumulator must emit the pad in
+    // a fresh block, not treat it as data. 55 is the last one-block length;
+    // 56/57/63 straddle the boundary.
+    {
+        const std::string s55(55, 'a');
+        const std::string s56(56, 'a');
+        const std::string s64(64, 'a');
+        const std::string s119(119, 'a');
+        const std::string s120(120, 'a');
+        const std::string s128(128, 'a');
+        Check(r, "9.5.7.sha256.block-multiple-55", HS(s55) ==
+              "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318");
+        Check(r, "9.5.7.sha256.block-multiple-64", HS(s64) ==
+              "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+        Check(r, "9.5.7.sha256.block-multiple-119", HS(s119) ==
+              "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb");
+        Check(r, "9.5.7.sha256.block-multiple-128", HS(s128) ==
+              "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e");
+        // 56/120 differ only in the last byte's position relative to the pad,
+        // so they must differ.
+        Check(r, "9.5.7.sha256.block-multiple-pairs-differ",
+              HS(s56) != HS(s55) && HS(s120) != HS(s119) && HS(s56) != HS(s64));
+    }
+
+    // A second independent oracle: hashing the same bytes through the file path
+    // must agree, because that is the path the Details view actually uses and
+    // an accumulator that diverges only when chunked is the bug that would hide
+    // behind a green in-memory suite.
+    {
+        const std::wstring path = L"%TEMP%\\benoot_sha_roundtrip.bin";
+        wchar_t expanded[MAX_PATH] = {0};
+        ::ExpandEnvironmentStringsW(path.c_str(), expanded, MAX_PATH);
+        std::string blob;
+        uint32_t x = 0x12345678u;
+        for (int i = 0; i < 70000; ++i) {   // spans several 64 KB reads
+            x = x * 1664525u + 1013904223u;
+            blob.push_back(static_cast<char>(x >> 24));
+            blob.push_back(static_cast<char>(x >> 16));
+            blob.push_back(static_cast<char>(x >> 8));
+        }
+        HANDLE hf = ::CreateFileW(expanded, GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        DWORD wrote = 0;
+        bool wroteOk = hf != INVALID_HANDLE_VALUE;
+        if (wroteOk) {
+            wroteOk = ::WriteFile(hf, blob.data(),
+                                  static_cast<DWORD>(blob.size()), &wrote,
+                                  nullptr) != FALSE;
+            ::CloseHandle(hf);
+        }
+        (void)wrote;
+        const bool ok = wroteOk && wrote == blob.size();
+        const std::string mem =
+            H(reinterpret_cast<const unsigned char*>(blob.data()), blob.size());
+        const ImageHashResult fh = HashImageFile(expanded);
+        Check(r, "9.5.7.sha256.file-path-agrees-with-memory",
+              ok && fh.ok && fh.bytesHashed == blob.size() &&
+                  Sha256HexA(fh.digest) == mem,
+              "ok=" + std::string(ok ? "1" : "0") + " mem=" + mem +
+                  " file=" + Sha256HexA(fh.digest));
+        ::DeleteFileW(expanded);
+    }
+
+    // The hex formatter: exact lowercase, 64 chars, no separators.
+    {
+        Sha256Digest d{};
+        for (size_t i = 0; i < d.size(); ++i) d[i] = static_cast<uint8_t>(i);
+        const std::string h = Sha256HexA(d);
+        const std::wstring hw = Sha256HexW(d);
+        bool fmt = h.size() == 64 && hw.size() == 64;
+        for (char c : h) {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) fmt = false;
+        }
+        fmt = fmt && h == "000102030405060708090a0b0c0d0e0f1011121314"
+                          "15161718191a1b1c1d1e1f";
+        Check(r, "9.5.7.sha256.hex-is-lowercase-64-no-separators", fmt, h);
+    }
+
+    // Empty and unusable paths fail with a reason, never silently.
+    {
+        const ImageHashResult e = HashImageFile(L"");
+        Check(r, "9.5.7.sha256.empty-path-refused",
+              !e.ok && e.reason == HashFailReason::kEmptyPath &&
+                  !e.message.empty(),
+              "");
+        const ImageHashResult missing =
+            HashImageFile(L"%TEMP%\\benoot_no_such_image_xyz.exe");
+        Check(r, "9.5.7.sha256.missing-file-refused",
+              !missing.ok && missing.reason == HashFailReason::kOpenFailed &&
+                  !missing.message.empty(),
+              "");
+    }
+}
+
+constexpr int kDialogControls = 6;
+
+// 9.2.10 - the portable wintcp.ini grammar. Pure over a string, so the whole
+// reader is pinned with no disk and no registry.
+//
+// The property that matters is the ONE the reader is strict about: a line with
+// no '=' is refused rather than skipped, because an ini that is accepted half
+// is a preference that is half set.
+void CheckIniFile(TestResult& r) {
+    std::string err;
+    const std::string good =
+        "[wintcp]\r\n"
+        "interval = 1500\r\n"
+        "autoRefresh = yes\r\n"
+        "resolveHosts = 0\r\n"
+        "topMost = on\r\n";
+    const std::vector<IniValue> v = ParseIniSection(good, "wintcp", &err);
+    Check(r, "9.2.10.ini.parse-ok",
+          err.empty() && v.size() == 4,
+          "n=" + std::to_string(v.size()) + " err=" +
+              std::string(err.begin(), err.end()));
+    if (v.size() == 4) {
+        Check(r, "9.2.10.ini.interval", v[0].key == "interval" && v[0].value == "1500",
+              v[0].key + "=" + v[0].value);
+        Check(r, "9.2.10.ini.boolean-spelling", v[1].value == "yes" && v[2].value == "0",
+              v[1].key + "=" + v[1].value);
+        Check(r, "9.2.10.ini.on-spelling", v[3].value == "on",
+              v[3].key + "=" + v[3].value);
+    }
+
+    // Keys outside the wanted section are ignored, and another tool's section
+    // is skipped rather than refused.
+    const std::string others =
+        "[something-else]\r\n"
+        "interval = 9\r\n"
+        "[wintcp]\r\n"
+        "interval = 3000\r\n";
+    const std::vector<IniValue> w = ParseIniSection(others, "wintcp", &err);
+    Check(r, "9.2.10.ini.other-sections-are-skipped",
+          err.empty() && w.size() == 1 && w[0].value == "3000",
+          "n=" + std::to_string(w.size()));
+
+    // No [wintcp] section at all: empty, not an error.
+    Check(r, "9.2.10.ini.no-section-is-empty",
+          ParseIniSection("[other]\r\na=1\r\n", "wintcp", &err).empty() &&
+              err.empty(),
+          "");
+
+    // Comments, blank lines, whitespace, CRLF and a trailing line with no
+    // newline are all handled - the file is meant to be hand-written.
+    const std::string loose =
+        "; a comment\r\n"
+        "# another\r\n"
+        "  \r\n"
+        "[wintcp]\r\n"
+        "\r\n"
+        "  interval   =   2500   ; trailing\r\n"
+        "autoRefresh=true";
+    const std::vector<IniValue> lv = ParseIniSection(loose, "wintcp", &err);
+    const std::string lvFirst = lv.empty() ? std::string() : lv[0].value;
+    Check(r, "9.2.10.ini.comments-blanks-and-tight-spacing",
+          err.empty() && lv.size() == 2 && lv[0].value == "2500" &&
+              lv[1].value == "true",
+          "n=" + std::to_string(lv.size()) + " v0=" + lvFirst);
+
+    // A repeated key: the last one wins, which is what a user editing by hand
+    // expects.
+    const std::vector<IniValue> dup =
+        ParseIniSection("[wintcp]\r\ninterval=1\r\ninterval=2\r\n", "wintcp", &err);
+    Check(r, "9.2.10.ini.repeated-key-last-wins",
+          err.empty() && dup.size() == 1 && dup[0].value == "2", "");
+
+    // A value containing '=' keeps the part after the FIRST one, so a filter
+    // or a path cannot be truncated at its own '='.
+    const std::vector<IniValue> eq =
+        ParseIniSection("[wintcp]\r\nk=a=b=c\r\n", "wintcp", &err);
+    Check(r, "9.2.10.ini.value-keeps-its-own-equals",
+          err.empty() && eq.size() == 1 && eq[0].value == "a=b=c",
+          eq.empty() ? "" : eq[0].value);
+
+    // ---- refusals ----
+    // The one that matters: a line with no '=' is a line that was MEANT to set
+    // something, and skipping it silently would leave a preference unset while
+    // the file looks fine.
+    const std::vector<IniValue> bad =
+        ParseIniSection("[wintcp]\r\ninterval\r\n", "wintcp", &err);
+    Check(r, "9.2.10.ini.refuse.a-line-with-no-equals",
+          !err.empty() && bad.empty(), "");
+    Check(r, "9.2.10.ini.refuse.no-key-before-equals",
+          ParseIniSection("[wintcp]\r\n=5\r\n", "wintcp", &err).empty() &&
+              !err.empty(),
+          "");
+    Check(r, "9.2.10.ini.refuse.unterminated-section-header",
+          ParseIniSection("[wintcp\r\ninterval=1\r\n", "wintcp", &err).empty(),
+          "");
+    Check(r, "9.2.10.ini.refuse.empty-section-name",
+          ParseIniSection("[]\r\ninterval=1\r\n", "wintcp", &err).empty(), "");
+
+    // The size bound, the same shape the other files use.
+    Check(r, "9.2.10.ini.refuse.over-the-size-bound",
+          ParseIniSection(std::string(70 * 1024, 'x'), "wintcp", &err).empty() &&
+              !err.empty(),
+          "");
+
+    // Known keys are the six behaviour ones, and an unknown key is refused
+    // NOWHERE - a newer build may have added it, and refusing over it would be
+    // this reader's guess made into the user's problem.
+    Check(r, "9.2.10.ini.known-keys", IsKnownIniKey("interval") &&
+              IsKnownIniKey("autoRefresh") && IsKnownIniKey("resolveHosts") &&
+              IsKnownIniKey("topMost") && IsKnownIniKey("trayEnabled") &&
+              IsKnownIniKey("trafficEnabled"), "");
+    Check(r, "9.2.10.ini.unknown-key-is-not-known",
+          !IsKnownIniKey("windowWidth"), "");
+    const std::vector<IniValue> extra =
+        ParseIniSection("[wintcp]\r\ninterval=1\r\nsomeFutureKey=7\r\n", "wintcp",
+                        &err);
+    Check(r, "9.2.10.ini.accepts.an-unknown-key",
+          err.empty() && extra.size() == 2, "n=" + std::to_string(extra.size()));
+}
+
 TestResult RunSelfTest() {
     TestResult r;
     r.output += "WinTCP selftest\r\n";
@@ -2977,6 +3883,327 @@ TestResult RunSelfTest() {
                   !ok && err.find(L"NUL") != std::wstring::npos,
                   "err=" + WideToUtf8(err));
         }
+    }
+
+    // 3e-bis. 9.2.9 - the firewall viewer's ledger helpers. Both are pure and
+    //        both decide the ledger's SHAPE, which is why they are pinned
+    //        directly: CountWinTcpRules and RemoveAllWinTcpRules both split on
+    //        the tab and read field 0, so a viewer that reshaped a line would
+    //        silently change what `blocks` counts. That is the one side effect
+    //        the viewer is not allowed to have.
+    {
+        const std::wstring a = L"WinTCP block: A-1-2-endpoint";
+        const std::wstring b = L"WinTCP block: A-1-2-ports";
+        const std::wstring pair = a + L"\t" + b;
+
+        // Two names, in order.
+        const std::vector<std::wstring> both = SplitLedgerNames(pair);
+        Check(r, "9.2.9.split.two-names-in-order",
+              both.size() == 2 && both[0] == a && both[1] == b,
+              "n=" + std::to_string(both.size()));
+
+        // A bare name with no tab is one name, not zero and not two.
+        const std::vector<std::wstring> one = SplitLedgerNames(a);
+        Check(r, "9.2.9.split.no-tab-is-one-name",
+              one.size() == 1 && one[0] == a,
+              "n=" + std::to_string(one.size()));
+
+        // The post-removal shape: the first field blank, the second intact.
+        // The empty first field must NOT surface as a name.
+        const std::vector<std::wstring> half = SplitLedgerNames(L"\t" + b);
+        Check(r, "9.2.9.split.blank-first-field-is-not-a-name",
+              half.size() == 1 && half[0] == b,
+              "n=" + std::to_string(half.size()));
+
+        // Both blank: nothing at all.
+        Check(r, "9.2.9.split.both-blank-is-empty",
+              SplitLedgerNames(L"\t").empty() &&
+                  SplitLedgerNames(std::wstring()).empty(),
+              "");
+
+        // Blanking the endpoint name leaves the tab where it was, so the
+        // field COUNT does not change.
+        std::wstring blanked;
+        const bool didBlank = BlankLedgerName(pair, a, &blanked);
+        Check(r, "9.2.9.blank.endpoint-keeps-the-tab",
+              didBlank && blanked == L"\t" + b, WideToUtf8(blanked));
+
+        // Blanking the PORTS name leaves field 0 alone - this is the case
+        // that would change the `blocks` count if it got it wrong.
+        const bool didBlank2 = BlankLedgerName(pair, b, &blanked);
+        const std::wstring portsLeft = a + L"\t";
+        Check(r, "9.2.9.blank.ports-keeps-field-0", didBlank2 && blanked == portsLeft,
+              WideToUtf8(blanked));
+
+        // Blanking the only name leaves an empty line, which the writer then
+        // drops; blanking nothing leaves the line untouched and says so.
+        std::wstring untouched = pair;
+        const bool noChange = BlankLedgerName(pair, L"not ours", &untouched);
+        Check(r, "9.2.9.blank.a-name-that-is-not-ours",
+              !noChange && untouched == pair, WideToUtf8(untouched));
+
+        // A name that appears as a PREFIX of the other must not match: the
+        // comparison is per-field, not a substring search.
+        const std::wstring shortName = L"WinTCP block: A-1-2-endpointX";
+        const std::wstring edge = shortName + L"\t" + L"other";
+        const bool okEdge = BlankLedgerName(edge, shortName, &blanked);
+        const std::wstring edgeLeft = L"\t" + std::wstring(L"other");
+        Check(r, "9.2.9.blank.matches-whole-fields-only",
+              okEdge && blanked == edgeLeft, WideToUtf8(blanked));
+    }
+
+    // 3e-ter. 9.2.9 - the viewer's row text and dialog-template capacity. Both
+    //        are pure and both guard a crash the UI harness cannot reach, because
+    //        it cannot dismiss a modal: the template writer's arithmetic and the
+    //        row formatter's bound are verified here, which is the whole reason
+    //        TemplateCapacity is exported.
+    {
+        // A rule that is fine reads as its name, address and port.
+        BlockedRule plain;
+        plain.name = L"WinTCP block: CB0071A9-443-80-endpoint";
+        plain.remoteAddrs = L"203.0.113.7";
+        plain.remotePorts = L"443";
+        plain.enabled = true;
+        plain.isBlocking = true;
+        const std::wstring okRow = BlockedPeersRowText(plain);
+        Check(r, "9.2.9.row.plain-has-no-warning",
+              okRow.find(L"[disabled]") == std::wstring::npos &&
+                  okRow.find(L"[not a block]") == std::wstring::npos,
+              WideToUtf8(okRow));
+
+        // The two states that matter are LABELLED, never passed off as a block.
+        BlockedRule disabled = plain;
+        disabled.enabled = false;
+        const std::wstring disRow = BlockedPeersRowText(disabled);
+        Check(r, "9.2.9.row.disabled-is-labelled",
+              disRow.find(L"[disabled]") != std::wstring::npos,
+              WideToUtf8(disRow));
+
+        BlockedRule allowRule = plain;
+        allowRule.isBlocking = false;
+        const std::wstring allowRow = BlockedPeersRowText(allowRule);
+        Check(r, "9.2.9.row.not-a-block-is-labelled",
+              allowRow.find(L"[not a block]") != std::wstring::npos,
+              WideToUtf8(allowRow));
+
+        // A name far longer than the row is truncated, not overflowed, and the
+        // row still holds its address.
+        BlockedRule huge = plain;
+        huge.name = std::wstring(5000, L'W');
+        const std::wstring hugeRow = BlockedPeersRowText(huge);
+        Check(r, "9.2.9.row.long-name-truncates",
+              hugeRow.size() < 5000, "len=" + std::to_string(hugeRow.size()));
+
+        // Template capacity: the writer allocates for exactly this many bytes
+        // and refuses to exceed them, so pinning the arithmetic is what keeps
+        // the "refuse rather than overrun" contract honest as the layout
+        // changes. A title of any length the code will accept must still fit.
+        const size_t cap = BlockedPeersTemplateCapacity(0);
+        Check(r, "9.2.9.dialog.capacity-is-sane",
+              cap > sizeof(DLGTEMPLATE) && cap < 1024 * 1024,
+              "cap=" + std::to_string(cap));
+
+        // A small buffer is REFUSED, not written into. This is the exact
+        // failure PromptDialog.cpp documents: a writer that only advances the
+        // cursor corrupts the heap before it ever checks.
+        std::vector<BYTE> tiny(8, 0);
+        Check(r, "9.2.9.dialog.refuses-a-tiny-buffer",
+              !BlockedPeersTemplateFits(L"Blocked peers", &tiny) ||
+                  tiny.size() <= 8,
+              "size=" + std::to_string(tiny.size()));
+
+        // And a correctly sized buffer IS accepted, so the check above is a
+        // refusal rather than an always-false predicate.
+        std::vector<BYTE> right(cap + 64, 0);
+        const bool filled =
+            BlockedPeersTemplateFits(L"Blocked peers", &right);
+        Check(r, "9.2.9.dialog.fills-a-right-sized-buffer",
+              filled && right.size() <= cap + 64, "size=" + std::to_string(right.size()));
+
+        // 9.5.5: the editor added two buttons and a shorter list, so cdit
+        // moved from 4 to 6 and the capacity moved with it. A capacity that
+        // did NOT track cdit would be a buffer the dialog manager reads past
+        // the end of, which is the intermittent access violation
+        // PromptDialog.cpp is about - so the two are pinned together rather
+        // than trusted to have been edited in step.
+        Check(r, "9.2.9.dialog.control-count-matches-capacity",
+              BlockedPeersControlCount() == kDialogControls,
+              "cdit=" + std::to_string(BlockedPeersControlCount()) +
+                  " want " + std::to_string(kDialogControls));
+    }
+
+    // 3e-quart. 9.5.5 - the general firewall rule. Both functions under test
+    //        are PURE, so the platform constraints they enforce are verifiable
+    //        without COM and without elevation.
+    //
+    //        The constraint that matters most is one this file can only
+    //        document rather than test: Windows Firewall's conflict resolution
+    //        is BLOCK WINS, so an allow rule does NOT carve a process out of a
+    //        block rule. That is recorded in BlockConn.h and enforced by
+    //        review - nothing here can measure a policy decision the platform
+    //        makes at match time. Excluding a process has to be done by
+    //        scoping the block, which is what the process field is for.
+
+    // The name is the identity: same rule, same name; any difference, a
+    // different name. This is what makes kAlreadyPresent possible, and what
+    // stops two rules colliding on one name.
+    {
+        FwRule base;
+        base.remoteAddress = L"203.0.113.7";
+        base.remotePorts = L"443";
+        const std::wstring a = BuildFwRuleName(base);
+        Check(r, "9.5.5.name.same-rule-same-name",
+              a == BuildFwRuleName(base), WideToUtf8(a));
+
+        struct Diff {
+            const char* name;
+            void (*apply)(FwRule*);
+        };
+        const Diff diffs[] = {
+            {"direction", [](FwRule* r) { r->inbound = true; }},
+            {"action", [](FwRule* r) { r->allow = true; }},
+            {"protocol", [](FwRule* r) { r->protocol = 17; }},
+            {"address", [](FwRule* r) { r->remoteAddress = L"203.0.113.8"; }},
+            {"remote-ports", [](FwRule* r) { r->remotePorts = L"*"; }},
+            {"process",
+             [](FwRule* r) { r->processPath = L"C:\\Windows\\System32\\x.exe"; }},
+            {"service", [](FwRule* r) { r->service = L"MpsSvc"; }},
+        };
+        for (const Diff& d : diffs) {
+            FwRule changed = base;
+            d.apply(&changed);
+            const std::wstring other = BuildFwRuleName(changed);
+            Check(r, (std::string("9.5.5.name.") + d.name +
+                      "-changes-the-name")
+                         .c_str(),
+                  other != a,
+                  WideToUtf8(a) + " vs " + WideToUtf8(other));
+        }
+
+        // A label is on top of the identity, so the scope part must still be
+        // present in the name - not replaced by the label.
+        FwRule labelled = base;
+        labelled.label = L"mylabel";
+        const std::wstring withLabel = BuildFwRuleName(labelled);
+        Check(r, "9.5.5.name.label-is-appended-not-substituted",
+              withLabel.find(L"mylabel") != std::wstring::npos &&
+                  withLabel.find(a) != std::wstring::npos,
+              WideToUtf8(withLabel));
+
+        // A value at each scope's default must not collide with an explicit
+        // one. This catches the base-rule mistake: if a test's base rule
+        // already had local ports at "*", changing them to "*" changes
+        // nothing, and the check would pass for the wrong reason.
+        {
+            FwRule withStar;
+            withStar.remoteAddress = L"1.2.3.4";
+            withStar.localPorts = L"*";
+            withStar.remotePorts = L"*";
+            FwRule withNum = withStar;
+            withNum.localPorts = L"443";
+            Check(r, "9.5.5.name.local-ports-actually-differ",
+                  BuildFwRuleName(withStar) != BuildFwRuleName(withNum),
+                  WideToUtf8(BuildFwRuleName(withStar)) + " vs " +
+                      WideToUtf8(BuildFwRuleName(withNum)));
+        }
+
+        // Two values differing only in characters the firewall would mangle
+        // must not collide. "a/b" and "a_b" are DIFFERENT inputs, so they
+        // must not produce one name for two rules: the sanitiser escapes
+        // per-character rather than substituting a single underscore.
+        FwRule p1;
+        p1.remoteAddress = L"a/b";
+        FwRule p2;
+        p2.remoteAddress = L"a_b";
+        Check(r, "9.5.5.name.sanitises-rather-than-dropping",
+              BuildFwRuleName(p1) != BuildFwRuleName(p2),
+              WideToUtf8(BuildFwRuleName(p1)) + " vs " +
+                  WideToUtf8(BuildFwRuleName(p2)));
+        // The same escape must be applied consistently, so "a/b" and "a\\b"
+        // are also distinct.
+        FwRule p3;
+        p3.remoteAddress = L"a\\b";
+        Check(r, "9.5.5.name.sanitiser-is-consistent",
+              BuildFwRuleName(p1) != BuildFwRuleName(p3),
+              WideToUtf8(BuildFwRuleName(p1)) + " vs " +
+                  WideToUtf8(BuildFwRuleName(p3)));
+
+        // The name cap is the firewall's, so a long label is trimmed rather
+        // than pushing the name over the limit.
+        FwRule huge;
+        huge.label = std::wstring(1000, L'x');
+        Check(r, "9.5.5.name.long-label-is-trimmed",
+              BuildFwRuleName(huge).size() <= kMaxRuleNameChars,
+              "len=" + std::to_string(BuildFwRuleName(huge).size()));
+    }
+
+    // Validation: the platform constraints, refused BEFORE anything is written.
+    {
+        std::wstring err;
+
+        // The one that would silently produce a rule without its ports.
+        FwRule anyPorts;
+        anyPorts.protocol = 0;
+        anyPorts.localPorts = L"443";
+        Check(r, "9.5.5.validate.any-protocol-refuses-ports",
+              !ValidateFwRule(anyPorts, &err) && !err.empty(),
+              WideToUtf8(err));
+
+        FwRule anyOk = anyPorts;
+        anyOk.localPorts = L"*";
+        anyOk.remotePorts = L"*";
+        Check(r, "9.5.5.validate.any-protocol-allows-any-ports",
+              ValidateFwRule(anyOk, &err), WideToUtf8(err));
+
+        FwRule badProto;
+        badProto.protocol = 99;
+        Check(r, "9.5.5.validate.refuses-an-unknown-protocol",
+              !ValidateFwRule(badProto, &err), WideToUtf8(err));
+
+        // An empty field is not "*" and would be a rule nobody asked for.
+        FwRule emptyAddr;
+        emptyAddr.remoteAddress.clear();
+        Check(r, "9.5.5.validate.refuses-an-empty-address",
+              !ValidateFwRule(emptyAddr, &err), WideToUtf8(err));
+
+        FwRule emptyPort;
+        emptyPort.localPorts.clear();
+        Check(r, "9.5.5.validate.refuses-an-empty-port-field",
+              !ValidateFwRule(emptyPort, &err), WideToUtf8(err));
+
+        // A bare program name is the classic "it blocked the wrong thing":
+        // the firewall resolves it against a working directory this tool does
+        // not control.
+        FwRule bareProc;
+        bareProc.processPath = L"chrome.exe";
+        Check(r, "9.5.5.validate.refuses-a-bare-process-name",
+              !ValidateFwRule(bareProc, &err) && !err.empty(),
+              WideToUtf8(err));
+
+        FwRule fullProc;
+        fullProc.processPath = L"C:\\Program Files\\Google\\Chrome\\chrome.exe";
+        Check(r, "9.5.5.validate.accepts-a-full-process-path",
+              ValidateFwRule(fullProc, &err), WideToUtf8(err));
+
+        FwRule badProc;
+        badProc.processPath = L"C:\\a\nb.exe";
+        Check(r, "9.5.5.validate.refuses-an-unsafe-process-path",
+              !ValidateFwRule(badProc, &err), WideToUtf8(err));
+
+        // A CIDR inbound rule is the case that matters most for "stop this
+        // subnet reaching us", so it has to pass.
+        FwRule cidr;
+        cidr.inbound = true;
+        cidr.remoteAddress = L"203.0.113.0/24";
+        cidr.remotePorts = L"*";
+        Check(r, "9.5.5.validate.accepts-a-cidr-inbound-rule",
+              ValidateFwRule(cidr, &err), WideToUtf8(err));
+
+        // The struct's defaults must be a rule the user can actually ask for.
+        FwRule defaults;
+        defaults.remoteAddress = L"*";
+        Check(r, "9.5.5.validate.defaults-are-a-valid-rule",
+              ValidateFwRule(defaults, &err), WideToUtf8(err));
     }
 
     // 3d3. The pre-join view. A filter with an enrichment clause had NO view
@@ -8937,6 +10164,12 @@ static const unsigned char kClientHello[] = {
     CheckColumnProfiles(r);
     CheckQuickFilters(r);
     CheckFontCache(r);
+    CheckBookmarkFile(r);
+    CheckPresetFile(r);
+    CheckIniFile(r);
+    CheckEmptyState(r);
+    CheckProcessTree(r);
+    CheckSha256(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";

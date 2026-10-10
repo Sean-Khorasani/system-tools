@@ -37,6 +37,36 @@ constexpr size_t kMaxPathPlus = MAX_PATH + 64;      // a path plus its switches
 constexpr size_t kTwoMaxPathPlus = 2 * MAX_PATH + 64;  // two quoted paths
 constexpr size_t kOverSizeMsgChars = 160;      // the "too large" message
 
+// Grace period after TerminateProcess, before the handles are dropped. Not a
+// guess: the process object stays valid until the last handle closes, and
+// reaping it here keeps a killed pktmon from lingering in a half-dead state
+// with the capture drivers still attached.
+constexpr DWORD kTerminateGraceMs = 2000;
+
+// Bytes in an address field. CaptureTarget and TcpKey both store full 128-bit
+// values regardless of family, so every copy and compare in this file uses the
+// same width. Same name as TcpReasm.cpp's copy on purpose, so a grep finds both.
+constexpr size_t kIpv6AddrBytes = 16;
+
+// Widetest rendered address on its own, without the port. An IPv6 literal is 45
+// characters at its specification maximum, so this is that plus slack; the
+// endpoint form below adds the port and brackets on top of it.
+constexpr size_t kIpTextChars = 64;
+constexpr size_t kEndpointTextChars = 96;
+
+// FormatStreamHex's per-line layout. Spelled out so the array bound and the
+// snprintf sites that fill it cannot disagree about any part of it: the offset
+// is 8 hex digits and two spaces, a byte takes three characters (two digits
+// plus a space), the gutter bars are two, and the line ending is room for CRLF
+// and slack.
+constexpr size_t kHexOffsetChars = 8;
+constexpr size_t kHexGutterChars = 2;
+constexpr size_t kHexLineEndChars = 8;
+// Pre-sizing for the assembled output: one line per bytesPerLine bytes, at a
+// generous per-line estimate, plus slack for the short final line.
+constexpr size_t kHexLineReserveChars = 80;
+constexpr size_t kHexReserveSlack = 32;
+
 // Run a console tool with no window and capture its exit code. Output is
 // discarded: pktmon's messages are diagnostics, and the caller reports a
 // stage name instead, which reads better than a wall of text.
@@ -63,7 +93,7 @@ int RunTool(const std::wstring& exe, const std::wstring& args) {
     const DWORD wait = ::WaitForSingleObject(pi.hProcess, kToolTimeoutMs);
     if (wait == WAIT_TIMEOUT) {
         ::TerminateProcess(pi.hProcess, 1);
-        ::WaitForSingleObject(pi.hProcess, 2000);   // let it die
+        ::WaitForSingleObject(pi.hProcess, kTerminateGraceMs);   // let it die
         ::CloseHandle(pi.hThread);
         ::CloseHandle(pi.hProcess);
         return -2;   // distinct from -1 (launch failure)
@@ -150,15 +180,15 @@ std::wstring FormatAddrForFilter(const unsigned char* a, bool v4) {
 // out which half is which - so the labels have to come from the place that did
 // the sorting.
 std::wstring KeyEndpoint(const unsigned char* addr, uint16_t port, bool v4) {
-    wchar_t buf[96] = {0};
+    wchar_t buf[kEndpointTextChars] = {0};
     if (v4) {
         ::swprintf_s(buf, L"%u.%u.%u.%u:%u", addr[0], addr[1], addr[2], addr[3],
                      static_cast<unsigned>(port));
     } else {
         IN6_ADDR a6 = {};
-        std::memcpy(a6.s6_addr, addr, 16);
-        wchar_t ip[64] = {0};
-        if (::InetNtopW(AF_INET6, &a6, ip, 64) != nullptr)
+        std::memcpy(a6.s6_addr, addr, kIpv6AddrBytes);
+        wchar_t ip[kIpTextChars] = {0};
+        if (::InetNtopW(AF_INET6, &a6, ip, kIpTextChars) != nullptr)
             ::swprintf_s(buf, L"[%s]:%u", ip, static_cast<unsigned>(port));
         else
             ::swprintf_s(buf, L"[?]:%u", static_cast<unsigned>(port));
@@ -481,20 +511,20 @@ CaptureResult StopCapture(const CaptureTarget& target,
 
     res.stage = L"reassemble";
     TcpKey want;
-    std::memcpy(want.addrA, target.localAddr, 16);
-    std::memcpy(want.addrB, target.remoteAddr, 16);
+    std::memcpy(want.addrA, target.localAddr, kIpv6AddrBytes);
+    std::memcpy(want.addrB, target.remoteAddr, kIpv6AddrBytes);
     want.portA = target.localPort;
     want.portB = target.remotePort;
     // Canonicalise: the two endpoints are given in caller order, but
     // MakeTcpKey-style sorting is what the packets were matched against.
     {
-        const int c = std::memcmp(want.addrA, want.addrB, 16);
+        const int c = std::memcmp(want.addrA, want.addrB, kIpv6AddrBytes);
         const bool swap = (c > 0) || (c == 0 && want.portA > want.portB);
         if (swap) {
-            unsigned char ta[16];
-            std::memcpy(ta, want.addrA, 16);
-            std::memcpy(want.addrA, want.addrB, 16);
-            std::memcpy(want.addrB, ta, 16);
+            unsigned char ta[kIpv6AddrBytes];
+            std::memcpy(ta, want.addrA, kIpv6AddrBytes);
+            std::memcpy(want.addrA, want.addrB, kIpv6AddrBytes);
+            std::memcpy(want.addrB, ta, kIpv6AddrBytes);
             const uint16_t tp = want.portA;
             want.portA = want.portB;
             want.portB = tp;
@@ -531,8 +561,8 @@ CaptureTarget MakeCaptureTarget(const Connection& c) {
     const bool v6 = (c.family == AF_INET6);
     t.ipV4 = !v6;
     if (v6) {
-        ::memcpy(t.localAddr, c.local6.s6_addr, 16);
-        ::memcpy(t.remoteAddr, c.remote6.s6_addr, 16);
+        ::memcpy(t.localAddr, c.local6.s6_addr, kIpv6AddrBytes);
+        ::memcpy(t.remoteAddr, c.remote6.s6_addr, kIpv6AddrBytes);
     } else {
         ::memcpy(t.localAddr, &c.local4, 4);
         ::memcpy(t.remoteAddr, &c.remote4, 4);
@@ -554,11 +584,13 @@ std::string FormatStreamHex(const std::string& bytes, size_t bytesPerLine) {
     // C2131, so the entire file failed to compile over a formatting helper.
     constexpr size_t kMaxPerLine = 64;
     if (bytesPerLine == 0 || bytesPerLine > kMaxPerLine) bytesPerLine = 16;
-    out.reserve(bytes.size() / bytesPerLine * 80 + 32);
+    out.reserve(bytes.size() / bytesPerLine * kHexLineReserveChars +
+                kHexReserveSlack);
 
     // Worst case per line: 8 for the offset, 2 spaces, three characters per hex
     // byte, two for the gutter bars, one per ASCII byte, and the CRLF.
-    char line[8 + 2 + kMaxPerLine * 3 + 2 + kMaxPerLine + 8];
+    char line[kHexOffsetChars + kHexGutterChars + kMaxPerLine * 3 +
+              kHexGutterChars + kMaxPerLine + kHexLineEndChars];
 
     const size_t n = bytes.size();
     for (size_t off = 0; off < n; off += bytesPerLine) {

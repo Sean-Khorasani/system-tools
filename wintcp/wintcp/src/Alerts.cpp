@@ -18,6 +18,19 @@
 namespace wintcp {
 namespace {
 
+// Width of the one-line rate text ("1023.9 GB/s"). swprintf_s truncates rather
+// than overruns, so this is slack chosen to cover every value the unit ladder
+// above it can produce, not a measured worst case.
+constexpr size_t kRateTextChars = 64;
+
+// Registry enumeration buffers for the rule store. RegEnumValueW reports a name
+// or value longer than the buffer as the REQUIRED size, and the load loop below
+// treats any rc other than ERROR_SUCCESS as "skip this value" - so an oversized
+// rule is skipped whole rather than silently truncated into something the
+// parser would then reject. That is why these can be fixed sizes.
+constexpr DWORD kRuleNameChars = 256;
+constexpr DWORD kRuleValueBytes = 1024;
+
 // Latch helper: returns true only on the rising edge of a condition.
 inline bool Rising(bool nowActive, bool* latched) {
     const bool rising = (nowActive && !*latched);
@@ -29,7 +42,7 @@ inline bool Rising(bool nowActive, bool* latched) {
 
 std::wstring FormatBps(double bps) {
     if (!(bps > 0.0)) return L"0 B/s";
-    wchar_t buf[64] = {0};
+    wchar_t buf[kRateTextChars] = {0};
     if (bps >= kBytesPerGB) {
         ::swprintf_s(buf, L"%.1f GB/s", bps / kBytesPerGB);
     } else if (bps >= kBytesPerMB) {
@@ -286,11 +299,11 @@ std::vector<AlertRule> AlertRuleStore::Load() {
         ERROR_SUCCESS) {
         return out;   // nothing saved yet
     }
-    wchar_t name[256] = {0};
-    unsigned char buf[1024] = {0};
+    wchar_t name[kRuleNameChars] = {0};
+    unsigned char buf[kRuleValueBytes] = {0};
     for (DWORD i = 0;; ++i) {
-        DWORD nameLen = 256;
-        DWORD bufLen = 1024;
+        DWORD nameLen = kRuleNameChars;
+        DWORD bufLen = kRuleValueBytes;
         DWORD type = 0;
         const LSTATUS rc = ::RegEnumValueW(k, i, name, &nameLen, nullptr, &type,
                                            buf, &bufLen);

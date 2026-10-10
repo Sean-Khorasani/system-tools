@@ -301,7 +301,57 @@ The default end-mode is the hybrid: `WM_CLOSE`, then terminate if the process is
 
 `unblock --address A --port P` removes the rules for that peer. It cannot take `--select`: by the time you want to undo, the connection is usually gone, so there is no row to select. Address and port are the rule's identity.
 
+#### Writing a rule you state
+
+`block --rule` writes **one** rule instead of deriving two from a live row, so you can block an address that is not connected right now, or scope a block to one process.
+
+```bat
+wintcp.exe block --rule --inbound --address 203.0.113.0/24 --proto tcp --dry-run
+wintcp.exe block --rule --address "*" --process "C:\Windows\System32\svchost.exe" --remote-ports 443 --dry-run
+```
+
+```text
+rule WinTCP block: in-block-tcp-203.0.113.0_002F24-_002A-_002A--
+  block inbound from 203.0.113.0/24  proto=tcp
+```
+
+| Switch | What it scopes |
+|---|---|
+| `--inbound` | Inbound instead of outbound — the way to stop an address *reaching* you. Outbound is the default. |
+| `--allow` | An ALLOW rule rather than a block. **It does not carve a process out of an existing block** — see below. |
+| `--address` | Required. `"*"`, an address, a comma-separated list, or a CIDR range (`203.0.113.0/24`). There is deliberately no default: `"*"` is a real choice and has to be stated, so a rule is never created broader than you asked for by accident. |
+| `--proto` | `tcp` (default), `udp`, or `any`. |
+| `--local-ports`, `--remote-ports` | Port lists in the firewall's own syntax: `"*"`, `443`, `1-1024`, `80,443`. |
+| `--process PATH` | Scopes the rule to one program. Needs the **full image path**. |
+| `--rule-label TEXT` | Appended to the rule name, within the 255-character cap. |
+
+**`--proto any` with a port restriction is refused**, because the firewall API rejects port restrictions on protocol any with `E_INVALIDARG` for every value tried — measured, not inferred. A rule that would silently lose its ports is worse than a refusal.
+
+**`--process` needs the full image path.** A bare program name is refused: the firewall resolves it against a working directory this tool does not control, which is how "block chrome" ends up blocking a different program that happens to live in the service's cwd.
+
+#### Why `--allow` is not an exclusion
+
+Windows Firewall's default conflict resolution is **block wins**. When a block rule and an allow rule both match a packet, the block applies — so adding `--allow --process X` does **not** carve X out of a block rule, no matter which order the rules were created in.
+
+That is a property of the platform, not of this tool, and it is the reason `--allow` is documented as a positive permit rather than an exclusion. To let one process *through* a block, scope the **block** itself (by address or port) rather than adding an allow — that is what `--process` and the port fields are for. `blocks --list` shows every rule with its direction and whether it is still an outbound block, so a rule the user disabled or flipped to allow in `netsh advfirewall` shows up as it actually is rather than as protection.
+
+#### What `blocks` and the viewer show
+
+`blocks --list` prints every tagged rule with its `En` and `Block` state; the GUI's **View → Blocked peers…** shows the same list with per-rule delete. Both read the rule from the firewall rather than from the ledger, so a rule edited outside this tool reads as it is.
+
+Rules this tool creates are named `WinTCP block: …` and carry that tag, which is how `blocks` counts, `blocks --list` finds, and **Remove all WinTCP blocks** cleans them up — without touching rules any other tool or the user wrote. `wintcp.exe blocks` still prints exactly the count it always printed, and listing never writes anything, so a script that parses the count is unaffected.
+
 `blocks` counts rules carrying the WinTCP tag, in any direction and family.
+
+`blocks --list` prints the rules themselves instead of the count, in `--format table|csv|json` (default `table`). Each row is read from the rule the firewall actually holds rather than from what the ledger remembers, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up as it really is — an `En` of `NO` and a `Block` of `NOT` — instead of being reported as protection. A rule that was deleted out from under the ledger is simply absent from the list.
+
+Listing never writes anything and never re-counts: `wintcp.exe blocks` still prints exactly the number it printed before `--list` existed, and a script that parses it is unaffected. Only `blocks` accepts `--list`; typing it at another verb is refused rather than ignored.
+
+```
+wintcp.exe blocks                     # the count
+wintcp.exe blocks --list              # every tagged rule
+wintcp.exe blocks --list --format json
+```
 
 ### `capture`
 
@@ -410,8 +460,49 @@ A bookmark pins a **remote address + remote port**. That pair survives a reconne
 | `colour --address A --port P --tag N` | Changes only the color. Tags: `0` none, `1` red, `2` amber, `3` blue, `4` green. |
 | `list [--format json]` | The store. JSON keys: `address`, `port`, `tag`, `note`. |
 | `remove --address A --port P` | Deletes the bookmark; color and note go with it. |
+| `export --out FILE [--force]` | Writes every bookmark as one JSON file (schema `version: 1`). |
+| `import --in FILE [--yes]` | Reads one back and adds what it holds. |
 
 Bookmarks are stored per user in `HKCU`. The note is joined onto live rows, so `note:` is a real filter field, and the `pinned` column prints the color name.
+
+#### Moving bookmarks between machines
+
+`export` and `import` are how bookmarks travel to another machine or into a
+dotfiles repo. The file is a JSON document with an explicit `version`, and the
+keys are the same ones `list --format json` prints:
+
+```json
+{
+  "schema": "wintcp-bookmarks",
+  "version": 1,
+  "count": 2,
+  "bookmarks": [
+    {"address":"203.0.113.7","port":443,"tag":1,"note":"known good","when":1700000000},
+    {"address":"198.51.100.22","port":80,"tag":0,"note":"","when":0}
+  ]
+}
+```
+
+Three rules, all of them deliberate:
+
+- **The file is read IN FULL before anything is written.** A file that fails
+  to parse is refused whole, so a half-broken file can never leave you with
+  half your bookmarks. Verified by hand: a file whose *last* record is missing
+  a field is refused, and the good record before it does not arrive.
+- **`--out` refuses an existing file unless `--force`**, the same guard
+  `export --out` uses. Replacing a bookmark file silently is not something a
+  script should be able to do by accident.
+- **Import needs `--yes`**, like every other act verb, and prints its plan
+  before writing. Re-importing a file cannot discard a note: `add` already
+  refreshes an existing bookmark's timestamp and nothing else.
+
+Refused, with a reason: a missing, unknown or non-numeric `version`; a record
+that is not an object; one missing a field or carrying one of the wrong type;
+a fractional tag (a colour of `1.5` is not a colour); a port outside
+`0..65535`; an address that does not normalise; an unpaired surrogate; a
+control character inside a string; and trailing content or malformed JSON.
+An unknown extra key is **accepted**, so a future version of this file can add
+a field without breaking an older reader.
 
 ### `preset`
 
@@ -424,6 +515,47 @@ Saved views, stored per user in `HKCU` and shown in the GUI **File** menu.
 | `show --name N` | The stored view as JSON. The state includes filter, sort column and direction, grouping, and the column mask (`colVisible`, a bitmask). |
 | `apply --name N [--limit N] [--columns …]` | Prints the current table through the saved view. Output switches are layered **over** the preset. A view that matches nothing prints only its header and exits `0`, exactly as `list` does; `apply` takes no `--quiet` (that is `2`), so there is no match-or-not exit code to branch on. |
 | `delete --name N` | Removes a preset. |
+| `export --out FILE [--force]` | Writes every preset as one JSON file (schema `version: 1`). |
+| `import --in FILE [--yes]` | Reads one back and adds what it holds. |
+
+#### Moving presets between machines
+
+Same file shape and the same three rules as the bookmark file: read in full
+before writing, `--out` refuses an existing file without `--force`, and import
+needs `--yes` and prints its plan first.
+
+```json
+{
+  "schema": "wintcp-presets",
+  "version": 1,
+  "count": 1,
+  "presets": [
+    {"name":"listening sockets","filter":"state:listen exclude:127.","protoMask":15,
+     "stateFilter":4294967295,"sortColumn":6,"sortAsc":true,"grouped":false,
+     "frozen":false,"frozenAtMs":0,"preserveSelection":true,"colVisible":4493311,
+     "sources":0}
+  ]
+}
+```
+
+Every axis the file carries is an axis of the stored view, so a round trip
+restores exactly what was there — including the two that look redundant with a
+default (`sortAsc`, `preserveSelection`), because a preset that dropped one of
+those would open a view you never saved.
+
+Two refusals are preset-specific rather than shared with the bookmark file:
+
+- **The name must be one the storage layer would accept** (`Presets::IsValidName`
+  is the authority, not a second spelling of the rule). A backslash would
+  create a registry subkey and a control character is invisible in a dialog.
+- **A sort column outside the table is refused rather than clamped.** A view
+  that sorts on column 9999 is a view the renderer could not draw, and
+  clamping it would open a differently-sorted table than the file described.
+
+Import **refuses an existing name rather than silently replacing it**, reusing
+the never-overwrite contract `preset save` already has: it reports
+`imported 0 (already present, skipped: 1)` and names the preset it did not
+touch, and you pass `--force` and repeat if you meant to replace it.
 
 `wintcp.exe alert` reads and writes the threshold-alerting configuration. With no
 switches it prints the current state; with them it sets it. `--enable` and
@@ -457,6 +589,53 @@ matching is a case-insensitive substring.
 
 Rules are stored one-per-registry-value under `HKCU\Software\WinTCP\AlertRules`, so
 they survive a relaunch and `alert rule list` is the same view the window has.
+
+## Running portably: `wintcp.ini`
+
+Preferences live in `HKCU`, which is per user and per machine — so a copy of
+`wintcp.exe` on a USB stick carries none of them. A `wintcp.ini` placed
+**beside the executable** is how they travel:
+
+```ini
+[wintcp]
+interval = 2500
+autoRefresh = yes
+resolveHosts = on
+topMost = off
+trayEnabled = yes
+trafficEnabled = no
+```
+
+| Key | Applies to |
+|---|---|
+| `interval` | Refresh period, ms. Must be in the tool's own range or it is ignored. |
+| `autoRefresh` | Refresh automatically. |
+| `resolveHosts` | Resolve hostnames for remote addresses. |
+| `topMost` | Keep the window above others. |
+| `trayEnabled` | Show a tray icon. |
+| `trafficEnabled` | Collect the ETW traffic counters. Never honoured as true unless the kernel logger actually starts, which needs elevation. |
+
+**The ini supplies defaults only.** It is read *before* the registry, so an
+existing user's saved settings always win. That ordering is deliberate: the
+alternative — the ini overriding the registry — means a setting changed in the
+GUI silently reverts on the next launch, which is the bug that gets reported as
+"the app forgets my settings". With this ordering the ini is exactly "what to
+use on a machine I have never run this on".
+
+Only the behaviour preferences are in scope. **Window placement, column widths
+and the column order are deliberately not** — a window rectangle from a 4K
+display is wrong on a 1366x768 laptop, and a column mask persisted against a
+different column count is a migration problem rather than a preference. Use
+`preset export` / `preset import` for views.
+
+The reader is strict, for the same reason the bookmark and preset files are: a
+line with no `=` is refused rather than skipped, because an ini accepted half
+is a preference half set. A file that exists but cannot be read or parsed is
+reported on the status line and on the `alert` note rather than swallowed, so
+a portable copy that quietly does nothing is impossible. Comments (`;` and
+`#`), blank lines and CRLF are fine; another tool's `[section]` is skipped
+rather than refused; and an unknown key inside `[wintcp]` is ignored rather
+than refused, so a newer build's key does not break an older reader.
 
 ### Quick filters and column profiles (GUI)
 

@@ -81,6 +81,31 @@ constexpr int kColStateW = 250;
 constexpr size_t kMaxClipboardRows = 8192;
 constexpr int kMinTotalW = 900;   // below this the fixed columns do not fit
 
+// The DPI every MulDiv in this file scales FROM: USER_DEFAULT_SCREEN_DPI (96),
+// the grid the layout metrics above were authored on. Same number as the
+// kDefaultScreenDpi fallback in Utils.cpp and FontCache.cpp, but a different
+// role, so it keeps its own name.
+constexpr int kMetricsDpi = 96;
+
+// Default window size, in that grid. Wide enough that the four fixed columns
+// plus a usable process and endpoint column all fit at once.
+constexpr int kDefaultWidth96 = 860;
+constexpr int kDefaultHeight96 = 480;
+
+// Smallest the window will track. The width is kMinTotalW; the height is the
+// point at which the list stops reading as a list and starts as a slot.
+constexpr int kMinTrackHeight96 = 200;
+
+// Narrowest the process and endpoint columns will share between them. A
+// narrower split clips every endpoint, so the split is floored rather than
+// letting it shrink with the window.
+constexpr int kMinElasticW96 = 80;
+
+// Debug-output buffers for the two CreateWindowExW / RegisterClassExW failure
+// paths. One line plus an error number, so this is slack; swprintf_s truncates
+// rather than overruns in any case.
+constexpr size_t kWindowErrChars = 128;
+
 void SetChildFont(HWND hwnd, HFONT font) {
     if (font != nullptr && hwnd != nullptr) {
         ::SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font),
@@ -109,7 +134,7 @@ ChangeLogWindow::~ChangeLogWindow() {
 
 int ChangeLogWindow::S(int px96) const {
     const UINT dpi = QueryDpiForWindow(hwnd_);
-    return ::MulDiv(px96, static_cast<int>(dpi), 96);
+    return ::MulDiv(px96, static_cast<int>(dpi), kMetricsDpi);
 }
 
 void ChangeLogWindow::CenterOnOwner(HWND owner) {
@@ -162,7 +187,7 @@ void ChangeLogWindow::Show(HWND owner, HFONT font) {
             // the UI harness reported as "the command opens the window: FAIL,
             // created=no". Report the error to the debug output so the next
             // occurrence is diagnosable without a debugger attached.
-            wchar_t msg[128] = {0};
+            wchar_t msg[kWindowErrChars] = {0};
             ::swprintf_s(msg, L"[changelog] RegisterClassExW failed: %lu\n",
                          ::GetLastError());
             ::OutputDebugStringW(msg);
@@ -173,15 +198,17 @@ void ChangeLogWindow::Show(HWND owner, HFONT font) {
         hwnd_ = ::CreateWindowExW(
             0, kClassName, L"WinTCP - Connection change log",
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
-            CW_USEDEFAULT, ::MulDiv(860, static_cast<int>(dpi), 96),
-            ::MulDiv(480, static_cast<int>(dpi), 96), owner, nullptr,
+            CW_USEDEFAULT,
+            ::MulDiv(kDefaultWidth96, static_cast<int>(dpi), kMetricsDpi),
+            ::MulDiv(kDefaultHeight96, static_cast<int>(dpi), kMetricsDpi),
+            owner, nullptr,
             ::GetModuleHandleW(nullptr), this);
         if (hwnd_ == nullptr) {
             // CreateWindowExW failed. Same reasoning as the registration branch
             // above: an unexplained null window is the failure mode that cost the
             // most time to diagnose, so it says what happened instead of
             // returning quietly.
-            wchar_t msg[128] = {0};
+            wchar_t msg[kWindowErrChars] = {0};
             ::swprintf_s(msg, L"[changelog] CreateWindowExW failed: %lu\n",
                          ::GetLastError());
             ::OutputDebugStringW(msg);
@@ -688,7 +715,7 @@ void ChangeLogWindow::SetColumnWidths() {
     ::GetClientRect(hwndList_, &rc);
     const int total = rc.right - rc.left;
     int elastic = total - S(kColTimeW + kColEventW + kColProtoW + kColStateW);
-    if (elastic < S(80)) elastic = S(80);
+    if (elastic < S(kMinElasticW96)) elastic = S(kMinElasticW96);
     const int wProcess = elastic / 3;
     const int wEndpoint = (elastic - wProcess) / 2;
 
@@ -1113,8 +1140,9 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             const UINT dpi = QueryDpiForWindow(hwnd_);
             auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
             mmi->ptMinTrackSize.x =
-                ::MulDiv(kMinTotalW, static_cast<int>(dpi), 96);
-            mmi->ptMinTrackSize.y = ::MulDiv(200, static_cast<int>(dpi), 96);
+                ::MulDiv(kMinTotalW, static_cast<int>(dpi), kMetricsDpi);
+            mmi->ptMinTrackSize.y =
+                ::MulDiv(kMinTrackHeight96, static_cast<int>(dpi), kMetricsDpi);
             return 0;
         }
 

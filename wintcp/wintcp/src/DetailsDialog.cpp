@@ -102,6 +102,15 @@ constexpr int kScrollThumbW = 24;
 constexpr int kTabH = 24;
 constexpr int kTabGap = 12;           // leading space before the first tab
 
+// Narrowest a tab slot may be, however short its label - "Notes" at any DPI is
+// still a clickable target, and a slot below this is not one.
+constexpr int kTabMinSlotPx = 48;
+
+// Leader dots are a DRAWN string, so their count is bounded even though the
+// from/to span arithmetic already limits it: a malformed rect must not produce
+// a megabyte-long run of periods.
+constexpr size_t kMaxLeaderDots = 512;
+
 // Dark-theme substitutes. Everything else comes from GetSysColor, so a
 // high-contrast scheme wins over these automatically.
 const COLORREF kDarkBg = RGB(0x20, 0x20, 0x20);
@@ -464,7 +473,7 @@ void DetailsDialog::RebuildLayout() {
         if (hdc != nullptr && !l.text.empty())
             ::GetTextExtentPoint32W(hdc, l.text.c_str(),
                                     static_cast<int>(l.text.size()), &sz);
-        const int slotW = (std::max)(S(48),
+        const int slotW = (std::max)(S(kTabMinSlotPx),
                                      static_cast<int>(sz.cx) + S(kColGap));
         lines_.back().width = slotW;
         tabX += slotW + S(kTabGap);
@@ -672,7 +681,7 @@ void DetailsDialog::PaintLine(HDC mem, const Line& l, int y, int lh, int cx,
                 std::wstring dots;
                 for (int dx = from; dx < to; dx += step) {
                     dots.push_back(L'.');
-                    if (dots.size() >= 512) break;
+                    if (dots.size() >= kMaxLeaderDots) break;
                 }
                 if (!dots.empty() && clrDim_ != 0) {
                     ::SetTextColor(mem, clrDim_);

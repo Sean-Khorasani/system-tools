@@ -64,6 +64,20 @@ add_executable(wintcp
     wintcp/src/Alerts.h
     wintcp/src/BlockConn.cpp
     wintcp/src/BlockConn.h
+    wintcp/src/BlockedPeersDialog.cpp
+    wintcp/src/BlockedPeersDialog.h
+    wintcp/src/BookmarkFile.cpp
+    wintcp/src/BookmarkFile.h
+    wintcp/src/PresetFile.cpp
+    wintcp/src/PresetFile.h
+    wintcp/src/IniFile.cpp
+    wintcp/src/IniFile.h
+    wintcp/src/EmptyStateActions.cpp
+    wintcp/src/EmptyStateActions.h
+    wintcp/src/ProcessTree.cpp
+    wintcp/src/ProcessTree.h
+    wintcp/src/Sha256.cpp
+    wintcp/src/Sha256.h
     wintcp/src/Elevate.cpp
     wintcp/src/Elevate.h
     wintcp/src/GeoIp.cpp
@@ -112,6 +126,8 @@ add_executable(wintcp
     wintcp/src/CrashDump.h
     wintcp/src/WinCaps.cpp
     wintcp/src/WinCaps.h
+    wintcp/src/Opt.cpp
+    wintcp/src/Opt.h
     wintcp/src/resource.h
     wintcp/src/wintcp.rc
 )

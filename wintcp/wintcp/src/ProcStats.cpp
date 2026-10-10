@@ -10,6 +10,16 @@
 namespace wintcp {
 namespace {
 
+// FILETIME counts 100 ns intervals and GetTickCount64 counts milliseconds, so
+// turning a tick delta into the FILETIME scale needs this factor; a wrong one
+// silently rescales every CPU percentage rather than failing loudly.
+constexpr ULONGLONG kFileTime100nsPerMs = 10000;
+
+// CPU% is reported on a 0..100 scale so a value is renderable as-is. The clamp
+// bounds and the initial scaling share the constant: a clamp expressed in a
+// different scale from the value it bounds is how a "103%" row happens.
+constexpr double kPctScale = 100.0;
+
 ULONGLONG FileTimeToU64(const FILETIME& ft) {
     ULARGE_INTEGER u = {};
     u.LowPart = ft.dwLowDateTime;
@@ -79,11 +89,11 @@ std::map<DWORD, ProcStats> ProcStatsSampler::Sample(
             } else if (nowTick > it->second.tickMs &&
                        nowTick - it->second.tickMs >= kMinSampleMs) {
                 const ULONGLONG wall100ns =
-                    (nowTick - it->second.tickMs) * 10000ULL;
+                    (nowTick - it->second.tickMs) * kFileTime100nsPerMs;
                 if (procTime >= it->second.procTime100ns &&
                     wall100ns > 0) {
                     const double pct =
-                        100.0 *
+                        kPctScale *
                         static_cast<double>(procTime -
                                             it->second.procTime100ns) /
                         static_cast<double>(wall100ns) /
@@ -93,8 +103,8 @@ std::map<DWORD, ProcStats> ProcStatsSampler::Sample(
                     // just keep the display sane.
                     ps.cpuKnown = true;
                     ps.cpuPct = (pct < 0.0)   ? 0.0
-                                : (pct > 100.0) ? 100.0
-                                                : pct;
+                                : (pct > kPctScale) ? kPctScale
+                                                    : pct;
                 }
                 it->second.procTime100ns = procTime;
                 it->second.tickMs = nowTick;

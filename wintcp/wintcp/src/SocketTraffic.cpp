@@ -115,9 +115,19 @@ struct TcpInfoExtras {
 // fields: truncating 999999us to "999 ms" and rounding it to "1000 ms" are
 // both defensible alone and inconsistent together, and a reader comparing rtt
 // against minrtt would see minrtt exceed rtt for no reason.
+// UsToMs's arithmetic, named because this helper is the ONE place a raw
+// TCP_INFO_v0 microsecond value becomes a number the UI shows, and a unit
+// scale guessed at there is invisible everywhere else. The clamp is one hour
+// expressed in microseconds - a wider RTT is not a reading worth showing - and
+// the rounding half is half a millisecond, so 999999 us reads as 1000 ms
+// rather than 999.
+constexpr ULONG kRttClampUs = 3600000UL;
+constexpr ULONG kUsPerMs = 1000UL;
+constexpr ULONG kUsHalfMs = 500UL;
+
 inline unsigned UsToMs(ULONG us) {
-    if (us >= 3600000UL) return 3600000U / 1000U * 1000U;   // clamp at 1h
-    return static_cast<unsigned>((us + 500UL) / 1000UL);
+    if (us >= kRttClampUs) return kRttClampUs / kUsPerMs * kUsPerMs;
+    return static_cast<unsigned>((us + kUsHalfMs) / kUsPerMs);
 }
 
 bool QueryTcpInfo(HANDLE h, ULONGLONG* in, ULONGLONG* out,

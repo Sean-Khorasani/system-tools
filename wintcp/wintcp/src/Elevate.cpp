@@ -18,6 +18,22 @@ namespace {
 // something no real user would pass.
 constexpr wchar_t kElevatedMarker[] = L"--__wintcp-elevated";
 
+// Paths are read into twice MAX_PATH. A path longer than MAX_PATH is legal on
+// modern Windows, and this is the one caller that must never silently truncate
+// one: the truncated string is what gets quoted and handed to the shell, so
+// elevation would launch the wrong file or fail with an error pointing nowhere
+// near the cause. Both the image path and the current directory use it.
+constexpr DWORD kPathBufChars = MAX_PATH * 2;
+
+// Slack on top of the rebuilt command line: the marker, its quotes and a
+// separator. Rounded well past the few dozen characters they actually cost so
+// the reserve never has to be recomputed.
+constexpr size_t kCmdLineSlackChars = 64;
+
+// MessageBox body. A path and an error number have to fit, and 256 wide chars
+// covers any path worth printing without allocating per failure.
+constexpr size_t kMsgBufChars = 256;
+
 // Cached so the answer is computed once per process; it cannot change.
 bool g_cachedElevated = false;
 bool g_cachedInitialized = false;
@@ -182,12 +198,12 @@ bool Reelevate(const std::wstring& featureName) {
     // elevation would have launched the wrong file, or failed with an error
     // that points nowhere near the real cause. Refusing is the right answer: the
     // caller reports the refusal rather than elevating to a partial path.
-    wchar_t exePath[MAX_PATH * 2] = {0};
-    const DWORD exeLen = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH * 2);
-    if (bufferWasTooSmall(exeLen, MAX_PATH * 2)) return false;
+    wchar_t exePath[kPathBufChars] = {0};
+    const DWORD exeLen = ::GetModuleFileNameW(nullptr, exePath, kPathBufChars);
+    if (bufferWasTooSmall(exeLen, kPathBufChars)) return false;
 
     std::wstring newCmd;
-    newCmd.reserve(cmd.size() + MAX_PATH * 2 + 64);
+    newCmd.reserve(cmd.size() + kPathBufChars + kCmdLineSlackChars);
     newCmd += L"\"";
     newCmd += exePath;
     newCmd += L"\"";
@@ -210,9 +226,9 @@ bool Reelevate(const std::wstring& featureName) {
     // too-small buffer as the REQUIRED size (measured: 14 for an 8-char
     // buffer), so `== 0` passed and 'dir' was left empty - and an empty lpCurrentDirectory
     // tells the elevated child to start wherever the shell feels like.
-    wchar_t dir[MAX_PATH * 2] = {0};
-    const DWORD dirLen = ::GetCurrentDirectoryW(MAX_PATH * 2, dir);
-    if (bufferWasTooSmall(dirLen, MAX_PATH * 2)) dir[0] = L'\0';
+    wchar_t dir[kPathBufChars] = {0};
+    const DWORD dirLen = ::GetCurrentDirectoryW(kPathBufChars, dir);
+    if (bufferWasTooSmall(dirLen, kPathBufChars)) dir[0] = L'\0';
 
     // "runas" is what makes UAC prompt. Returns FALSE with
     // ERROR_CANCELLED when the user clicks No - which must NOT be treated as
@@ -247,7 +263,7 @@ bool Reelevate(const std::wstring& featureName) {
                           L"works without it.",
                           L"WinTCP", MB_OK | MB_ICONINFORMATION);
         } else {
-            wchar_t msg[256] = {0};
+            wchar_t msg[kMsgBufChars] = {0};
             ::swprintf_s(msg,
                          L"Could not start an elevated copy of WinTCP for "
                          L"'%ls' (error %lu).",

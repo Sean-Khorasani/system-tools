@@ -155,6 +155,24 @@ struct Settings {
     // Read from HKCU; never fails hard (defaults stay on missing values).
     bool Load();
     bool Save() const;         // best effort; returns false on write failure
+
+    // 9.2.10: apply the portable `wintcp.ini` that sits beside the executable.
+    //
+    // MUST be called BEFORE Load(). It supplies DEFAULTS only, so an existing
+    // user's saved settings always win - the alternative (the ini overriding
+    // the registry) means a setting changed in the GUI silently reverts on the
+    // next launch. With this ordering the ini is exactly "what to use on a
+    // machine I have never run this on".
+    //
+    // Only the BEHAVIOUR preferences are in scope. Window placement, column
+    // widths and the column order are per-monitor, per-machine facts whose
+    // values mean nothing elsewhere - see IniFile.h for why.
+    //
+    // Returns true and sets 'error' when the file EXISTS but cannot be read or
+    // parsed, which is a user-visible fault worth reporting; returns false with
+    // an empty error when there is no ini at all, which is the ordinary case.
+    bool ApplyPortableDefaults(const std::wstring& exePath,
+                               std::wstring* error);
 };
 
 // Is the first 'count' entries of 'order' a permutation of 0..count-1?

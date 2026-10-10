@@ -125,6 +125,74 @@ int CountWinTcpRules(std::wstring* error = nullptr);
 // survives; the failing names are appended to 'error'.
 bool RemoveAllWinTcpRules(std::wstring* error);
 
+// 9.2.9: one WinTCP-tagged rule as the viewer reports it. Enumerating the
+// policy store cannot be used to FIND these (see the note on
+// CountWinTcpRules above), so the list is driven from the ledger and probed
+// by name - but once a rule is in hand every field below is read from the
+// rule itself rather than from the ledger, so a rule the user edited in
+// netsh or WF.msc is shown as it actually is, not as we recorded it.
+struct BlockedRule {
+    std::wstring name;          // the tagged rule name
+    std::wstring remoteAddrs;   // what get_RemoteAddresses reports, verbatim
+    std::wstring localPorts;    // get_LocalPorts, verbatim
+    std::wstring remotePorts;   // get_RemotePorts, verbatim
+    bool enabled = false;
+    // True when the rule is an OUTBOUND BLOCK. A tagged rule the user turned
+    // into a rule (disabled it, flipped it to allow, or changed direction) is
+    // reflected here rather than assumed, and the viewer says so - a block
+    // that is not blocking is the one thing this surface must not hide.
+    bool isBlocking = false;
+};
+
+// List the tagged rules the firewall still reports, in ledger order.
+// Returns false only when the policy could not be opened at all; a rule that
+// has been deleted out from under us is simply absent from the result, which
+// is the same rule CountWinTcpRules follows.
+bool ListBlockedRules(std::vector<BlockedRule>* out, std::wstring* error);
+
+// Delete ONE tagged rule by name, and drop that name from the ledger so a
+// later RemoveAllWinTcpRules does not go looking for it. Returns false with
+// the reason in 'error'.
+//
+// The ledger keeps its "endpoint\tports" pair SHAPE on rewrite: the removed
+// name is blanked in place rather than the line being dropped or
+// re-serialised. That matters because CountWinTcpRules and
+// RemoveAllWinTcpRules both split on the tab and read the FIRST field, so a
+// dropped or reshaped line would change what `blocks` counts - and the
+// viewer is not allowed to change that number as a side effect of looking.
+bool RemoveBlockedRule(const std::wstring& name, std::wstring* error);
+
+// Enable or disable ONE tagged rule, leaving it installed.
+//
+// Disabling is a different operation from deleting, and the difference is the
+// point: a disabled rule can be re-enabled with its identity intact, so "turn
+// this off for an hour and put it back" is one step instead of delete-then-
+// re-derive. A rule that has to be recreated is a rule whose name might change
+// and whose description is lost.
+//
+// The rule is read back after the write, so a caller is told when the
+// firewall accepted the change and when it refused it - a silent no-op here
+// would leave the manager showing a state the firewall is not in.
+bool SetBlockedRuleEnabled(const std::wstring& name, bool enabled,
+                           std::wstring* error);
+
+// 9.2.9, two PURE helpers so the viewer's ledger handling is testable
+// without touching the real file. Both are the reason RemoveBlockedRule can
+// promise not to change what `blocks` counts: the ledger's shape is decided
+// here, once, rather than inline at two call sites that could disagree.
+
+// The rule names a ledger line carries. A line is "endpoint\tports", so
+// there are up to two; an empty field (the shape a removal leaves behind)
+// is NOT a name, and a line with no tab yields its single name.
+std::vector<std::wstring> SplitLedgerNames(const std::wstring& line);
+
+// Blank every occurrence of 'name' in 'line' IN PLACE, leaving the tab
+// separators where they are so the field count does not change. Returns
+// true when anything was blanked. This is the whole trick behind not
+// disturbing CountWinTcpRules, which splits on the tab and reads field 0.
+bool BlankLedgerName(const std::wstring& line, const std::wstring& name,
+                     std::wstring* out);
+
 // R3: parse the ledger's bytes into rule-name pairs. PURE - no file, no
 // registry, no environment - so the selftest can drive it with hostile input
 // without touching the real ledger under %APPDATA%, which is the one thing it
@@ -186,5 +254,96 @@ constexpr size_t kLedgerMaxLineBytes = 4096;
 // connection that is no longer present.
 bool SetIpv4Teardown(const unsigned char* remoteAddr, uint16_t localPort,
                      uint16_t remotePort, std::wstring* error);
+
+// ========================================================================
+// 9.5.5 - the firewall manager's rule layer
+// ========================================================================
+//
+// BlockConnection is a SINGLE CONVERSATION: it takes a live row, kills it and
+// writes the two rules that stop that peer returning. It is deliberately narrow
+// because the user names a row they saw, not a policy they want.
+//
+// FwRule is the general form underneath the same primitives - a rule scoped by
+// direction, action, protocol, address, ports and process. It exists so the tool
+// can express a policy the user states ("block this process", "block inbound
+// from this subnet") rather than only a reaction to a row.
+//
+// THE CONSTRAINT THAT SHAPES IT, and the reason an "allow" rule is not offered
+// as a way to exclude a process: Windows Firewall's default conflict resolution
+// is BLOCK WINS. Adding an allow rule for a process that an existing block rule
+// also matches does NOT carve the process out of the block - the block still
+// applies. Exclusion has therefore to be done by SCOPING the block (which is
+// what the process field is for), or by having no block rule in the first
+// place. This is not a limitation of this tool; it is how the platform behaves,
+// and saying so is the difference between a user believing a peer is allowed
+// when it is not.
+//
+// A second platform constraint, already measured and documented in BlockConn.cpp:
+// a rule that restricts ports must have a CONCRETE protocol. Protocol = ANY
+// rejects put_LocalPorts / put_RemotePorts with E_INVALIDARG, so a rule asking
+// for ports with protocol "any" is refused here rather than silently created
+// without its port restrictions.
+
+struct FwRule {
+    // Direction. false = OUTBOUND, which is what BlockConnection writes and
+    // the default; true = INBOUND, for "stop this address reaching us".
+    bool inbound = false;
+
+    // Action. false = BLOCK. true = ALLOW, which is only meaningful as a
+    // positive permit - see the block-wins note above for why it cannot be
+    // used as an exclusion.
+    bool allow = false;
+
+    // 6 = TCP (IPPROTO_TCP), 17 = UDP (IPPROTO_UDP), 0 = any. 0 is only
+    // accepted with both port fields at "*", per the platform constraint above.
+    LONG protocol = 6;
+
+    // The remote-address field of the rule, exactly as the firewall receives
+    // it: "*" for any, or an address, a comma-separated list, or a CIDR
+    // ("203.0.113.0/24"). Not parsed or validated here beyond the shape the
+    // firewall will accept, because the firewall is the authority on address
+    // syntax and a second parser here would be a second place to disagree.
+    std::wstring remoteAddress = L"*";
+
+    // Port fields, in the firewall's own list syntax: "*", "443",
+    // "1-1024", "80,443". "*" means any.
+    std::wstring localPorts = L"*";
+    std::wstring remotePorts = L"*";
+
+    // Process scope. Empty means "any program", which is the behaviour
+    // BlockConnection has always written. Non-empty is a full image path and
+    // goes into the rule's ApplicationName, so the rule matches that program
+    // only - the way to express "block this process" or "block everyone
+    // except by scoping the block".
+    std::wstring processPath;
+
+    // Optional service scope ("*" or a service short name). Empty means any.
+    std::wstring service;
+
+    // Human label, appended to the rule name within the 255-character cap.
+    std::wstring label;
+};
+
+enum class FwRuleOutcome {
+    kCreated,        // the rule was added
+    kAlreadyPresent, // a rule with that identity was already there
+    kFailed,
+};
+
+// Pure: is this rule expressible? Returns false with a reason. The checks are
+// the platform constraints above plus a name-length one, so a refused rule is
+// refused before anything is written to the firewall rather than after.
+bool ValidateFwRule(const FwRule& rule, std::wstring* error);
+
+// Pure: the rule's deterministic identity name, carrying the same WinTCP tag
+// so ListBlockedRules and RemoveAllWinTcpRules can still find it. Two rules that
+// differ in any scope field get different names, and the same rule always gets
+// the same name - which is what makes kAlreadyPresent possible.
+std::wstring BuildFwRuleName(const FwRule& rule);
+
+// Create the rule. Returns kAlreadyPresent without writing anything when the
+// identity already exists, so a repeat call is not an error and not a duplicate.
+FwRuleOutcome AddFwRule(const FwRule& rule, std::wstring* name,
+                        std::wstring* error);
 
 }  // namespace wintcp

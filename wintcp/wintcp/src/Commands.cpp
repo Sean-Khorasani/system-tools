@@ -15,11 +15,14 @@
 
 #include "BlockConn.h"
 #include "Bookmarks.h"
+#include "BookmarkFile.h"  // 9.2.10: the export/import codec
 #include "BuildInfo.h"
 #include "ColumnsWin.h"
 #include "DnsResolver.h"
 #include "Elevate.h"
 #include "GeoIp.h"
+#include "Opt.h"
+#include "PresetFile.h"  // 9.2.10: the preset export/import codec
 #include "Presets.h"
 #include "ProcessInfo.h"
 #include "SocketTraffic.h"
@@ -49,29 +52,30 @@ constexpr DWORD kKillGraceMs = 3000;   // B4: dev constant, no --wait flag:
 constexpr DWORD kStatSampleGapMs = 1000;   // B4: dev constant, no --sample-ms:
 // delta == per-second keeps the arithmetic readable; shorter quantises.
 
+// Milliseconds per second, and bytes in an address field of a BlockRequest.
+// Both appear in this file as well as in MainWindow.cpp / ConnectionStore.cpp
+// and TcpReasm.cpp / TcpTable.cpp / StreamCapture.cpp / BlockConn.cpp, so the
+// names are identical on purpose - a grep should find every site that assumes
+// either width. 1000 here divides a millisecond age or grace into seconds,
+// which is the "factor-of-1000" failure the file-level comment on kMsPerSecond
+// in MainWindow.cpp describes.
+constexpr DWORD kMsPerSecond = 1000;
+constexpr size_t kIpv6AddrBytes = 16;
+
+// Escape a wide string for a JSON string literal.
+//
+// The conversion to UTF-8 stays here - WideToUtf8 is the owner of the
+// surrogate rules - and the escaping itself is wintcp::JsonEscapeOpt
+// (Opt.cpp), which scans 16 bytes at a time with SSE2 for the six
+// characters that need a backslash and copies the spans between them with
+// memcpy. Control characters below 0x20 still emit the identical \\u00XX
+// sequence, and UTF-8 continuation bytes pass through untouched.
+//
+// A/B bench, same source: 1.0-1.9x depending on how much of the string is
+// escape-free; the differential tests pin it against the original switch
+// over control chars, quotes, backslashes, CR/LF/TAB and multi-byte UTF-8.
 std::string JsonEscapeA(const std::wstring& s) {
-    const std::string u8 = WideToUtf8(s);
-    std::string out;
-    out.reserve(u8.size() + 8);
-    for (unsigned char ch : u8) {
-        switch (ch) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (ch < 0x20) {
-                    char buf[8] = {0};
-                    ::sprintf_s(buf, "\\u%04x",
-                                static_cast<unsigned int>(ch));
-                    out += buf;
-                } else {
-                    out += static_cast<char>(ch);
-                }
-        }
-    }
-    return out;
+    return JsonEscapeOpt(s);
 }
 
 std::string TsvCell(const std::wstring& w) {
@@ -85,6 +89,47 @@ std::string TsvCell(const std::wstring& w) {
 const int kDefaultCols[] = {COL_PROTO, COL_LOCAL, COL_LPORT, COL_REMOTE,
                             COL_RPORT, COL_STATE, COL_PID, COL_PROCESS,
                             COL_SERVICE, COL_PATH};
+
+// Element count of kDefaultCols. The export column set is built as a pointer
+// pair, so the length is a second spelling of the array's own size; a literal
+// here that drifts from the initialiser silently drops or gains a column, and
+// the only symptom is an export with the wrong number of fields.
+constexpr size_t kDefaultColCount = sizeof(kDefaultCols) / sizeof(kDefaultCols[0]);
+
+// ---- text-buffer bounds ---------------------------------------------------
+// Each swprintf_s / snprintf / sprintf_s site below bounds its own buffer, and
+// every one of them truncates rather than overruns - so these are the widest
+// value each format can hold plus its fixed wording, with slack, rather than a
+// shared maximum. They are named because the numbers sat bare at a dozen sites
+// and a wrong one reads as a plausible truncated number rather than as a
+// failure.
+
+// A short number on its own: "%.1f", "TID %u", "%.1f%%".
+constexpr size_t kNumTextChars = 32;
+
+// One details value, e.g. "cpu 12.34 s   started 3m 2s ago".
+constexpr size_t kThreadDetailChars = 96;
+
+// The two-direction rate cell: "down 1.2 MB/s   up 3.4 MB/s".
+constexpr size_t kRateTextChars = 64;
+
+// An error line, which carries a system message of unbounded length.
+constexpr size_t kErrLineChars = 128;
+
+// One numeric field on the `stat` line ("%.1f%%").
+constexpr size_t kStatFieldChars = 128;
+
+// An IPv6 literal in its narrow form: INET6_ADDRSTRLEN plus slack.
+constexpr size_t kIpv6TextChars = 64;
+
+// A GeoIP description line: version string plus two counts and a byte total.
+constexpr size_t kGeoIpDescChars = 256;
+
+// A capture summary line: four counters with labels.
+constexpr size_t kCaptureLineChars = 256;
+
+// The whole `stat --json` object on one line.
+constexpr size_t kStatJsonChars = 512;
 
 // THE refusal wording, exit 3. Every "we will not do that without being told
 // twice" answer goes through here (C5), so a script can match one shape.
@@ -213,89 +258,33 @@ std::string ValidateStreamColumns(const ListOptions& opt) {
 // their exact raw delimiters: they are machine shapes. The same job is done
 // by `column -t`, docker ps, kubectl and Go's text/tabwriter.
 
-// Display width of one decoded code point: a compact East Asian Width
-// approximation (the W/F ranges terminals render double, combining marks
-// zero, everything else one). ASCII - the common case - is exact.
-size_t CpWidth(uint32_t cp) {
-    if (cp < 0x0300) return 1;
-    if (cp <= 0x036F) return 0;   // combining accents
-    if (cp < 0x1100) return 1;
-    if (cp <= 0x115F) return 2;   // Hangul Jamo
-    if ((cp >= 0x2E80 && cp <= 0x303E) ||
-        (cp >= 0x3041 && cp <= 0x33FF) ||
-        (cp >= 0x3400 && cp <= 0x4DBF) ||
-        (cp >= 0x4E00 && cp <= 0x9FFF) ||
-        (cp >= 0xA000 && cp <= 0xA4CF) ||
-        (cp >= 0xA960 && cp <= 0xA97F) ||
-        (cp >= 0xAC00 && cp <= 0xD7A3) ||
-        (cp >= 0xF900 && cp <= 0xFAFF) ||
-        (cp >= 0xFE30 && cp <= 0xFE6F) ||
-        (cp >= 0xFF00 && cp <= 0xFF60) ||
-        (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-        (cp >= 0x1F300 && cp <= 0x1FAFF) ||
-        (cp >= 0x20000 && cp <= 0x3FFFD)) {
-        return 2;
-    }
-    return 1;
-}
-
 // Decode the code point at 'i' (UTF-8 from WideToUtf8; a stray byte counts
 // as itself) and return how many bytes it spans.
-size_t NextCp(const std::string& s, size_t i, uint32_t* cp) {
-    const unsigned char u = static_cast<unsigned char>(s[i]);
-    size_t n = 1;
-    uint32_t v = u;
-    if (u >= 0xF0 && i + 4 <= s.size()) {
-        n = 4;
-        v = u & 0x07u;
-    } else if (u >= 0xE0 && i + 3 <= s.size()) {
-        n = 3;
-        v = u & 0x0Fu;
-    } else if (u >= 0xC0 && i + 2 <= s.size()) {
-        n = 2;
-        v = u & 0x1Fu;
-    } else {
-        *cp = u;
-        return 1;
-    }
-    for (size_t k = 1; k < n; ++k) {
-        const unsigned char c = static_cast<unsigned char>(s[i + k]);
-        if ((c & 0xC0u) != 0x80u) {
-            *cp = u;  // malformed: count the lead byte, resync next call
-            return 1;
-        }
-        v = (v << 6) | (c & 0x3Fu);
-    }
-    *cp = v;
-    return n;
-}
+//
+// The whole UTF-8 width walk - CpWidth, NextCp, DisplayWidth and
+// TruncateToWidth - now lives in Opt.cpp. The four are one set and only make
+// sense together: DisplayWidthOpt scans ASCII 16 bytes at a time and decodes
+// codepoint by codepoint across the non-ASCII gaps, TruncateToWidthOpt fuses
+// the measure pass with the cut pass (the original paid DisplayWidth a second
+// time before walking again), and the measured gain came from both. Splitting
+// them back apart would put the slow path straight back.
+//
+// A/B bench, same source: DisplayWidth 2.2x on a 47-char process cell to 27x
+// on a 256-char path cell, TruncateToWidth 2.2-2.9x, and the mixed CJK/emoji
+// cells 2.2-2.6x. CpWidthOpt is the original range chain unchanged - a 12 KB
+// lookup table was built from the chain with a constexpr table and MEASURED
+// at 0.62x/0.78x, so it was rejected and the chain kept. The differential
+// sweeps in wintcp/tests/asm pin all four: 169,692 code points for CpWidth,
+// and every width from 0 to total+1 for TruncateToWidth.
 
 size_t DisplayWidth(const std::string& s) {
-    size_t w = 0;
-    for (size_t i = 0; i < s.size();) {
-        uint32_t cp = 0;
-        i += NextCp(s, i, &cp);
-        w += CpWidth(cp);
-    }
-    return w;
+    return DisplayWidthOpt(s);
 }
 
 // Truncate to at most 'width' display columns, marking the cut with U+2026
 // so a shortened cell reads as shortened instead of as the whole value.
 std::string TruncateToWidth(const std::string& s, size_t width) {
-    if (DisplayWidth(s) <= width) return s;
-    if (width == 0) return std::string();
-    const size_t budget = width - 1;   // the ellipsis owns the last column
-    size_t w = 0, i = 0;
-    while (i < s.size()) {
-        uint32_t cp = 0;
-        const size_t n = NextCp(s, i, &cp);
-        const size_t cw = CpWidth(cp);
-        if (w + cw > budget) break;
-        w += cw;
-        i += n;
-    }
-    return s.substr(0, i) + "\xE2\x80\xA6";
+    return TruncateToWidthOpt(s, width);
 }
 
 // The width cap in force for a column under 'opt' (0 = measure from the
@@ -890,7 +879,8 @@ std::string RenderJsonRows(const std::vector<Connection>& rows,
 }
 
 std::vector<int> DefaultExportColumns() {
-    return std::vector<int>(kDefaultCols, kDefaultCols + 10);
+    return std::vector<int>(kDefaultCols,
+                            kDefaultCols + static_cast<ptrdiff_t>(kDefaultColCount));
 }
 
 bool BuildStoreSnapshot(SnapshotSource& source, ConnectionStore& store,
@@ -1898,7 +1888,7 @@ CommandResult RenderPs(ConnectionStore& store, const PsOptions& opt) {
     std::vector<std::vector<std::string>> cells;
     for (const Row& row : rows) {
         if (opt.limit != 0 && cells.size() >= opt.limit) break;
-        wchar_t cpu[32] = {0};
+        wchar_t cpu[kNumTextChars] = {0};
         if (row.a.cpu >= 0.0)
             ::swprintf_s(cpu, L"%.1f", row.a.cpu);
         else
@@ -2026,12 +2016,12 @@ DetailModel BuildDetailModel(const Connection& c,
                 (static_cast<ULONGLONG>(nowFt.dwHighDateTime) << 32) |
                 nowFt.dwLowDateTime;
 
-            wchar_t label[32] = {0};
+            wchar_t label[kNumTextChars] = {0};
             for (const ThreadInfo& t : threads) {
                 ::swprintf_s(label, L"TID %u", t.tid);
                 std::wstring value;
                 if (t.timesKnown) {
-                    wchar_t buf[96] = {0};
+                    wchar_t buf[kThreadDetailChars] = {0};
                     // CPU as a duration, not bytes: this is the number a reader
                     // compares against the others, and "1.2 s" says that where
                     // "12000000" would only say that we counted.
@@ -2062,7 +2052,7 @@ DetailModel BuildDetailModel(const Connection& c,
             // misreading.
             std::wstring note;
             if (threadsAgeMs != UINT_MAX) {
-                note = L"sampled " + FormatDuration(threadsAgeMs / 1000) +
+                note = L"sampled " + FormatDuration(threadsAgeMs / kMsPerSecond) +
                        L" ago; CPU time is total since each thread started, "
                        L"not since this window opened.";
             } else {
@@ -2100,7 +2090,7 @@ DetailModel BuildDetailModel(const Connection& c,
     live.title = L"Live stats (this refresh)";
     live.tab = kTabProcess;
     if (c.cpuPct >= 0.0) {
-        wchar_t cpu[32] = {0};
+        wchar_t cpu[kNumTextChars] = {0};
         ::swprintf_s(cpu, L"%.1f %%", c.cpuPct);
         add(live, L"CPU", cpu);
     } else {
@@ -2127,7 +2117,7 @@ DetailModel BuildDetailModel(const Connection& c,
         add(live, L"Network sent", FormatBytes(c.trafficTx));
         add(live, L"Network total", FormatBytes(total));
         if (c.bpsKnown) {
-            wchar_t rate[64] = {0};
+            wchar_t rate[kRateTextChars] = {0};
             ::swprintf_s(rate, L"↓ %s/s   ↑ %s/s",
                          FormatBytes(static_cast<ULONGLONG>(c.rxBps + 0.5)).c_str(),
                          FormatBytes(static_cast<ULONGLONG>(c.txBps + 0.5)).c_str());
@@ -2483,7 +2473,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     if (h == nullptr) {
         CommandResult r;
         r.exitCode = kExitFail;
-        wchar_t buf[128] = {0};
+        wchar_t buf[kErrLineChars] = {0};
         ::swprintf_s(buf, L"kill: OpenProcess(%lu) failed: %ls.\r\n", pid,
                      FormatSystemError(::GetLastError()).c_str());
         r.err = WideToUtf8(buf);
@@ -2509,7 +2499,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
             rr.exitCode = kExitFail;
             rr.err = "kill: PID " + std::to_string(pid) +
                      " is still running after " +
-                     std::to_string(kKillGraceMs / 1000) +
+                     std::to_string(kKillGraceMs / kMsPerSecond) +
                      " s of WM_CLOSE; --close never forces. Retry with "
                      "--force to terminate it.\r\n";
             return rr;
@@ -2693,7 +2683,7 @@ bool ConnectionToBlockRequest(const Connection& c, BlockRequest* out,
     req.remotePort = static_cast<uint16_t>(c.remotePort);
     req.label = c.localEndpoint + L" -> " + c.remoteEndpoint;
     if (req.ipv6) {
-        ::memcpy(req.remoteAddr, c.remote6.s6_addr, 16);
+        ::memcpy(req.remoteAddr, c.remote6.s6_addr, kIpv6AddrBytes);
     } else {
         ::memcpy(req.remoteAddr, &c.remote4, 4);
     }
@@ -2793,7 +2783,7 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
             r.err = "unblock: cannot parse IPv6 address.\r\n";
             return r;
         }
-        ::memcpy(req.remoteAddr, a6.s6_addr, 16);
+        ::memcpy(req.remoteAddr, a6.s6_addr, kIpv6AddrBytes);
     } else {
         IN_ADDR a4 = {};
         if (::InetPtonW(AF_INET, norm.c_str(), &a4) != 1) {
@@ -2823,18 +2813,191 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
     return r;
 }
 
-CommandResult CmdBlocks() {
+CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes) {
+    // ---- 9.5.5: a stated policy rule --------------------------------------
+    // Maps the CLI's words onto the engine's constants in ONE place. Every
+    // refusal below happens before the engine is called, so a rule the
+    // firewall would refuse is rejected here with a message about the rule
+    // rather than an HRESULT.
+    FwRule r;
+    r.inbound = req.inbound;
+    r.allow = req.allow;
+    if (req.proto == L"tcp") {
+        r.protocol = 6;
+    } else if (req.proto == L"udp") {
+        r.protocol = 17;
+    } else if (req.proto == L"any") {
+        r.protocol = 0;
+    } else {
+        CommandResult bad;
+        bad.exitCode = kExitArgs;
+        bad.err = "block --rule: --proto must be tcp, udp or any (got '" +
+                  WideToUtf8(req.proto) + "').\r\n";
+        return bad;
+    }
+
+    // An address is required, and it is the one field with no sensible
+    // default: "any" is a real choice a user may make deliberately, so it has
+    // to be stated rather than assumed when only ports or a process were
+    // given.
+    if (req.address.empty()) {
+        CommandResult bad;
+        bad.exitCode = kExitArgs;
+        bad.err =
+            "block --rule needs --address (\"*\" for any, or an address, "
+            "list, or CIDR range).\r\n";
+        return bad;
+    }
+    r.remoteAddress = req.address;
+    r.localPorts = req.localPorts.empty() ? L"*" : req.localPorts;
+    r.remotePorts = req.remotePorts.empty() ? L"*" : req.remotePorts;
+    r.processPath = req.process;
+    r.label = req.label;
+
+    // The full plan is printed for a dry run, INCLUDING the name the rule will
+    // be given - the name is the handle for removing it later, so seeing it
+    // before the rule exists is the point of the dry run.
+    {
+        std::wstring why;
+        if (!ValidateFwRule(r, &why)) {
+            CommandResult bad;
+            bad.exitCode = kExitArgs;
+            bad.err = "block --rule refused: " + WideToUtf8(why) + "\r\n";
+            return bad;
+        }
+    }
+    const std::wstring name = BuildFwRuleName(r);
+    std::string plan;
+    plan += "rule ";
+    plan += WideToUtf8(name);
+    plan += "\r\n";
+    plan += req.allow ? "  allow  " : "  block ";
+    plan += req.inbound ? "inbound from " : "outbound to ";
+    plan += WideToUtf8(req.address);
+    plan += "  proto=";
+    plan += WideToUtf8(req.proto);
+    if (!req.localPorts.empty() || !req.remotePorts.empty()) {
+        plan += "  local-ports=" + WideToUtf8(r.localPorts);
+        plan += "  remote-ports=" + WideToUtf8(r.remotePorts);
+    }
+    if (!req.process.empty()) {
+        plan += "  process=" + WideToUtf8(req.process);
+    }
+    plan += "\r\n";
+    {
+        CommandResult pre;
+        pre.out = plan;
+        if (dryRun) {
+            return pre;
+        }
+        if (!yes) {
+            return Refused("block");
+        }
+        // The refusal contract is 3 for "no --yes"; that is checked after the
+        // plan is built so `--dry-run` without `--yes` still shows it.
+        pre.exitCode = kExitRefused;
+        return pre;
+    }
+    {
+        std::wstring error;
+        std::wstring created;
+        const FwRuleOutcome outcome = AddFwRule(r, &created, &error);
+        CommandResult out;
+        if (outcome == FwRuleOutcome::kFailed) {
+            out.exitCode = kExitFail;
+            out.err = "block --rule failed: " + WideToUtf8(error) + "\r\n";
+            return out;
+        }
+        out.out = plan;
+        if (outcome == FwRuleOutcome::kAlreadyPresent) {
+            // Not an error and not a duplicate: the rule the user asked for is
+            // already in place, which is the state they wanted.
+            out.out += "  already present; nothing added.\r\n";
+        }
+        return out;
+    }
+}
+
+CommandResult CmdBlocks(bool listRules, const std::string& format) {
     CommandResult r;
     // R3: a count that could not be made must not be reported as zero. Before
     // this, an unreadable ledger - over the 4 MiB cap, or holding a line that
     // is not valid UTF-8 - produced "wintcp-firewall-rules: 0" with nothing on
     // stderr, which is indistinguishable from "you have no blocks".
     std::wstring error;
-    const int n = CountWinTcpRules(&error);
+    if (!listRules) {
+        const int n = CountWinTcpRules(&error);
+        if (!error.empty()) {
+            r.err = WideToUtf8(error) + "\r\n";
+        }
+        r.out = "wintcp-firewall-rules: " + std::to_string(n) + "\r\n";
+        return r;
+    }
+
+    // ---- 9.2.9: the listing half -------------------------------------------
+    // Reads the rules the firewall reports, so the count above is left alone:
+    // this path never calls CountWinTcpRules and never writes the ledger.
+    std::vector<BlockedRule> rules;
+    if (!ListBlockedRules(&rules, &error)) {
+        r.exitCode = kExitFail;
+        r.err = "blocks --list failed: " + WideToUtf8(error) + "\r\n";
+        return r;
+    }
     if (!error.empty()) {
         r.err = WideToUtf8(error) + "\r\n";
     }
-    r.out = "wintcp-firewall-rules: " + std::to_string(n) + "\r\n";
+
+    if (format == "json") {
+        std::string out = "[";
+        for (size_t i = 0; i < rules.size(); ++i) {
+            const BlockedRule& b = rules[i];
+            if (i != 0) out += ",";
+            out += "{\"name\":\"" + JsonEscapeA(b.name) + "\",\"enabled\":" +
+                   (b.enabled ? "true" : "false") + ",\"blocking\":" +
+                   (b.isBlocking ? "true" : "false") + ",\"remote\":\"" +
+                   JsonEscapeA(b.remoteAddrs) + "\",\"localPort\":\"" +
+                   JsonEscapeA(b.localPorts) + "\",\"remotePort\":\"" +
+                   JsonEscapeA(b.remotePorts) + "\"}";
+        }
+        out += "]\r\n";
+        r.out = out;
+        return r;
+    }
+
+    const bool csv = (format == "csv");
+    std::string out;
+    if (!csv) {
+        out += "Rule name                                     En  Block  Remote        LPort RPort\r\n";
+    } else {
+        out += "name,enabled,blocking,remote,localPort,remotePort\r\n";
+    }
+    for (const BlockedRule& b : rules) {
+        const std::string name = WideToUtf8(b.name);
+        if (csv) {
+            out += CsvEscapeUtf8(name) + "," +
+                   std::string(b.enabled ? "1" : "0") + "," +
+                   std::string(b.isBlocking ? "1" : "0") + "," +
+                   CsvEscapeUtf8(WideToUtf8(b.remoteAddrs)) + "," +
+                   CsvEscapeUtf8(WideToUtf8(b.localPorts)) + "," +
+                   CsvEscapeUtf8(WideToUtf8(b.remotePorts)) + "\r\n";
+            continue;
+        }
+        const std::string en = b.enabled ? "yes" : "NO";
+        // A tagged rule the user disabled or flipped to allow is still shown,
+        // and is flagged: a block that is not blocking is the one state this
+        // surface must never pass off as protection.
+        const std::string blk = b.isBlocking ? "yes" : "NOT";
+        out += TruncateToWidth(name, 44) + "  " + TruncateToWidth(en, 4) + "  " +
+               TruncateToWidth(blk, 6) + "  " +
+               TruncateToWidth(WideToUtf8(b.remoteAddrs), 14) + "  " +
+               TruncateToWidth(WideToUtf8(b.localPorts), 6) + "  " +
+               TruncateToWidth(WideToUtf8(b.remotePorts), 6) + "\r\n";
+    }
+    if (rules.empty()) {
+        out += csv ? std::string()
+                   : std::string("(no WinTCP firewall rules)\r\n");
+    }
+    r.out = out;
     return r;
 }
 
@@ -2863,7 +3026,7 @@ CommandResult CmdBlocks() {
 std::string NumberNoTrailingZeros(double v) {
     const long long whole = static_cast<long long>(v < 0 ? v - 0.5 : v + 0.5);
     if (static_cast<double>(whole) == v) return std::to_string(whole);
-    char buf[64] = {0};
+    char buf[kRateTextChars] = {0};
     ::snprintf(buf, sizeof(buf), "%.3f", v);
     std::string s(buf);
     while (!s.empty() && s.back() == '0') s.pop_back();
@@ -2874,6 +3037,19 @@ std::string NumberNoTrailingZeros(double v) {
 CommandResult CmdAlert(AlertFlags f) {
     CommandResult r;
     Settings s;
+    // 9.2.10: portable defaults FIRST, so the registry always wins. A file that
+    // exists but cannot be read is reported rather than swallowed - it is a
+    // user-visible fault, and silently ignoring it would mean the portable copy
+    // quietly does nothing.
+    wchar_t exePath[MAX_PATH] = {0};
+    const DWORD pn = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring portableErr;
+    if (pn != 0 && pn < MAX_PATH) {
+        s.ApplyPortableDefaults(exePath, &portableErr);
+    }
+    if (!portableErr.empty()) {
+        r.err = "note: " + WideToUtf8(portableErr) + "\r\n";
+    }
     if (!s.Load()) {
         // A Settings store that will not read is not fatal here: the engine works
         // from the struct's defaults, which are the muted ones. Say so rather than
@@ -3303,6 +3479,256 @@ CommandResult CmdBookmarkList(const std::string& format) {
     return r;
 }
 
+// ---- 9.2.10: bookmark export / import ---------------------------------------
+
+CommandResult CmdBookmarkExport(const std::wstring& outPath,
+                                bool forceOverwrite) {
+    CommandResult r;
+    if (outPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "bookmark export: --out <file> is required.\r\n";
+        return r;
+    }
+    std::wstring existsErr;
+    if (RefuseExistingOutput(L"bookmark export", outPath, forceOverwrite,
+                             &existsErr)) {
+        r.exitCode = kExitArgs;
+        r.err = WideToUtf8(existsErr);
+        return r;
+    }
+    size_t unreadable = 0;
+    const std::vector<Bookmark> all = Bookmarks::List(&unreadable);
+    // No BOM: this is a JSON document, and a BOM in front of it breaks every
+    // parser that follows the spec - including this tool's own reader.
+    std::string json;
+    SerialiseBookmarks(all, &json);
+    const std::wstring werr = WriteUtf8FileWithBom(outPath, json, false);
+    if (!werr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "bookmark export failed: " + WideToUtf8(werr) + "\r\n";
+        return r;
+    }
+    r.out = "exported " + std::to_string(all.size()) + " bookmarks to " +
+            WideToUtf8(outPath) + "\r\n";
+    if (unreadable != 0) {
+        r.err = "warning: " + std::to_string(unreadable) +
+                " unreadable bookmark entries skipped.\r\n";
+    }
+    return r;
+}
+
+CommandResult CmdBookmarkImport(const std::wstring& inPath, bool yes) {
+    CommandResult r;
+    if (inPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "bookmark import: --in <file> is required.\r\n";
+        return r;
+    }
+
+    // Read and parse BEFORE touching the registry. A file that will not parse
+    // must leave the bookmarks that were already there alone - importing half
+    // a file is the failure the codec exists to prevent, and a partial import
+    // followed by a fatal one is the same failure with extra steps.
+    std::string text;
+    std::wstring readErr = ReadUtf8File(inPath, &text);
+    if (!readErr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "bookmark import failed: could not read " +
+                WideToUtf8(inPath) + ": " + WideToUtf8(readErr) + "\r\n";
+        return r;
+    }
+    std::vector<Bookmark> items;
+    std::wstring parseErr;
+    if (!ParseBookmarks(text, &items, &parseErr)) {
+        r.exitCode = kExitArgs;
+        r.err = "bookmark import refused " + WideToUtf8(inPath) + ": " +
+                WideToUtf8(parseErr) + "\r\n";
+        return r;
+    }
+
+    // The plan is printed before anything is written, so a dry run shows
+    // exactly what would be imported and the count is checkable by eye.
+    std::string plan = "import " + std::to_string(items.size()) +
+                       " bookmarks from " + WideToUtf8(inPath) + "\r\n";
+    if (items.empty()) {
+        plan += "  (the file holds no bookmarks; nothing to do)\r\n";
+    } else {
+        for (size_t i = 0; i < items.size() && i < 5; ++i) {
+            plan += "  " +
+                    WideToUtf8(JoinEndpoint(items[i].address, items[i].port,
+                                            items[i].address.find(L':') !=
+                                                std::wstring::npos)) +
+                    "\r\n";
+        }
+        if (items.size() > 5) {
+            plan += "  ... and " + std::to_string(items.size() - 5) + " more\r\n";
+        }
+    }
+    // The refusal contract is the one every act verb follows: 3 for "no --yes",
+    // after the plan is built so `--dry-run` without `--yes` still shows it.
+    if (!yes) {
+        return Refused("bookmark import");
+    }
+
+    size_t added = 0;
+    size_t already = 0;
+    std::wstring firstErr;
+    for (const Bookmark& b : items) {
+        // Add refreshes the timestamp of an existing bookmark and nothing
+        // else, so re-importing a file cannot discard a note the user typed -
+        // the contract Bookmarks::Add already documents.
+        if (Bookmarks::IsBookmarked(b.address, b.port)) {
+            ++already;
+            continue;
+        }
+        if (!Bookmarks::Add(b.address, b.port, b.tag, b.note)) {
+            if (firstErr.empty()) {
+                firstErr = L"could not import " + b.address;
+            }
+            continue;
+        }
+        ++added;
+    }
+    r.out = plan;
+    r.out += "imported " + std::to_string(added) +
+             (already != 0 ? " (already present: " + std::to_string(already) +
+                                 ")"
+                           : "") +
+             "\r\n";
+    if (!firstErr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "bookmark import partly failed: " + WideToUtf8(firstErr) +
+                "\r\n";
+    }
+    return r;
+}
+
+// ---- 9.2.10: preset export / import ------------------------------------------
+
+CommandResult CmdPresetExport(const std::wstring& outPath,
+                              bool forceOverwrite) {
+    CommandResult r;
+    if (outPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "preset export: --out <file> is required.\r\n";
+        return r;
+    }
+    std::wstring existsErr;
+    if (RefuseExistingOutput(L"preset export", outPath, forceOverwrite,
+                             &existsErr)) {
+        r.exitCode = kExitArgs;
+        r.err = WideToUtf8(existsErr);
+        return r;
+    }
+    // Presets::Load is strict - a preset that fails to read is skipped rather
+    // than written half - so a file this exports is a file of readable views.
+    std::vector<PresetRecord> items;
+    size_t unreadable = 0;
+    for (const std::wstring& name : Presets::List()) {
+        PresetRecord rec;
+        rec.name = name;
+        if (Presets::Load(name, &rec.view)) {
+            items.push_back(std::move(rec));
+        } else {
+            ++unreadable;
+        }
+    }
+    std::string json;
+    SerialisePresets(items, &json);
+    const std::wstring werr = WriteUtf8FileWithBom(outPath, json, false);
+    if (!werr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "preset export failed: " + WideToUtf8(werr) + "\r\n";
+        return r;
+    }
+    r.out = "exported " + std::to_string(items.size()) + " presets to " +
+            WideToUtf8(outPath) + "\r\n";
+    if (unreadable != 0) {
+        r.err = "warning: " + std::to_string(unreadable) +
+                " unreadable presets skipped.\r\n";
+    }
+    return r;
+}
+
+CommandResult CmdPresetImport(const std::wstring& inPath, bool yes) {
+    CommandResult r;
+    if (inPath.empty()) {
+        r.exitCode = kExitArgs;
+        r.err = "preset import: --in <file> is required.\r\n";
+        return r;
+    }
+
+    // Parse and plan BEFORE writing anything, exactly like the bookmark
+    // import: a file that will not parse leaves the presets that were there
+    // alone, and loading half a view is a view the user never saved.
+    std::string text;
+    std::wstring readErr = ReadUtf8File(inPath, &text);
+    if (!readErr.empty()) {
+        r.exitCode = kExitFail;
+        r.err = "preset import failed: could not read " + WideToUtf8(inPath) +
+                ": " + WideToUtf8(readErr) + "\r\n";
+        return r;
+    }
+    std::vector<PresetRecord> items;
+    std::wstring parseErr;
+    if (!ParsePresets(text, &items, &parseErr)) {
+        r.exitCode = kExitArgs;
+        r.err = "preset import refused " + WideToUtf8(inPath) + ": " +
+                WideToUtf8(parseErr) + "\r\n";
+        return r;
+    }
+
+    std::string plan = "import " + std::to_string(items.size()) +
+                       " presets from " + WideToUtf8(inPath) + "\r\n";
+    if (items.empty()) {
+        plan += "  (the file holds no presets; nothing to do)\r\n";
+    } else {
+        for (size_t i = 0; i < items.size() && i < 5; ++i) {
+            plan += "  " + WideToUtf8(items[i].name) + "\r\n";
+        }
+        if (items.size() > 5) {
+            plan += "  ... and " + std::to_string(items.size() - 5) + " more\r\n";
+        }
+    }
+    // The act-verb contract: 3 for no --yes, after the plan is built so
+    // `--dry-run` without `--yes` still shows what would happen.
+    if (!yes) {
+        return Refused("preset import");
+    }
+
+    // WITHOUT --force an existing name is refused rather than silently
+    // replaced. Presets::Save's default argument already never writes over an
+    // existing preset, and reusing that contract is what makes an import safe:
+    // the user confirms and repeats with --force, exactly as the GUI does.
+    size_t written = 0;
+    size_t skipped = 0;
+    std::wstring firstSkipped;
+    for (const PresetRecord& rec : items) {
+        if (Presets::Exists(rec.name)) {
+            ++skipped;
+            if (firstSkipped.empty()) firstSkipped = rec.name;
+            continue;
+        }
+        if (Presets::Save(rec.name, rec.view) != PresetSave::kCreated) {
+            if (firstSkipped.empty()) firstSkipped = rec.name;
+            continue;
+        }
+        ++written;
+    }
+    r.out = plan;
+    r.out += "imported " + std::to_string(written) +
+             (skipped != 0 ? " (already present, skipped: " +
+                                 std::to_string(skipped) + ")"
+                           : "") +
+             "\r\n";
+    if (skipped != 0) {
+        r.err = "presets already present were NOT replaced; pass --force to "
+                "overwrite them. First skipped: " +
+                WideToUtf8(firstSkipped) + "\r\n";
+    }
+    return r;
+}
+
 // The CLI parser enforces kMinTag..kMaxTag (Commands.h); the canonical tag
 // set lives in Bookmarks.h. These must be the same range — a tag the parser
 // accepts but the store rejects (or vice versa) is a refusal that depends on
@@ -3717,7 +4143,7 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
         code = db.LookupV4(ntohl(a4.S_un.S_addr));
         asn = db.LookupAsnV4(ntohl(a4.S_un.S_addr));
     } else if (::InetPtonW(AF_INET6, ip.c_str(), &a6) == 1) {
-        char a6s[64] = {0};
+        char a6s[kIpv6TextChars] = {0};
         ::InetNtopA(AF_INET6, &a6, a6s, sizeof(a6s));
         code = db.LookupV6(a6.s6_addr);
         asn = db.LookupAsnV6(a6.s6_addr);
@@ -3756,7 +4182,7 @@ CommandResult CmdGeoIpInfo(SnapshotSource& /*source*/,
     // an empty database. `swprintf_s` with %llu cannot say that, and the buffer is
     // sized for the shorter, honest form.
     const uint64_t recs = db.RecordCount();
-    wchar_t buf[256] = {0};
+    wchar_t buf[kGeoIpDescChars] = {0};
     if (recs == 0) {
         ::swprintf_s(buf, L"%ls, record count not stated, %llu nodes, %zu bytes",
                      db.DatabaseVersion().c_str(),
@@ -3821,7 +4247,8 @@ size_t TlsRecordChainRun(const std::string& bytes, size_t from) {
     size_t off = from;
     size_t run = 0;
     while (off + 5 <= n) {
-        if (p[off] < 20 || p[off] > 23) break;
+        if (p[off] < kTlsChangeCipherSpec || p[off] > kTlsApplicationData)
+            break;
         if (p[off + 1] != 0x03) break;
         const size_t len =
             (static_cast<size_t>(p[off + 3]) << 8) | p[off + 4];
@@ -4160,7 +4587,7 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         r.err = "capture failed: " + WideToUtf8(cr.error) + "\r\n";
         return r;
     }
-    char buf[256] = {0};
+    char buf[kCaptureLineChars] = {0};
     ::sprintf_s(buf, "packets=%llu toServer=%llu toClient=%llu blocks=%llu\r\n",
                 static_cast<unsigned long long>(cr.packetsParsed),
                 static_cast<unsigned long long>(cr.toServer.bytes.size()),
@@ -4386,7 +4813,7 @@ bool ViewStateFromPreset(const PresetView& v, ViewState* out) {
 
 std::string FormatSystemStatsLine(const SystemStats& s) {
     std::string line = "CPU ";
-    char buf[256] = {0};
+    char buf[kStatFieldChars] = {0};
     if (s.cpuKnown)
         ::sprintf_s(buf, "%.1f%%", s.cpuPct);
     else
@@ -4394,7 +4821,7 @@ std::string FormatSystemStatsLine(const SystemStats& s) {
     line += buf;
     line += "  MEM ";
     if (s.memKnown) {
-        char mb[128] = {0};
+        char mb[kStatFieldChars] = {0};
         ::sprintf_s(mb, "%.1f%%", s.memPct);
         line += WideToUtf8(FormatBytes(s.memUsed)) + "/" +
                 WideToUtf8(FormatBytes(s.memTotal)) + " (" + mb + ")";
@@ -4423,7 +4850,7 @@ std::string FormatSystemStatsLine(const SystemStats& s) {
 }
 
 std::string SystemStatsToJson(const SystemStats& s) {
-    char buf[512] = {0};
+    char buf[kStatJsonChars] = {0};
     ::sprintf_s(buf,
                 "{\"cpu\":%.1f,\"cpuKnown\":%s,\"memUsed\":%llu,\"memTotal\":"
                 "%llu,\"memPct\":%.1f,\"memKnown\":%s,\"diskReadBps\":%.0f,"

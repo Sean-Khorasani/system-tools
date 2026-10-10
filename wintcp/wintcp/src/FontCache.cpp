@@ -10,6 +10,15 @@
 #include <vector>
 
 namespace wintcp {
+namespace {
+
+// DPI used when the screen reports none. USER_DEFAULT_SCREEN_DPI - the value
+// GetDeviceCaps(LOGPIXELSY) answers on a machine with no DPI virtualisation -
+// so a fallback to it is indistinguishable from a real reading on such a
+// machine. Same name as Utils.cpp's copy on purpose, so a grep finds both.
+constexpr unsigned kDefaultScreenDpi = 96;
+
+}  // namespace
 
 FontCache& FontCache::Get() {
     // Function-local static: constructed on first use, before any window asks for
@@ -38,7 +47,7 @@ unsigned FontCache::SystemDpi() {
         ::ReleaseDC(nullptr, dc);
         if (x > 0 && y > 0) return static_cast<unsigned>((x + y) / 2);
     }
-    return 96u;
+    return kDefaultScreenDpi;
 }
 
 HFONT FontCache::Get(int ptSize, int weight, unsigned dpi, bool mono) {

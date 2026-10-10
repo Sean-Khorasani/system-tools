@@ -219,6 +219,20 @@
     
     
     <ClCompile Include="src\BlockConn.cpp" />
+    <ClCompile Include="src\BlockedPeersDialog.cpp" />
+    <ClCompile Include="src\BookmarkFile.cpp" />
+    <ClCompile Include="src\PresetFile.cpp" />
+    <ClCompile Include="src\IniFile.cpp" />
+    <ClCompile Include="src\EmptyStateActions.cpp" />
+    <ClCompile Include="src\ProcessTree.cpp" />
+    <ClCompile Include="src\Sha256.cpp" />
+    <ClInclude Include="src\Sha256.h" />
+    <ClInclude Include="src\ProcessTree.h" />
+    <ClInclude Include="src\EmptyStateActions.h" />
+    <ClInclude Include="src\IniFile.h" />
+    <ClInclude Include="src\PresetFile.h" />
+    <ClInclude Include="src\BookmarkFile.h" />
+    <ClInclude Include="src\BlockedPeersDialog.h" />
     <ClCompile Include="src\GeoIp.cpp" />
     <ClCompile Include="src\Elevate.cpp" />
     <ClCompile Include="src\Pcapng.cpp" />
@@ -251,6 +265,7 @@
   <ClCompile Include="src\FontCache.cpp" />
     <ClCompile Include="src\CrashDump.cpp" />
     <ClCompile Include="src\WinCaps.cpp" />
+    <ClCompile Include="src\Opt.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\MainWindow.h" />
@@ -296,6 +311,7 @@
   <ClInclude Include="src\FontCache.h" />
     <ClInclude Include="src\CrashDump.h" />
     <ClInclude Include="src\WinCaps.h" />
+    <ClInclude Include="src\Opt.h" />
     <ClInclude Include="src\resource.h" />
   </ItemGroup>
   <ItemGroup>

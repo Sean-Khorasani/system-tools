@@ -204,6 +204,13 @@
     <ClCompile Include="..\src\Bookmarks.cpp" />
     <ClCompile Include="..\src\GeoIp.cpp" />
     <ClCompile Include="..\src\BlockConn.cpp" />
+    <ClCompile Include="..\src\BlockedPeersDialog.cpp" />
+    <ClCompile Include="..\src\BookmarkFile.cpp" />
+    <ClCompile Include="..\src\PresetFile.cpp" />
+    <ClCompile Include="..\src\IniFile.cpp" />
+    <ClCompile Include="..\src\EmptyStateActions.cpp" />
+    <ClCompile Include="..\src\ProcessTree.cpp" />
+    <ClCompile Include="..\src\Sha256.cpp" />
     <ClCompile Include="..\src\Cli.cpp" />
     <ClCompile Include="..\src\EtwTraffic.cpp" />
     <ClCompile Include="..\src\SocketTraffic.cpp" />
@@ -211,6 +218,7 @@
     <ClCompile Include="..\src\ChartsWindow.cpp" />
     <ClCompile Include="..\src\CrashDump.cpp" />
     <ClCompile Include="..\src\WinCaps.cpp" />
+    <ClCompile Include="..\src\Opt.cpp" />
   </ItemGroup>
   <ItemGroup>
     <!-- REQUIRED, not cosmetic: MainWindow::RegisterClass loads IDR_MAINMENU

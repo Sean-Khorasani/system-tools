@@ -388,7 +388,12 @@ CommandResult CmdBlock(SnapshotSource& source, const std::wstring& select,
                        const MutateOptions& mo);
 CommandResult CmdUnblock(const std::wstring& address, UINT port,
                          const MutateOptions& mo);
-CommandResult CmdBlocks();
+// `blocks`: the count by default. With 'listRules' the rules themselves are
+// listed instead, in 'format' (table, csv or json). The listing path never
+// calls CountWinTcpRules, so looking cannot change the number the count
+// prints - that is the property 9.2.9 has to preserve.
+CommandResult CmdBlocks(bool listRules = false,
+                        const std::string& format = "table");
 
 // Map a connection row onto a firewall request (binary remote address, not
 // the display string that carries the port). False when the row cannot be
@@ -396,8 +401,42 @@ CommandResult CmdBlocks();
 bool ConnectionToBlockRequest(const Connection& c, BlockRequest* out,
                               std::wstring* whyNot);
 
+// ---- 9.5.5: a stated policy rule --------------------------------------------
+// What `block --rule` sends to the engine. Deliberately the CLI's shape rather
+// than FwRule itself: the CLI speaks in words ("tcp", "any") and the engine in
+// the firewall's own constants, and that one mapping is easier to review in one
+// place than to keep honest at every call site.
+struct RuleRequest {
+    bool inbound = false;
+    bool allow = false;
+    std::wstring proto = L"tcp";   // "tcp" | "udp" | "any"
+    std::wstring address;          // required: "*" or an address / list / CIDR
+    std::wstring localPorts;       // empty = "*"
+    std::wstring remotePorts;      // empty = "*"
+    std::wstring process;          // empty = any program
+    std::wstring label;
+};
+
+// Writes one rule. Follows the same refusal contract as every other act verb:
+// 0 done, 2 a bad rule (refused by ValidateFwRule before anything is written),
+// 3 no --yes. `--dry-run` prints the rule it would create and writes nothing,
+// so the exact name is visible before it exists.
+CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes);
+
 // ---- bookmark --------------------------------------------------------------
 CommandResult CmdBookmarkList(const std::string& format);
+
+// 9.2.10: the bookmark file. Export writes every bookmark as a Version=1 JSON
+// document; import reads one and adds what it holds, refusing the WHOLE file
+// when the codec refuses it (so a partial import cannot happen).
+//
+// Both follow the act-verb contract: 2 for a bad argument, 3 for no --yes,
+// 0 when done, 1 when the target could not be read. Import parses and plans
+// before anything is written, so a file that will not parse leaves the
+// bookmarks that were there alone.
+CommandResult CmdBookmarkExport(const std::wstring& outPath,
+                                bool forceOverwrite);
+CommandResult CmdBookmarkImport(const std::wstring& inPath, bool yes);
 CommandResult CmdBookmarkAdd(const std::wstring& address, UINT port,
                              unsigned tag, const std::wstring& note);
 CommandResult CmdBookmarkRemove(const std::wstring& address, UINT port);
@@ -408,6 +447,14 @@ CommandResult CmdBookmarkColour(const std::wstring& address, UINT port,
 
 // ---- preset ----------------------------------------------------------------
 CommandResult CmdPresetList(const std::string& format);
+
+// 9.2.10: the preset file. Same codec shape and the same all-or-nothing rule as
+// the bookmark one - a preset that loads half is a view the user never saved,
+// and unlike a bookmark the failure is subtle, because it is believed.
+CommandResult CmdPresetExport(const std::wstring& outPath,
+                              bool forceOverwrite);
+CommandResult CmdPresetImport(const std::wstring& inPath, bool yes);
+
 CommandResult CmdPresetSave(const std::wstring& name, const ViewState& view,
                             bool overwrite);
 CommandResult CmdPresetShow(const std::wstring& name);

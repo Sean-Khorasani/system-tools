@@ -28,6 +28,9 @@
 #include "Freeze.h"        // FrozenAgeMs (5.5)
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
+#include "BlockedPeersDialog.h"  // 9.2.9: View > Blocked peers...
+#include "EmptyStateActions.h"   // 9.4.2: the empty-state button decision
+#include "Elevate.h"             // 9.4.2: Reelevate for the traffic case
 #include "FontCache.h"
 #include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
@@ -62,6 +65,36 @@ constexpr int kDesignHeight = 640;
 // control's EM_LIMITTEXT (what the user may type) and the buffer
 // CurrentSearchText() reads into. See the create site for why they must agree.
 constexpr int kSearchTextMaxChars = 512;
+
+// Smallest window geometry worth restoring from the saved settings. Below it
+// a toolbar row and the list cannot both be laid out, so the saved rect is
+// ignored in favour of CW_USEDEFAULT rather than restored into something the
+// app cannot draw.
+constexpr int kMinRestorableW = 200;
+constexpr int kMinRestorableH = 140;
+
+// The visible set is a 32-bit mask, one bit per column (Columns.h), so the
+// persisted order can name at most 32 columns - the same freeze the mask
+// encodes, and the UiProbe that reports the order walks no further.
+constexpr size_t kMaxColOrderSlots = 32;
+
+// Longest command line the kill-confirmation prompt will quote in full. A
+// longer one is cut rather than filling a modal dialog with several screenfuls
+// of arguments the user has to dismiss; the name, PID, path and start time
+// below it are the parts that identify the process.
+constexpr size_t kKillPromptCmdChars = 300;
+
+// Text buffers. Each holds a fixed sentence around a value, and every
+// swprintf_s in this file truncates rather than overruns, so these are slack
+// sized for the longest wording each site uses rather than a shared maximum.
+// The UiProbe buffer is a static because it is returned to a caller that
+// reads it after the function has returned.
+constexpr size_t kWatchdogMsgChars = 192;
+constexpr size_t kProbeBufChars = 1024;
+constexpr size_t kMissingColListChars = 512;
+constexpr size_t kCommaColChars = 16;
+constexpr size_t kKillPromptChars = 1536;
+constexpr size_t kBlockPromptChars = 1024;
 
 // Themed colors: the app follows the system theme. High-contrast mode
 // (WO_HC_ACTIVE) wins over everything - see RefreshSystemColors().
@@ -382,7 +415,8 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
     // WM_CREATE, which ran inside CreateWindowEx above. Only honor the
     // rect if it still intersects a live monitor (e.g. after unplugging
     // an external display); otherwise fall back to CW_USEDEFAULT.
-    if (settings_.winPlaced && settings_.winW >= 200 && settings_.winH >= 140) {
+    if (settings_.winPlaced && settings_.winW >= kMinRestorableW &&
+        settings_.winH >= kMinRestorableH) {
         RECT wr = { settings_.winX, settings_.winY,
                     settings_.winX + settings_.winW,
                     settings_.winY + settings_.winH };
@@ -415,7 +449,7 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
 // items EXIST, and this one checks that activating them CHANGES anything.
 // ---------------------------------------------------------------------------
 const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const {
-    static wchar_t buf[1024];
+    static wchar_t buf[kProbeBufChars];
     if (op == nullptr) return nullptr;
 
     if (::wcscmp(op, L"frozen") == 0) {
@@ -450,12 +484,12 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // the machine-readable form the harness asserts on.
         HMENU sub = FindColumnsMenu(::GetMenu(hwnd_));
         if (sub == nullptr) return L"-1";   // popup itself not found
-        wchar_t missing[512] = {0};
+        wchar_t missing[kMissingColListChars] = {0};
         int count = 0;
         for (int c = 0; c < COL_COUNT; ++c) {
             if (::GetMenuState(sub, IDM_COL_BASE + c, MF_BYCOMMAND) ==
                 0xFFFFFFFF) {
-                wchar_t one[16] = {0};
+                wchar_t one[kCommaColChars] = {0};
                 ::swprintf_s(one, L"%s%d", (count == 0) ? L"" : L",", c);
                 ::wcscat_s(missing, one);
                 ++count;
@@ -619,6 +653,30 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
                        reinterpret_cast<LPARAM>(&di));
         return buf;
     }
+    if (::wcscmp(op, L"rowLabel") == 0) {
+        // The label OnTypeJumpChar builds its candidate list from for the
+        // row named in 'arg': the process name where there is one, the local
+        // address otherwise. Same string 'jumpLabel' reports, but for ANY
+        // row rather than only the focused one.
+        //
+        // Why it exists: the type-to-jump check used to type 'a'..'z' and
+        // pass only when the live process table happened to contain a row
+        // starting with one of them. That made it pass or fail on which
+        // processes were running rather than on whether the feature works -
+        // it failed once on a machine where every label started with a digit
+        // or a multi-byte sequence. A test that depends on the machine is not
+        // a test of the code. With this op the check derives its letter from
+        // the rows that are actually on screen.
+        if (arg == nullptr) return L"";
+        const long row = ::_wtol(arg);
+        if (row < 0) return L"";
+        const Connection* c = store_.ViewRow(static_cast<size_t>(row));
+        if (c == nullptr) return L"";
+        ::wcsncpy_s(buf, c->processName.empty() ? c->localAddress.c_str()
+                                                : c->processName.c_str(),
+                    _TRUNCATE);
+        return buf;
+    }
     if (::wcscmp(op, L"jumpLabel") == 0) {
         // The exact string OnTypeJumpChar builds its candidate list from for
         // the focused row: the process name where there is one, the local
@@ -639,7 +697,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"columnOrder") == 0) {
         // The persisted 7.1 order, as a comma list, so the harness can prove
         // a drag actually changed the order and that it round-tripped.
-        for (std::size_t i = 0; i < colOrder_.size() && i < 32; ++i) {
+        for (std::size_t i = 0; i < colOrder_.size() && i < kMaxColOrderSlots; ++i) {
             const std::wstring piece = L" " + std::to_wstring(colOrder_[i]);
             ::wcsncat_s(buf, piece.c_str(), _TRUNCATE);
         }
@@ -886,6 +944,19 @@ void MainWindow::OnCreate() {
     socketTraffic_ = new SocketTrafficSampler();
     for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
     visibleCols_ = kDefaultVisibleCols;
+    // 9.2.10: the portable `wintcp.ini` supplies DEFAULTS only, so it is
+    // applied BEFORE settings_.Load() and an existing user's saved settings
+    // always win. A file that exists but will not parse is reported once
+    // rather than swallowed: a portable copy that quietly does nothing is
+    // worse than one that says so.
+    wchar_t exePath[MAX_PATH] = {0};
+    const DWORD pn = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (pn != 0 && pn < MAX_PATH) {
+        std::wstring iniErr;
+        if (settings_.ApplyPortableDefaults(exePath, &iniErr) && !iniErr.empty()) {
+            UpdateStatusBar(L"wintcp.ini: " + iniErr);
+        }
+    }
     settings_.Load();                       // (pre-set by Create())
 
     // 9.1.5: auto-load the remembered GeoIP database on startup. This is
@@ -1490,7 +1561,7 @@ constexpr int kDefaultIntervalComboIndex = 1;
 void MainWindow::InitFilterControls() {
     // The offered cadences. Labels carry the meaning; the default row is
     // kDefaultIntervalComboIndex, which must be the "2 seconds" row — see it.
-    AddComboString(hwndIntervalCbo_, L"1 second", 1000);
+    AddComboString(hwndIntervalCbo_, L"1 second", kMsPerSecond);
     AddComboString(hwndIntervalCbo_, L"2 seconds", kDefaultIntervalMs);
     AddComboString(hwndIntervalCbo_, L"5 seconds", 5000);
     AddComboString(hwndIntervalCbo_, L"10 seconds", 10000);
@@ -1626,6 +1697,19 @@ void MainWindow::SyncColumnMenuChecks() {
 //     below is copied by value.
 void MainWindow::RunAlerts() {
     Settings s;
+    // 9.2.10: portable defaults first, so the registry always wins. Silent on
+    // a missing file; a file that exists but will not parse is reported once
+    // on the status line, because a portable copy that quietly does nothing
+    // is worse than one that says so.
+    wchar_t exePath[MAX_PATH] = {0};
+    const DWORD pn = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring portableErr;
+    if (pn != 0 && pn < MAX_PATH) {
+        s.ApplyPortableDefaults(exePath, &portableErr);
+    }
+    if (!portableErr.empty()) {
+        UpdateStatusBar(L"wintcp.ini: " + portableErr);
+    }
     if (!s.Load()) return;              // no store, no alerting - say nothing
     alertHint_.clear();
     suppressedAlerts_ = 0;
@@ -1717,6 +1801,117 @@ void MainWindow::UpdateEmptyState() {
         emptyStateHint_ = L"traffic not being measured - View > Per-PID traffic "
                           L"counters (needs admin)";
         return;
+    }
+}
+
+// ---- 9.4.2: the buttons half ------------------------------------------------
+// UpdateEmptyState says WHY the table is empty; this offers the fix as a
+// click. The decision - which case, which buttons - is made by the pure
+// DecideEmptyState (EmptyStateActions.cpp) so the window runs the same
+// predicate the selftest pins, and there is no second copy here to drift.
+void MainWindow::ShowEmptyStateActions() {
+    const EmptyStateOffer offer = DecideEmptyState(
+        store_.Rows().size(), store_.View().size(),
+        (visibleCols_ & (1u << COL_COUNTRY)) != 0, geo_.Loaded(),
+        asnGeo_.Loaded(), AnyTrafficColVisible(), etw_.Running(),
+        fallbackFlag_->load(), IsElevated());
+
+    // Nothing to offer. The status-bar sentence UpdateEmptyState already sets
+    // is the whole answer, and an empty-state message with no action is still
+    // useful - a dialog with no buttons would just be an extra click.
+    if (offer.ButtonCount() == 0) {
+        // Reached only through the menu item, which is how a user asks "why is
+        // my table empty?" directly. Saying there is nothing to fix is the
+        // answer, and it is different from the dialog not appearing at all -
+        // which would look like the menu item did nothing.
+        ::MessageBoxW(hwnd_,
+                      offer.message[0] != L'\0'
+                          ? (std::wstring(offer.message) +
+                             L", and there is nothing to fix.")
+                                .c_str()
+                          : L"The table is showing everything it has. "
+                            L"There is nothing to fix right now.",
+                      L"WinTCP", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // Same delay-load guard ResolveMinimize uses, for the same reason: without
+    // comctl32 the dialog cannot be shown at all, and the sentence on the
+    // status bar must survive that.
+    if (!DelayLoadGuard(hwnd_, "comctl32.dll")) return;
+
+    TASKDIALOGCONFIG tc = {};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = hwnd_;
+    tc.dwFlags = TDF_USE_HICON_MAIN;
+    tc.hMainIcon = ::LoadIconW(nullptr, IDI_INFORMATION);
+    tc.pszWindowTitle = L"WinTCP";
+    tc.pszMainInstruction = offer.message;
+    tc.pszContent = L"WinTCP can put that right for you.";
+
+    // Button ids start above 100 so they cannot collide with the standard
+    // IDOK/IDCANCEL the dialog would otherwise return.
+    enum {
+        kBtnClear = 101, kBtnEdit, kBtnPickGeo, kBtnRunAdmin
+    };
+    TASKDIALOG_BUTTON btns[4] = {};
+    size_t n = 0;
+    // In the declarative order - the same order the bench asserts the offer
+    // carries, so a test and the dialog cannot disagree.
+    if (offer.offerClear) {
+        btns[n].nButtonID = kBtnClear;
+        btns[n].pszButtonText = kEmptyActionClear;
+        ++n;
+    }
+    if (offer.offerEdit) {
+        btns[n].nButtonID = kBtnEdit;
+        btns[n].pszButtonText = kEmptyActionEdit;
+        ++n;
+    }
+    if (offer.offerPickGeo) {
+        btns[n].nButtonID = kBtnPickGeo;
+        btns[n].pszButtonText = kEmptyActionPickGeo;
+        ++n;
+    }
+    if (offer.offerRunAdmin) {
+        btns[n].nButtonID = kBtnRunAdmin;
+        btns[n].pszButtonText = kEmptyActionRunAdmin;
+        ++n;
+    }
+    tc.pButtons = btns;
+    tc.cButtons = static_cast<UINT>(n);
+    tc.nDefaultButton = btns[0].nButtonID;   // the first is the safest action
+
+    int which = 0;
+    if (::TaskDialogIndirect(&tc, &which, nullptr, nullptr) != S_OK) return;
+
+    switch (which) {
+        case kBtnClear:
+            // ClearFilterBox is the existing path: it empties the control AND
+            // reapplies the view, so the table comes back with its filter gone
+            // rather than just losing the text.
+            ClearFilterBox();
+            UpdateStatusBar(L"filter cleared");
+            break;
+        case kBtnEdit:
+            // Focus the box with its text selected, so the expression can be
+            // fixed rather than thrown away - a different intent from clearing,
+            // and the reason both buttons are offered.
+            FocusFilterBox();
+            break;
+        case kBtnPickGeo:
+            LoadGeoIpDatabase();
+            break;
+        case kBtnRunAdmin:
+            // Reelevate returns true only when it actually started a new
+            // instance, and the contract is that the caller then exits
+            // immediately - there is no path back here.
+            if (Reelevate(L"Per-PID traffic counters")) {
+                ::PostQuitMessage(0);
+            }
+            break;
+        default:
+            break;
     }
 }
 // ---- 9.4.4 column profiles -------------------------------------------------
@@ -2280,7 +2475,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         // sub-second freeze reads as no freeze at all. Show "<1s" instead.
         const ULONGLONG age = FrozenAgeMs(frozenAt_, ::GetTickCount64());
         const std::wstring ageText =
-            (age < 1000) ? std::wstring(L"<1s")
+            (age < kMsPerSecond) ? std::wstring(L"<1s")
                          : FormatDuration(age / kMsPerSecond);
         mid = L"FROZEN " + ageText + L" — F6 to resume";
     } else {
@@ -2568,6 +2763,38 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         case IDM_VIEW_GEOIP:
             LoadGeoIpDatabase();
+            break;
+        case IDM_VIEW_BLOCKED: {
+            // 9.2.9 / 9.5.5. Read-only unless the user edits, so it does not
+            // touch the view's state: a list that could change the rows would
+            // have to say so, and the whole point of this dialog is that it
+            // only affects the firewall. It stays open across edits now, so
+            // the caller hears once, at the end, about what changed.
+            std::wstring failure;
+            const BlockedPeersChoice choice =
+                ShowBlockedPeersDialog(hwnd_, &failure);
+            if (choice == BlockedPeersChoice::kRefused) {
+                UpdateStatusBar(failure.empty() ? L"could not list the firewall rules."
+                                                : failure);
+                ::MessageBoxW(hwnd_, failure.c_str(), L"WinTCP",
+                              MB_OK | MB_ICONERROR);
+                break;
+            }
+            // kChanged means at least one rule was deleted, enabled or
+            // disabled. The dialog already re-read the firewall, so the count
+            // on the status bar is only approximate; say what happened rather
+            // than restating a number that may now be stale.
+            if (choice == BlockedPeersChoice::kChanged) {
+                UpdateStatusBar(L"Firewall rules changed. `blocks` re-counts them.");
+            }
+            break;
+        }
+        case IDM_VIEW_FIX_EMPTY:
+            // 9.4.2. DecideEmptyState answers both halves: whether there is
+            // anything to fix, and what the buttons are. "Nothing to fix" is a
+            // real answer here, not a failure - it is what "why is my table
+            // empty" deserves when the table is empty for a legitimate reason.
+            ShowEmptyStateActions();
             break;
         case IDM_VIEW_FREEZE:
             frozen_ = !frozen_;
@@ -3045,7 +3272,7 @@ void MainWindow::CheckRefreshWatchdog() {
         ::SendMessageW(hwndAutoChk_, BM_SETCHECK, BST_UNCHECKED, 0);
         SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_AUTOREFRESH, false);
         ::KillTimer(hwnd_, kRefreshTimerId);
-        wchar_t msg[192] = {0};
+        wchar_t msg[kWatchdogMsgChars] = {0};
         ::swprintf_s(msg,
                      L"Auto-refresh stopped: no refresh for %llus despite %d "
                      L"worker restarts. Press Refresh to try again.",
@@ -3059,7 +3286,7 @@ void MainWindow::CheckRefreshWatchdog() {
         watchdogRestarting_ = true;
         watchdogRestartTick_ = now;
         engine_.RequestStop();
-        wchar_t msg[192] = {0};
+        wchar_t msg[kWatchdogMsgChars] = {0};
         ::swprintf_s(msg,
                      L"View stale: no refresh for %llus — restarting refresh "
                      L"worker…",
@@ -3522,8 +3749,8 @@ void MainWindow::KillSelectedProcess() {
     const std::wstring started = FormatFileTimeLocal(c.processCreate,
                                                       c.processCreateKnown);
     const std::wstring cmdLine = QueryProcessCommandLine(c.pid);
-    wchar_t prompt[1536] = {0};
-    if (cmdLine.empty() || cmdLine.size() > 300) {
+    wchar_t prompt[kKillPromptChars] = {0};
+    if (cmdLine.empty() || cmdLine.size() > kKillPromptCmdChars) {
         ::swprintf_s(prompt,
                      L"End this process?\n\n  Name:  %ls\n  PID:   %lu\n"
                      L"  Path:  %ls\n  Start: %ls\n\n"
@@ -3666,7 +3893,7 @@ void MainWindow::BlockSelectedConnection() {
     // different reach: the firewall rule always works, but Windows exposes no
     // public way to tear down a single live IPv6 connection, so on IPv6 only
     // future connections are stopped.
-    wchar_t prompt[1024] = {0};
+    wchar_t prompt[kBlockPromptChars] = {0};
     if (req.ipv6) {
         ::swprintf_s(prompt,
                      L"Block %ls?\n\nWindows Firewall rules will be added so this "
@@ -4001,7 +4228,7 @@ INT_PTR ShowCaptureWait(HWND owner, const std::wstring& what) {
         dlg, (L"Capture: " + what).c_str());
 
     g_captureWaitDeadline =
-        static_cast<int>(::GetTickCount()) + kCaptureSeconds * 1000;
+        static_cast<int>(::GetTickCount()) + kCaptureSeconds * kMsPerSecond;
     ::SetTimer(dlg, kCaptureWaitTimer, kCapturePollMs, nullptr);
 
     // Modal loop: own message pump so the main list keeps refreshing and the
@@ -4027,7 +4254,7 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
         case WM_CREATE: {
             g_captureWaitDeadline =
-                static_cast<int>(::GetTickCount()) + kCaptureSeconds * 1000;
+                static_cast<int>(::GetTickCount()) + kCaptureSeconds * kMsPerSecond;
             ::SetTimer(hwnd, kCaptureWaitTimer, kCapturePollMs, nullptr);
             return 0;
         }

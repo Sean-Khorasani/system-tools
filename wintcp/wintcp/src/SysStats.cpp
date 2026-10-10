@@ -29,6 +29,10 @@ ULONGLONG FtToU64(const FILETIME& ft) {
 
 constexpr ULONG kIfTypeSoftwareLoopback = 24;
 
+// Percentages are reported on a 0..100 scale so a value is renderable as-is.
+// Same name as ProcStats.cpp's copy on purpose - a grep should find both.
+constexpr double kPctScale = 100.0;
+
 // Ticks of the sampler loop to wait before re-opening a failed PDH disk
 // query. Same value and reasoning as ChartsWindow.cpp's same-named constant
 // (both loops tick at ~1 s, so 10 is ~10 s of silence): the two must stay in
@@ -76,7 +80,7 @@ SystemStats SystemStatsSampler::Sample() {
                 if (busy < 0.0) busy = 0.0;
                 if (busy > 1.0) busy = 1.0;
                 s.cpuKnown = true;
-                s.cpuPct = busy * 100.0;
+                s.cpuPct = busy * kPctScale;
             }
         }
         prevIdle_ = idle;
@@ -92,7 +96,7 @@ SystemStats SystemStatsSampler::Sample() {
         s.memKnown = true;
         s.memTotal = ms.ullTotalPhys;
         s.memUsed = ms.ullTotalPhys - ms.ullAvailPhys;
-        s.memPct = 100.0 * static_cast<double>(s.memUsed) /
+        s.memPct = kPctScale * static_cast<double>(s.memUsed) /
                    static_cast<double>(s.memTotal);
     }
 

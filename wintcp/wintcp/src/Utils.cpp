@@ -9,6 +9,8 @@
 #include <cwctype>
 #include <fstream>
 
+#include "Opt.h"
+
 namespace wintcp {
 
 namespace {
@@ -22,6 +24,33 @@ constexpr unsigned char kLinkLocalFirstByte = 0xFE;
 constexpr unsigned char kLinkLocalSecondMask = 0xC0;    // top two bits
 constexpr unsigned char kLinkLocalSecondValue = 0x80;   // must be 10xxxxxx
 
+// "%<scope>" plus NUL. A scope id is a ULONG, so ten digits is the widest
+// render; the rest is slack. swprintf_s truncates rather than overruns, so an
+// unexpectedly wide id cannot corrupt the caller's endpoint string.
+constexpr size_t kScopeTextChars = 16;
+
+// DPI used when the system reports none. USER_DEFAULT_SCREEN_DPI - the value
+// GetDeviceCaps(LOGPIXELSX) answers on a machine with no DPI virtualisation -
+// so a fallback to it is indistinguishable from a real reading on such a
+// machine. Same name as FontCache.cpp's copy on purpose.
+constexpr unsigned kDefaultScreenDpi = 96;
+
+// Fixed-format text buffers. "%04u-%02u-%02u %02u:%02u:%02u" needs exactly 19
+// characters, and "Unknown error %lu (0x%08lX)" fewer than that; 64 covers both
+// with room for a longer message-locale spelling of the latter.
+constexpr size_t kTimeTextChars = 64;
+constexpr size_t kErrorFallbackChars = 64;
+
+// A binary UINT port is at most five digits, so this is slack. Named rather
+// than inline because FormatPort is one of the two text bounds in this file and
+// the widest case is decided by the port's type, not by the caller.
+constexpr size_t kPortTextChars = 16;
+
+// Widest byte-count text: "1023.99 TB" at the top of the ladder plus NUL. One
+// bound for the single unit ladder in this file, so FormatBytes and any future
+// formatter over it cannot disagree about the widest case.
+constexpr size_t kBytesTextChars = 32;
+
 }  // namespace
 
 std::wstring Ipv6ScopeSuffix(const unsigned char raw[16], unsigned scopeId) {
@@ -29,7 +58,7 @@ std::wstring Ipv6ScopeSuffix(const unsigned char raw[16], unsigned scopeId) {
     if (raw[0] != kLinkLocalFirstByte ||
         (raw[1] & kLinkLocalSecondMask) != kLinkLocalSecondValue)
         return std::wstring();
-    wchar_t scope[16] = {0};
+    wchar_t scope[kScopeTextChars] = {0};
     ::swprintf_s(scope, L"%%%u", scopeId);
     return std::wstring(scope);
 }
@@ -52,7 +81,7 @@ std::wstring FormatSystemError(DWORD errorCode) {
             msg.pop_back();
         }
     } else {
-        wchar_t fallback[64] = {0};
+        wchar_t fallback[kErrorFallbackChars] = {0};
         ::swprintf_s(fallback, L"Unknown error %lu (0x%08lX)",
                      static_cast<unsigned long>(errorCode),
                      static_cast<unsigned long>(errorCode));
@@ -67,7 +96,7 @@ std::wstring FormatSystemError(DWORD errorCode) {
 std::wstring FormatCurrentTime() {
     SYSTEMTIME st = {};
     ::GetLocalTime(&st);
-    wchar_t buf[64] = {0};
+    wchar_t buf[kTimeTextChars] = {0};
     ::swprintf_s(buf, L"%04u-%02u-%02u %02u:%02u:%02u",
                  static_cast<unsigned>(st.wYear), static_cast<unsigned>(st.wMonth),
                  static_cast<unsigned>(st.wDay), static_cast<unsigned>(st.wHour),
@@ -75,12 +104,20 @@ std::wstring FormatCurrentTime() {
     return std::wstring(buf);
 }
 
+// Lowercase a wide string.
+//
+// The body is wintcp::ToLowerWOpt (Opt.cpp), which folds ASCII 8 UTF-16 code
+// units at a time with SSE2 and only calls towlower for the units SSE2 cannot
+// decide (a unit outside the ASCII/Latin-1 range, or a surrogate half). ASCII
+// dominates here - process names, paths, addresses, filter text - and the
+// original called towlower once per unit for it.
+//
+// A/B bench, same source: 1.81x on a 34-char process name, 15.1x on a long
+// path, 15.4x on mixed text, 19.2x on a 4k string. The differential sweeps
+// pin it against a towlower-per-unit reference over ASCII, Latin-1, surrogate
+// halves and unassigned code points, including the empty and one-unit cases.
 std::wstring ToLowerW(const std::wstring& s) {
-    std::wstring out(s);
-    for (wchar_t& ch : out) {
-        ch = static_cast<wchar_t>(::towlower(static_cast<wint_t>(ch)));
-    }
-    return out;
+    return ToLowerWOpt(s);
 }
 
 bool ContainsCaseInsensitive(const std::wstring& haystack, const std::wstring& needle) {
@@ -155,22 +192,70 @@ std::wstring WriteUtf8FileWithBom(const std::wstring& path,
     return std::wstring();  // success
 }
 
-std::string CsvEscapeUtf8(const std::string& field) {
-    bool needQuote = field.find_first_of(",\"\r\n") != std::string::npos;
-    if (!needQuote) return field;
-    std::string out;
-    out.reserve(field.size() + 2);
-    out.push_back('"');
-    for (char c : field) {
-        if (c == '"') out += "\"\"";
-        else out.push_back(c);
+std::wstring ReadUtf8File(const std::wstring& path, std::string* content) {
+    if (content == nullptr) {
+        return L"internal error: no output for ReadUtf8File";
     }
-    out.push_back('"');
-    return out;
+    content->clear();
+
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                             nullptr, OPEN_EXISTING,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return FormatSystemError(::GetLastError());
+    }
+    LARGE_INTEGER size = {};
+    if (!::GetFileSizeEx(h, &size)) {
+        std::wstring err = FormatSystemError(::GetLastError());
+        ::CloseHandle(h);
+        return err;
+    }
+    if (size.QuadPart < 0) {
+        ::CloseHandle(h);
+        return L"the file reports a negative size, which is not a file this "
+               L"tool can read";
+    }
+    const size_t total = static_cast<size_t>(size.QuadPart);
+    content->resize(total);
+    size_t offset = 0;
+    while (offset < total) {
+        DWORD chunk = static_cast<DWORD>(total - offset);
+        DWORD got = 0;
+        if (!::ReadFile(h, content->data() + offset, chunk, &got, nullptr)) {
+            std::wstring err = FormatSystemError(::GetLastError());
+            ::CloseHandle(h);
+            content->clear();
+            return err;
+        }
+        if (got == 0) break;   // shorter than advertised: keep what arrived
+        offset += got;
+    }
+    content->resize(offset);
+    ::CloseHandle(h);
+    return std::wstring();  // success
+}
+
+// Escape a field for CSV output: quote it when it contains a delimiter,
+// a quote or a newline, and double any quotes inside.
+//
+// The body is wintcp::CsvEscapeOpt (Opt.cpp). The no-quote fast path is the
+// original's find_first_of verbatim, because that is what most fields hit;
+// the escaping loop then scans 16 bytes at a time with SSE2 and copies the
+// spans between quotes instead of pushing one byte at a time.
+//
+// Note the clean-block path has to EMIT the 16 bytes it consumes. Skipping
+// the append silently drops the first 16 characters of every quoted field
+// longer than a block - `list --format csv` rendered "RpcEptMapper, RpcSs"
+// as "cSs" because of exactly that. Every test input was under 16 bytes, so
+// the SIMD loop never ran and the bench passed 420/420 through the bug; the
+// 16/17/32/33-byte and multi-block cases now exist in both test files, along
+// with a length x position x special sweep.
+std::string CsvEscapeUtf8(const std::string& field) {
+    return CsvEscapeOpt(field);
 }
 
 std::wstring FormatPort(UINT port) {
-    wchar_t buf[16] = {0};
+    wchar_t buf[kPortTextChars] = {0};
     ::swprintf_s(buf, L"%u", port);
     return std::wstring(buf);
 }
@@ -191,7 +276,7 @@ std::wstring JoinEndpoint(const std::wstring& addressLiteral, UINT port, bool is
 
 std::wstring FormatBytes(ULONGLONG bytes) {
     const double b = static_cast<double>(bytes);
-    wchar_t buf[32] = {0};
+    wchar_t buf[kBytesTextChars] = {0};
     if (b < kBytesPerKB) {
         ::swprintf_s(buf, L"%llu B", static_cast<unsigned long long>(bytes));
     } else if (b < kBytesPerMB) {
@@ -226,13 +311,13 @@ UINT QueryDpiForWindow(HWND hwnd) {
         }
     }
     HDC hdc = ::GetDC(nullptr);
-    UINT dpi = 96;
+    UINT dpi = kDefaultScreenDpi;
     if (hdc != nullptr) {
         const int caps = ::GetDeviceCaps(hdc, LOGPIXELSX);
         if (caps > 0) dpi = static_cast<UINT>(caps);
         ::ReleaseDC(nullptr, hdc);
     }
-    return (dpi == 0) ? 96 : dpi;
+    return (dpi == 0) ? kDefaultScreenDpi : dpi;
 }
 
 }  // namespace wintcp
