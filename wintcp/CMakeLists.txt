@@ -78,6 +78,8 @@ add_executable(wintcp
     wintcp/src/ProcessTree.h
     wintcp/src/Sha256.cpp
     wintcp/src/Sha256.h
+    wintcp/src/ExposureScore.cpp
+    wintcp/src/ExposureScore.h
     wintcp/src/Elevate.cpp
     wintcp/src/Elevate.h
     wintcp/src/GeoIp.cpp

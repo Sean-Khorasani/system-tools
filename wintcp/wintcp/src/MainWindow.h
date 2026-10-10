@@ -38,6 +38,7 @@
 #include "Elevate.h"
 #include "EtwTraffic.h"
 #include "GeoIp.h"
+#include "ExposureScore.h"   // 9.5.5: the exposure badge
 #include "RefreshEngine.h"
 #include "Settings.h"
 #include "Presets.h"
@@ -191,6 +192,7 @@ private:
                           std::uint64_t focusedId, int topIdx);
     void UpdateSortIndicator();            
     void UpdateStatusBar(const std::wstring& errorText);
+    void UpdateExposure();                   // 9.5.5: the exposure badge
     // Status-bar panes 3 and 4, factored out so the countdown stays a pure
     // function of the last refresh tick and the auto-refresh interval.
     std::wstring SelectedSummary() const;
@@ -373,6 +375,13 @@ private:
     // state each second, never stored across a refresh - because a stored hint
     // outlives the condition that produced it.
     std::wstring emptyStateHint_;
+    // 9.5.5: the exposure badge's one-line summary. Empty on a healthy
+    // machine, so the status bar stays quiet by default. Recomputed from the
+    // snapshot every pass, like every other message on this bar.
+    std::wstring exposureLine_;
+    // 9.5.5: which rows the badge decided were exposed, so the reason can be
+    // shown without re-walking the store. Keyed on row id.
+    std::wstring exposureDetail_;
     // F5.6: the alert fallback when there is no tray icon, and the count of
     // alerts currently suppressed by the engine's latch.
     std::wstring alertHint_;
