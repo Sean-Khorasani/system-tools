@@ -359,19 +359,46 @@ const CommandHelp kCommandHelps[] = {
      "Examples:\r\n"
      "  wintcp.exe close --select \"pid:1234 remote:port:443\" --dry-run\r\n"
      "  wintcp.exe close --select \"pid:1234 remote:port:443\" --yes\r\n"},
-    {"block",
-     "block - kill a connection and firewall-block its peer (needs --yes)\r\n"
-     "\r\n"
-     "Usage: wintcp.exe block --select <filter> [--yes] [--dry-run]\r\n"
-     "\r\n"
-     "Two layers: the live connection is torn down now (IPv4 only - see\r\n"
-     "`close`), and Windows Firewall outbound rules stop it coming back\r\n"
-     "(both families). Both layers need elevation; unelevated runs exit 1\r\n"
-     "saying so. Without --yes exits 3; --dry-run prints the plan (exit 0).\r\n"
-     "\r\n"
-     "Examples:\r\n"
-     "  wintcp.exe block --select \"remote:93.184.216.34\" --dry-run\r\n"
-     "  wintcp.exe block --select \"pid:1234\" --yes\r\n"},
+     {"block",
+      "block - kill a connection and firewall-block its peer (needs --yes)\r\n"
+      "\r\n"
+      "Usage: wintcp.exe block --select <filter> [--yes] [--dry-run]\r\n"
+      "       wintcp.exe block --rule --address <addr|*>\r\n"
+      "            [--inbound] [--allow] [--proto tcp|udp|any]\r\n"
+      "            [--local-ports P] [--remote-ports P] [--process PATH]\r\n"
+      "            [--rule-label TEXT] [--yes] [--dry-run]\r\n"
+      "\r\n"
+      "Two layers: the live connection is torn down now (IPv4 only - see\r\n"
+      "`close`), and Windows Firewall outbound rules stop it coming back\r\n"
+      "(both families). Both layers need elevation; unelevated runs exit 1\r\n"
+      "saying so. Without --yes exits 3; --dry-run prints the plan (exit 0).\r\n"
+      "\r\n"
+      "--rule writes ONE rule you state, instead of deriving two rules from a\r\n"
+      "live row. It is how you block an address that is not connected right\r\n"
+      "now, or scope a block to one process. --address is required: \"*\" is a\r\n"
+      "real choice and has to be stated, so a rule is never created broader\r\n"
+      "than you asked for by accident.\r\n"
+      "\r\n"
+      "Ports need a concrete protocol. --proto any with --local-ports or\r\n"
+      "--remote-ports is REFUSED, because the firewall API rejects port\r\n"
+      "restrictions on protocol any (E_INVALIDARG) - that was measured, not\r\n"
+      "guessed.\r\n"
+      "\r\n"
+      "--process needs the FULL image path. A bare program name is refused:\r\n"
+      "the firewall resolves it against a working directory this tool does not\r\n"
+      "control, which is how \"block chrome\" ends up blocking the wrong thing.\r\n"
+      "\r\n"
+      "--allow writes an ALLOW rule. It does NOT carve a process out of an\r\n"
+      "existing block: Windows Firewall's conflict resolution is BLOCK WINS,\r\n"
+      "so an allow rule loses. To exclude a process, scope the BLOCK instead.\r\n"
+      "\r\n"
+      "Examples:\r\n"
+      "  wintcp.exe block --select \"remote:93.184.216.34\" --dry-run\r\n"
+      "  wintcp.exe block --select \"pid:1234\" --yes\r\n"
+      "  wintcp.exe block --rule --inbound --address 203.0.113.0/24 --dry-run\r\n"
+      "  wintcp.exe block --rule --address * --process \"C:\\Windows\\System32\\\r\n"
+      "svchost.exe\" --remote-ports 443 --dry-run\r\n"
+      "  wintcp.exe block --rule --allow --address * --process \"C:\\a\\b.exe\" --yes\r\n"},
     {"unblock",
      "unblock - remove WinTCP firewall rules for a peer (needs --yes)\r\n"
      "\r\n"
@@ -675,8 +702,14 @@ bool TakesValue(const std::wstring& t) {
            t == L"--alert-format" || t == L"--bps-warn" ||
 t == L"--rule-name" || t == L"--rule-address" ||
            t == L"--rule-process" || t == L"--rule-format" ||
-           t == L"--bps-critical" || t == L"--connections" ||
-           t == L"--dir";
+            t == L"--bps-critical" || t == L"--connections" ||
+            t == L"--dir" ||
+            // 9.5.5: the six that give `block --rule` its scope. The three
+            // booleans (--rule, --inbound, --allow) are deliberately NOT here,
+            // matching the alert group's note above - a boolean that consumed
+            // a value would swallow the next argument.
+            t == L"--proto" || t == L"--local-ports" ||
+            t == L"--remote-ports" || t == L"--process" || t == L"--rule-label";
 }
 
 // D25: "appear", "disappear", "state", in any case, comma-separated, in any
@@ -739,6 +772,25 @@ struct Args {
     // NOT a sub-verb: "blocks" stays one verb with one meaning, and a script
     // that runs it with no switches keeps the count byte for byte.
     bool list = false;
+    // 9.5.5: `block --rule ...` writes one policy rule instead of deriving
+    // two rules from a live row. Direction, action, protocol, address, ports
+    // and process all come from switches, so a rule the user STATES can be
+    // expressed rather than only a reaction to a row.
+    //
+    // `--select` and `--rule` are mutually exclusive: one names a conversation
+    // that exists, the other names a policy that does not exist yet. Choosing
+    // both would make the derived-rule path win silently, which is exactly the
+    // "it did half of what I asked" failure this verb must not have.
+    bool rule = false;
+    bool ruleInbound = false;
+    bool ruleAllow = false;
+    std::wstring ruleProto = L"tcp";
+    std::wstring ruleAddress;      // empty until --address is given
+    bool hasRuleAddress = false;
+    std::wstring ruleLocalPorts;
+    std::wstring ruleRemotePorts;
+    std::wstring ruleProcess;
+    std::wstring ruleLabel;
     std::wstring sort = L"pid";
     bool hasSort = false;
     bool desc = false;
@@ -1019,7 +1071,13 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             // typed one - and makes the pseudo-PID guard unreachable by name.
             a->hasPid = true;
         } else if (t == L"--address") {
-            if (!need(&a->address)) return "missing value for --address";
+            // One flag, two consumers that want the SAME thing: `unblock`'s
+            // rule identity, and --rule's address scope. Both are "the address
+            // the rule is about", so they share one destination rather than
+            // one of them silently taking a second, differently-named switch.
+            if (!need(&a->ruleAddress)) return "missing value for --address";
+            a->hasRuleAddress = true;
+            a->address = a->ruleAddress;
         } else if (t == L"--port") {
             std::wstring v;
             if (!need(&v)) return "missing value for --port";
@@ -1045,8 +1103,24 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             // 9.2.9: `blocks --list`. Only `blocks` accepts it (kVerbSwitches),
             // so this cannot be typed at a verb that would ignore it.
             a->list = true;
-        } else if (t == L"--enable") {
-            a->alertEnable = 1;
+        } else if (t == L"--rule") {
+            // 9.5.5: write one policy rule rather than reacting to a live row.
+            // Only `block` accepts it, per kVerbSwitches.
+            a->rule = true;
+        } else if (t == L"--inbound") {
+            a->ruleInbound = true;
+        } else if (t == L"--allow") {
+            a->ruleAllow = true;
+        } else if (t == L"--proto") {
+            if (!need(&a->ruleProto)) return "missing value for --proto";
+        } else if (t == L"--local-ports") {
+            if (!need(&a->ruleLocalPorts)) return "missing value for --local-ports";
+        } else if (t == L"--remote-ports") {
+            if (!need(&a->ruleRemotePorts)) return "missing value for --remote-ports";
+        } else if (t == L"--process") {
+            if (!need(&a->ruleProcess)) return "missing value for --process";
+        } else if (t == L"--rule-label") {
+            if (!need(&a->ruleLabel)) return "missing value for --rule-label";
         } else if (t == L"--disable") {
             a->alertEnable = 0;
         } else if (t == L"--bps-warn") {
@@ -1276,6 +1350,11 @@ const wchar_t* const kSwitchNames[] = {
      L"--rule-name", L"--rule-address", L"--rule-process",
      L"--rule-format", L"--rule-on-new", L"--rule-off-new",
      L"--rule-on-close", L"--rule-off-close", L"--rule-on-threshold",
+     // 9.5.5: `block --rule ...` scopes one policy rule. Only `block` accepts
+     // them (kVerbSwitches), so the global list is for the switch-name check
+     // and the "did you mean" suggestion, not for which verbs take what.
+     L"--rule", L"--inbound", L"--allow", L"--proto",
+     L"--local-ports", L"--remote-ports", L"--process", L"--rule-label",
 };
 constexpr size_t kSwitchNameCount =
     sizeof(kSwitchNames) / sizeof(kSwitchNames[0]);
@@ -1393,7 +1472,14 @@ const VerbSwitches kVerbSwitches[] = {
      // default stays the documented hybrid.
      L"--pid --select --yes --dry-run --close --force"},
     {L"close", L"--select --yes --dry-run"},
-    {L"block", L"--select --yes --dry-run"},
+     {L"block",
+      // 9.5.5: `--rule` takes the six scope switches. They are only listed
+      // here, so typing them at another verb is refused rather than ignored -
+      // `block --rule` and `kill --rule` must not read the same way.
+      // `--address` and `--port` are already here for the unit tests' sake
+      // and stay: --rule reuses them rather than adding synonyms.
+      L"--select --yes --dry-run --rule --inbound --allow --proto --address "
+      L"--port --local-ports --remote-ports --process --rule-label"},
     {L"unblock", L"--address --port --yes --dry-run"},
      {L"blocks", L"--list --format"},   // 9.2.9: count, or list the rules
        {L"capture", L"--select --filter --secs --yes --dry-run --text --bin --dir --flags --out --force"},
@@ -2070,6 +2156,33 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return r.exitCode;
     }
     if (cmd == L"block") {
+        if (a.rule) {
+            // 9.5.5: a stated rule. Mutually exclusive with --select, checked
+            // here rather than by the engine so the message names the conflict
+            // instead of reporting a bad rule.
+            if (!a.select.empty()) {
+                CommandResult bad;
+                bad.exitCode = kExitArgs;
+                bad.err =
+                    "block: --rule and --select cannot be combined: one names "
+                    "a conversation that exists, the other names a policy that "
+                    "does not exist yet.\r\n";
+                Emit(bad);
+                return bad.exitCode;
+            }
+            RuleRequest req;
+            req.inbound = a.ruleInbound;
+            req.allow = a.ruleAllow;
+            req.proto = a.ruleProto;
+            req.address = a.ruleAddress;
+            req.localPorts = a.ruleLocalPorts;
+            req.remotePorts = a.ruleRemotePorts;
+            req.process = a.ruleProcess;
+            req.label = a.ruleLabel;
+            const CommandResult r = CmdRule(req, a.dryRun, a.yes);
+            Emit(r);
+            return r.exitCode;
+        }
         MutateOptions mo;
         mo.yes = a.yes;
         mo.dryRun = a.dryRun;

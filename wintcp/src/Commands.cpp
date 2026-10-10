@@ -2811,6 +2811,111 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
     return r;
 }
 
+CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes) {
+    // ---- 9.5.5: a stated policy rule --------------------------------------
+    // Maps the CLI's words onto the engine's constants in ONE place. Every
+    // refusal below happens before the engine is called, so a rule the
+    // firewall would refuse is rejected here with a message about the rule
+    // rather than an HRESULT.
+    FwRule r;
+    r.inbound = req.inbound;
+    r.allow = req.allow;
+    if (req.proto == L"tcp") {
+        r.protocol = 6;
+    } else if (req.proto == L"udp") {
+        r.protocol = 17;
+    } else if (req.proto == L"any") {
+        r.protocol = 0;
+    } else {
+        CommandResult bad;
+        bad.exitCode = kExitArgs;
+        bad.err = "block --rule: --proto must be tcp, udp or any (got '" +
+                  WideToUtf8(req.proto) + "').\r\n";
+        return bad;
+    }
+
+    // An address is required, and it is the one field with no sensible
+    // default: "any" is a real choice a user may make deliberately, so it has
+    // to be stated rather than assumed when only ports or a process were
+    // given.
+    if (req.address.empty()) {
+        CommandResult bad;
+        bad.exitCode = kExitArgs;
+        bad.err =
+            "block --rule needs --address (\"*\" for any, or an address, "
+            "list, or CIDR range).\r\n";
+        return bad;
+    }
+    r.remoteAddress = req.address;
+    r.localPorts = req.localPorts.empty() ? L"*" : req.localPorts;
+    r.remotePorts = req.remotePorts.empty() ? L"*" : req.remotePorts;
+    r.processPath = req.process;
+    r.label = req.label;
+
+    // The full plan is printed for a dry run, INCLUDING the name the rule will
+    // be given - the name is the handle for removing it later, so seeing it
+    // before the rule exists is the point of the dry run.
+    {
+        std::wstring why;
+        if (!ValidateFwRule(r, &why)) {
+            CommandResult bad;
+            bad.exitCode = kExitArgs;
+            bad.err = "block --rule refused: " + WideToUtf8(why) + "\r\n";
+            return bad;
+        }
+    }
+    const std::wstring name = BuildFwRuleName(r);
+    std::string plan;
+    plan += "rule ";
+    plan += WideToUtf8(name);
+    plan += "\r\n";
+    plan += req.allow ? "  allow  " : "  block ";
+    plan += req.inbound ? "inbound from " : "outbound to ";
+    plan += WideToUtf8(req.address);
+    plan += "  proto=";
+    plan += WideToUtf8(req.proto);
+    if (!req.localPorts.empty() || !req.remotePorts.empty()) {
+        plan += "  local-ports=" + WideToUtf8(r.localPorts);
+        plan += "  remote-ports=" + WideToUtf8(r.remotePorts);
+    }
+    if (!req.process.empty()) {
+        plan += "  process=" + WideToUtf8(req.process);
+    }
+    plan += "\r\n";
+    {
+        CommandResult pre;
+        pre.out = plan;
+        if (dryRun) {
+            return pre;
+        }
+        if (!yes) {
+            return Refused("block");
+        }
+        // The refusal contract is 3 for "no --yes"; that is checked after the
+        // plan is built so `--dry-run` without `--yes` still shows it.
+        pre.exitCode = kExitRefused;
+        return pre;
+    }
+    {
+        std::wstring error;
+        std::wstring created;
+        const FwRuleOutcome outcome = AddFwRule(r, &created, &error);
+        CommandResult out;
+        if (outcome == FwRuleOutcome::kFailed) {
+            out.exitCode = kExitFail;
+            out.err = "block --rule failed: " + WideToUtf8(error) + "\r\n";
+            return out;
+        }
+        out.out = plan;
+        if (outcome == FwRuleOutcome::kAlreadyPresent) {
+            // Not an error and not a duplicate: the rule the user asked for is
+            // already in place, which is the state they wanted.
+            out.out += "  already present; nothing added.\r\n";
+        }
+        return out;
+    }
+}
+
 CommandResult CmdBlocks(bool listRules, const std::string& format) {
     CommandResult r;
     // R3: a count that could not be made must not be reported as zero. Before

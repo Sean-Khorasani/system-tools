@@ -401,6 +401,28 @@ CommandResult CmdBlocks(bool listRules = false,
 bool ConnectionToBlockRequest(const Connection& c, BlockRequest* out,
                               std::wstring* whyNot);
 
+// ---- 9.5.5: a stated policy rule --------------------------------------------
+// What `block --rule` sends to the engine. Deliberately the CLI's shape rather
+// than FwRule itself: the CLI speaks in words ("tcp", "any") and the engine in
+// the firewall's own constants, and that one mapping is easier to review in one
+// place than to keep honest at every call site.
+struct RuleRequest {
+    bool inbound = false;
+    bool allow = false;
+    std::wstring proto = L"tcp";   // "tcp" | "udp" | "any"
+    std::wstring address;          // required: "*" or an address / list / CIDR
+    std::wstring localPorts;       // empty = "*"
+    std::wstring remotePorts;      // empty = "*"
+    std::wstring process;          // empty = any program
+    std::wstring label;
+};
+
+// Writes one rule. Follows the same refusal contract as every other act verb:
+// 0 done, 2 a bad rule (refused by ValidateFwRule before anything is written),
+// 3 no --yes. `--dry-run` prints the rule it would create and writes nothing,
+// so the exact name is visible before it exists.
+CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes);
+
 // ---- bookmark --------------------------------------------------------------
 CommandResult CmdBookmarkList(const std::string& format);
 CommandResult CmdBookmarkAdd(const std::wstring& address, UINT port,
