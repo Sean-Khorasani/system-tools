@@ -221,6 +221,8 @@
     <ClCompile Include="src\BlockConn.cpp" />
     <ClCompile Include="src\BlockedPeersDialog.cpp" />
     <ClCompile Include="src\BookmarkFile.cpp" />
+    <ClCompile Include="src\PresetFile.cpp" />
+    <ClInclude Include="src\PresetFile.h" />
     <ClInclude Include="src\BookmarkFile.h" />
     <ClInclude Include="src\BlockedPeersDialog.h" />
     <ClCompile Include="src\GeoIp.cpp" />

@@ -206,6 +206,7 @@
     <ClCompile Include="..\src\BlockConn.cpp" />
     <ClCompile Include="..\src\BlockedPeersDialog.cpp" />
     <ClCompile Include="..\src\BookmarkFile.cpp" />
+    <ClCompile Include="..\src\PresetFile.cpp" />
     <ClCompile Include="..\src\Cli.cpp" />
     <ClCompile Include="..\src\EtwTraffic.cpp" />
     <ClCompile Include="..\src\SocketTraffic.cpp" />
