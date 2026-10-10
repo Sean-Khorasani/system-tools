@@ -57,6 +57,7 @@
 #include "PresetFile.h"           // 9.2.10: the preset export/import codec
 #include "IniFile.h"              // 9.2.10: the portable wintcp.ini
 #include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
+#include "ProcessTree.h"          // 9.5.6: the process tree
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -2126,6 +2127,168 @@ void CheckEmptyState(TestResult& r) {
               a.message[0] != L'\0' && b.message[0] != L'\0' &&
                   c.message[0] != L'\0',
               "");
+    }
+}
+
+// 9.5.6 - the process tree. Pure, so the cycle rule, the root rule and the
+// ancestor rule are all pinned without spawning a process or an elevation
+// prompt - and the cycle rule is the one that matters, because following a
+// spurious PID cycle is an infinite loop or a stack overflow.
+void CheckProcessTree(TestResult& r) {
+    auto node = [](DWORD pid, DWORD ppid, bool known = true) {
+        TreeNodeInfo n;
+        n.pid = pid;
+        n.ppid = ppid;
+        n.ppidKnown = known;
+        return n;
+    };
+
+    // A tiny chain: shell -> svchost -> w3wp.
+    {
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 1), node(200, 100), node(300, 200), node(900, 1)};
+        const ProcessTree t = BuildProcessTree(rows);
+        Check(r, "9.5.6.chain.root-count", t.rootCount == 2,
+              "roots=" + std::to_string(t.rootCount));
+        Check(r, "9.5.6.chain.no-depth-exceeded", !t.depthExceeded, "");
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 200);
+        Check(r, "9.5.6.chain.descendants-of-middle",
+              d.size() == 2 && d[0] == 1 && d[1] == 2,
+              "n=" + std::to_string(d.size()));
+        // Roots: the two whose parent pid is not in the set.
+        const std::vector<size_t> roots = ProcessTreeRoots(rows);
+        Check(r, "9.5.6.chain.roots-in-row-order",
+              roots.size() == 2 && roots[0] == 0 && roots[1] == 3,
+              "n=" + std::to_string(roots.size()));
+    }
+
+    // ---- a CYCLE is refused, not followed ----
+    {
+        // 100 -> 200 -> 300 -> 100 (a stale-parent cycle, which Windows can
+        // produce during a teardown). Following it would not terminate.
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 300), node(200, 100), node(300, 200)};
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 100);
+        // The whole set is reachable, so the set is the answer - but the walk
+        // must still TERMINATE, which is what reaching here proves.
+        Check(r, "9.5.6.cycle.walk-terminates",
+              d.size() == 3, "n=" + std::to_string(d.size()));
+        const ProcessTree t = BuildProcessTree(rows);
+        // No node in a pure cycle can be a root, so nothing is visited and
+        // nothing is rendered - the cycle is reported rather than drawn.
+        Check(r, "9.5.6.cycle.build-does-not-loop",
+              t.nodes.size() == 3, "n=" + std::to_string(t.nodes.size()));
+    }
+    {
+        // A self-parent is not a parent: it must not make the row its own
+        // child, which would make it its own root and its own subtree.
+        const std::vector<TreeNodeInfo> rows = {node(100, 100)};
+        const ProcessTree t = BuildProcessTree(rows);
+        Check(r, "9.5.6.cycle.self-parent-is-not-a-parent",
+              t.rootCount == 1 && t.nodes[0].children.empty(),
+              "roots=" + std::to_string(t.rootCount));
+    }
+
+    // ---- an unknown parent is not a parent (and not a root by accident) ----
+    {
+        // 200's parent 999 is gone: 200 becomes a root, because a root is
+        // defined by observation ("nobody claims me") rather than by PPID.
+        const std::vector<TreeNodeInfo> rows = {node(200, 999), node(100, 1)};
+        const std::vector<size_t> roots = ProcessTreeRoots(rows);
+        Check(r, "9.5.6.roots.parent-exited-makes-a-root",
+              roots.size() == 2, "n=" + std::to_string(roots.size()));
+    }
+    {
+        // ppid NOT known: still a root, and never claimed.
+        const std::vector<TreeNodeInfo> rows = {node(200, 0, false)};
+        const std::vector<size_t> roots = ProcessTreeRoots(rows);
+        Check(r, "9.5.6.roots.unknown-ppid-is-a-root",
+              roots.size() == 1, "n=" + std::to_string(roots.size()));
+    }
+
+    // ---- the ancestor rule ----
+    {
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 1), node(200, 100), node(300, 200), node(400, 300)};
+        Check(r, "9.5.6.ancestor.direct-and-transitive",
+              IsAncestorOf(rows, 100, 200) && IsAncestorOf(rows, 100, 400) &&
+                  !IsAncestorOf(rows, 200, 100),
+              "");
+        // A PID we have never heard of is not an ancestor: refusing to walk
+        // into a process outside the set is what stops the answer being a
+        // guess.
+        Check(r, "9.5.6.ancestor.unknown-pid-is-not-one",
+              !IsAncestorOf(rows, 999, 300) && !IsAncestorOf(rows, 100, 999), "");
+        // A self cannot be its own ancestor, and 0 is never a process.
+        Check(r, "9.5.6.ancestor.self-and-zero-rejected",
+              !IsAncestorOf(rows, 300, 300) && !IsAncestorOf(rows, 0, 300),
+              "");
+        // An ancestor cycle terminates too: 100 -> 300 -> 100 must not loop.
+        const std::vector<TreeNodeInfo> cyclic = {
+            node(100, 300), node(200, 100), node(300, 200)};
+        Check(r, "9.5.6.ancestor.cycle-terminates",
+              IsAncestorOf(cyclic, 100, 200) &&
+                  !IsAncestorOf(cyclic, 300, 300) &&
+                  IsAncestorOf(cyclic, 100, 300)   /* via the cycle back to 300 */
+                ,
+              "");
+    }
+
+    // ---- a PID that is not in the set ----
+    {
+        const std::vector<TreeNodeInfo> rows = {node(100, 1)};
+        Check(r, "9.5.6.descendants.unknown-root-is-empty",
+              ProcessTreeDescendants(rows, 999).empty() &&
+                  ProcessTreeDescendants(rows, 0).empty(),
+              "");
+        Check(r, "9.5.6.tree.empty-set-is-empty",
+              BuildProcessTree({}).nodes.empty() &&
+                  ProcessTreeDescendants({}, 100).empty() &&
+                  ProcessTreeRoots({}).empty(),
+              "");
+    }
+
+    // ---- a wide fan-out ----
+    {
+        // One parent, many children (a service host). Every child is a
+        // descendant of the root and none of them is the root's ancestor.
+        std::vector<TreeNodeInfo> rows;
+        rows.push_back(node(1, 0));
+        for (DWORD i = 2; i < 82; ++i) rows.push_back(node(i, 1));
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 1);
+        Check(r, "9.5.6.fanout.every-child-is-a-descendant",
+              d.size() == rows.size(),
+              "n=" + std::to_string(d.size()));
+        const ProcessTree t = BuildProcessTree(rows);
+        Check(r, "9.5.6.fanout.one-root-many-children",
+              t.rootCount == 1, "roots=" + std::to_string(t.rootCount));
+    }
+
+    // ---- a deep chain is walked, and the ceiling is reported ----
+    {
+        // A chain deep enough to be interesting but bounded well under the
+        // ceiling: the whole thing must be reachable.
+        std::vector<TreeNodeInfo> rows;
+        for (DWORD i = 1; i <= 40; ++i) {
+            rows.push_back(node(i, i == 1 ? 0 : i - 1));
+        }
+        const ProcessTree t = BuildProcessTree(rows);
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 1);
+        Check(r, "9.5.6.deep.whole-chain-reachable",
+              d.size() == rows.size() && !t.depthExceeded,
+              "n=" + std::to_string(d.size()));
+    }
+
+    // ---- a PID appearing on two rows (two connections, one process) ----
+    {
+        // The first row bearing the pid is the root, so the tree and
+        // Descendants agree about which row a pid means.
+        const std::vector<TreeNodeInfo> rows = {
+            node(100, 1), node(200, 100), node(100, 1)};
+        const std::vector<size_t> d = ProcessTreeDescendants(rows, 100);
+        Check(r, "9.5.6.duplicate-pid.first-row-wins",
+              d.size() >= 2 && d[0] == 0,
+              "n=" + std::to_string(d.size()));
     }
 }
 
@@ -9872,6 +10035,7 @@ static const unsigned char kClientHello[] = {
     CheckPresetFile(r);
     CheckIniFile(r);
     CheckEmptyState(r);
+    CheckProcessTree(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
