@@ -58,6 +58,7 @@
 #include "IniFile.h"              // 9.2.10: the portable wintcp.ini
 #include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
 #include "ProcessTree.h"          // 9.5.6: the process tree
+#include "Sha256.h"               // 9.5.7: the image hash
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -2289,6 +2290,122 @@ void CheckProcessTree(TestResult& r) {
         Check(r, "9.5.6.duplicate-pid.first-row-wins",
               d.size() >= 2 && d[0] == 0,
               "n=" + std::to_string(d.size()));
+    }
+}
+
+// 9.5.7 - the SHA-256 core. The vectors are FIPS 180-4's own, plus the
+// exact-multiple-of-64 cases that are the only place an accumulate-and-compress
+// accumulator can go wrong. The hex formatter is checked with exact strings
+// because a case or separator slip here is invisible in every other check.
+void CheckSha256(TestResult& r) {
+    auto HS = [](const std::string& s) {
+        return Sha256HexA(Sha256Bytes(
+            reinterpret_cast<const unsigned char*>(s.data()), s.size()));
+    };
+    auto H = [](const unsigned char* p, size_t n) {
+        return Sha256HexA(Sha256Bytes(p, n));
+    };
+
+    Check(r, "9.5.7.sha256.fips-empty", HS("") ==
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    Check(r, "9.5.7.sha256.fips-abc", HS("abc") ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    // The FIPS 56-byte vector (FIPS 180-4 Example 1).
+    Check(r, "9.5.7.sha256.fips-56",
+          HS("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+              "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+
+    // Exact multiples of the block size: the accumulator must emit the pad in
+    // a fresh block, not treat it as data. 55 is the last one-block length;
+    // 56/57/63 straddle the boundary.
+    {
+        const std::string s55(55, 'a');
+        const std::string s56(56, 'a');
+        const std::string s64(64, 'a');
+        const std::string s119(119, 'a');
+        const std::string s120(120, 'a');
+        const std::string s128(128, 'a');
+        Check(r, "9.5.7.sha256.block-multiple-55", HS(s55) ==
+              "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318");
+        Check(r, "9.5.7.sha256.block-multiple-64", HS(s64) ==
+              "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+        Check(r, "9.5.7.sha256.block-multiple-119", HS(s119) ==
+              "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb");
+        Check(r, "9.5.7.sha256.block-multiple-128", HS(s128) ==
+              "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e");
+        // 56/120 differ only in the last byte's position relative to the pad,
+        // so they must differ.
+        Check(r, "9.5.7.sha256.block-multiple-pairs-differ",
+              HS(s56) != HS(s55) && HS(s120) != HS(s119) && HS(s56) != HS(s64));
+    }
+
+    // A second independent oracle: hashing the same bytes through the file path
+    // must agree, because that is the path the Details view actually uses and
+    // an accumulator that diverges only when chunked is the bug that would hide
+    // behind a green in-memory suite.
+    {
+        const std::wstring path = L"%TEMP%\\benoot_sha_roundtrip.bin";
+        wchar_t expanded[MAX_PATH] = {0};
+        ::ExpandEnvironmentStringsW(path.c_str(), expanded, MAX_PATH);
+        std::string blob;
+        uint32_t x = 0x12345678u;
+        for (int i = 0; i < 70000; ++i) {   // spans several 64 KB reads
+            x = x * 1664525u + 1013904223u;
+            blob.push_back(static_cast<char>(x >> 24));
+            blob.push_back(static_cast<char>(x >> 16));
+            blob.push_back(static_cast<char>(x >> 8));
+        }
+        HANDLE hf = ::CreateFileW(expanded, GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        DWORD wrote = 0;
+        bool wroteOk = hf != INVALID_HANDLE_VALUE;
+        if (wroteOk) {
+            wroteOk = ::WriteFile(hf, blob.data(),
+                                  static_cast<DWORD>(blob.size()), &wrote,
+                                  nullptr) != FALSE;
+            ::CloseHandle(hf);
+        }
+        (void)wrote;
+        const bool ok = wroteOk && wrote == blob.size();
+        const std::string mem =
+            H(reinterpret_cast<const unsigned char*>(blob.data()), blob.size());
+        const ImageHashResult fh = HashImageFile(expanded);
+        Check(r, "9.5.7.sha256.file-path-agrees-with-memory",
+              ok && fh.ok && fh.bytesHashed == blob.size() &&
+                  Sha256HexA(fh.digest) == mem,
+              "ok=" + std::string(ok ? "1" : "0") + " mem=" + mem +
+                  " file=" + Sha256HexA(fh.digest));
+        ::DeleteFileW(expanded);
+    }
+
+    // The hex formatter: exact lowercase, 64 chars, no separators.
+    {
+        Sha256Digest d{};
+        for (size_t i = 0; i < d.size(); ++i) d[i] = static_cast<uint8_t>(i);
+        const std::string h = Sha256HexA(d);
+        const std::wstring hw = Sha256HexW(d);
+        bool fmt = h.size() == 64 && hw.size() == 64;
+        for (char c : h) {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) fmt = false;
+        }
+        fmt = fmt && h == "000102030405060708090a0b0c0d0e0f1011121314"
+                          "15161718191a1b1c1d1e1f";
+        Check(r, "9.5.7.sha256.hex-is-lowercase-64-no-separators", fmt, h);
+    }
+
+    // Empty and unusable paths fail with a reason, never silently.
+    {
+        const ImageHashResult e = HashImageFile(L"");
+        Check(r, "9.5.7.sha256.empty-path-refused",
+              !e.ok && e.reason == HashFailReason::kEmptyPath &&
+                  !e.message.empty(),
+              "");
+        const ImageHashResult missing =
+            HashImageFile(L"%TEMP%\\benoot_no_such_image_xyz.exe");
+        Check(r, "9.5.7.sha256.missing-file-refused",
+              !missing.ok && missing.reason == HashFailReason::kOpenFailed &&
+                  !missing.message.empty(),
+              "");
     }
 }
 
@@ -10036,6 +10153,7 @@ static const unsigned char kClientHello[] = {
     CheckIniFile(r);
     CheckEmptyState(r);
     CheckProcessTree(r);
+    CheckSha256(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
