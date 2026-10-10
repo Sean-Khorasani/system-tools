@@ -63,6 +63,36 @@ constexpr int kDesignHeight = 640;
 // CurrentSearchText() reads into. See the create site for why they must agree.
 constexpr int kSearchTextMaxChars = 512;
 
+// Smallest window geometry worth restoring from the saved settings. Below it
+// a toolbar row and the list cannot both be laid out, so the saved rect is
+// ignored in favour of CW_USEDEFAULT rather than restored into something the
+// app cannot draw.
+constexpr int kMinRestorableW = 200;
+constexpr int kMinRestorableH = 140;
+
+// The visible set is a 32-bit mask, one bit per column (Columns.h), so the
+// persisted order can name at most 32 columns - the same freeze the mask
+// encodes, and the UiProbe that reports the order walks no further.
+constexpr size_t kMaxColOrderSlots = 32;
+
+// Longest command line the kill-confirmation prompt will quote in full. A
+// longer one is cut rather than filling a modal dialog with several screenfuls
+// of arguments the user has to dismiss; the name, PID, path and start time
+// below it are the parts that identify the process.
+constexpr size_t kKillPromptCmdChars = 300;
+
+// Text buffers. Each holds a fixed sentence around a value, and every
+// swprintf_s in this file truncates rather than overruns, so these are slack
+// sized for the longest wording each site uses rather than a shared maximum.
+// The UiProbe buffer is a static because it is returned to a caller that
+// reads it after the function has returned.
+constexpr size_t kWatchdogMsgChars = 192;
+constexpr size_t kProbeBufChars = 1024;
+constexpr size_t kMissingColListChars = 512;
+constexpr size_t kCommaColChars = 16;
+constexpr size_t kKillPromptChars = 1536;
+constexpr size_t kBlockPromptChars = 1024;
+
 // Themed colors: the app follows the system theme. High-contrast mode
 // (WO_HC_ACTIVE) wins over everything - see RefreshSystemColors().
 struct ColDef { int id; const wchar_t* title; int width; int fmt; };
@@ -382,7 +412,8 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
     // WM_CREATE, which ran inside CreateWindowEx above. Only honor the
     // rect if it still intersects a live monitor (e.g. after unplugging
     // an external display); otherwise fall back to CW_USEDEFAULT.
-    if (settings_.winPlaced && settings_.winW >= 200 && settings_.winH >= 140) {
+    if (settings_.winPlaced && settings_.winW >= kMinRestorableW &&
+        settings_.winH >= kMinRestorableH) {
         RECT wr = { settings_.winX, settings_.winY,
                     settings_.winX + settings_.winW,
                     settings_.winY + settings_.winH };
@@ -415,7 +446,7 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
 // items EXIST, and this one checks that activating them CHANGES anything.
 // ---------------------------------------------------------------------------
 const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const {
-    static wchar_t buf[1024];
+    static wchar_t buf[kProbeBufChars];
     if (op == nullptr) return nullptr;
 
     if (::wcscmp(op, L"frozen") == 0) {
@@ -450,12 +481,12 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // the machine-readable form the harness asserts on.
         HMENU sub = FindColumnsMenu(::GetMenu(hwnd_));
         if (sub == nullptr) return L"-1";   // popup itself not found
-        wchar_t missing[512] = {0};
+        wchar_t missing[kMissingColListChars] = {0};
         int count = 0;
         for (int c = 0; c < COL_COUNT; ++c) {
             if (::GetMenuState(sub, IDM_COL_BASE + c, MF_BYCOMMAND) ==
                 0xFFFFFFFF) {
-                wchar_t one[16] = {0};
+                wchar_t one[kCommaColChars] = {0};
                 ::swprintf_s(one, L"%s%d", (count == 0) ? L"" : L",", c);
                 ::wcscat_s(missing, one);
                 ++count;
@@ -639,7 +670,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"columnOrder") == 0) {
         // The persisted 7.1 order, as a comma list, so the harness can prove
         // a drag actually changed the order and that it round-tripped.
-        for (std::size_t i = 0; i < colOrder_.size() && i < 32; ++i) {
+        for (std::size_t i = 0; i < colOrder_.size() && i < kMaxColOrderSlots; ++i) {
             const std::wstring piece = L" " + std::to_wstring(colOrder_[i]);
             ::wcsncat_s(buf, piece.c_str(), _TRUNCATE);
         }
@@ -1490,7 +1521,7 @@ constexpr int kDefaultIntervalComboIndex = 1;
 void MainWindow::InitFilterControls() {
     // The offered cadences. Labels carry the meaning; the default row is
     // kDefaultIntervalComboIndex, which must be the "2 seconds" row — see it.
-    AddComboString(hwndIntervalCbo_, L"1 second", 1000);
+    AddComboString(hwndIntervalCbo_, L"1 second", kMsPerSecond);
     AddComboString(hwndIntervalCbo_, L"2 seconds", kDefaultIntervalMs);
     AddComboString(hwndIntervalCbo_, L"5 seconds", 5000);
     AddComboString(hwndIntervalCbo_, L"10 seconds", 10000);
@@ -2280,7 +2311,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         // sub-second freeze reads as no freeze at all. Show "<1s" instead.
         const ULONGLONG age = FrozenAgeMs(frozenAt_, ::GetTickCount64());
         const std::wstring ageText =
-            (age < 1000) ? std::wstring(L"<1s")
+            (age < kMsPerSecond) ? std::wstring(L"<1s")
                          : FormatDuration(age / kMsPerSecond);
         mid = L"FROZEN " + ageText + L" — F6 to resume";
     } else {
@@ -3045,7 +3076,7 @@ void MainWindow::CheckRefreshWatchdog() {
         ::SendMessageW(hwndAutoChk_, BM_SETCHECK, BST_UNCHECKED, 0);
         SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_AUTOREFRESH, false);
         ::KillTimer(hwnd_, kRefreshTimerId);
-        wchar_t msg[192] = {0};
+        wchar_t msg[kWatchdogMsgChars] = {0};
         ::swprintf_s(msg,
                      L"Auto-refresh stopped: no refresh for %llus despite %d "
                      L"worker restarts. Press Refresh to try again.",
@@ -3059,7 +3090,7 @@ void MainWindow::CheckRefreshWatchdog() {
         watchdogRestarting_ = true;
         watchdogRestartTick_ = now;
         engine_.RequestStop();
-        wchar_t msg[192] = {0};
+        wchar_t msg[kWatchdogMsgChars] = {0};
         ::swprintf_s(msg,
                      L"View stale: no refresh for %llus — restarting refresh "
                      L"worker…",
@@ -3522,8 +3553,8 @@ void MainWindow::KillSelectedProcess() {
     const std::wstring started = FormatFileTimeLocal(c.processCreate,
                                                       c.processCreateKnown);
     const std::wstring cmdLine = QueryProcessCommandLine(c.pid);
-    wchar_t prompt[1536] = {0};
-    if (cmdLine.empty() || cmdLine.size() > 300) {
+    wchar_t prompt[kKillPromptChars] = {0};
+    if (cmdLine.empty() || cmdLine.size() > kKillPromptCmdChars) {
         ::swprintf_s(prompt,
                      L"End this process?\n\n  Name:  %ls\n  PID:   %lu\n"
                      L"  Path:  %ls\n  Start: %ls\n\n"
@@ -3666,7 +3697,7 @@ void MainWindow::BlockSelectedConnection() {
     // different reach: the firewall rule always works, but Windows exposes no
     // public way to tear down a single live IPv6 connection, so on IPv6 only
     // future connections are stopped.
-    wchar_t prompt[1024] = {0};
+    wchar_t prompt[kBlockPromptChars] = {0};
     if (req.ipv6) {
         ::swprintf_s(prompt,
                      L"Block %ls?\n\nWindows Firewall rules will be added so this "
@@ -4001,7 +4032,7 @@ INT_PTR ShowCaptureWait(HWND owner, const std::wstring& what) {
         dlg, (L"Capture: " + what).c_str());
 
     g_captureWaitDeadline =
-        static_cast<int>(::GetTickCount()) + kCaptureSeconds * 1000;
+        static_cast<int>(::GetTickCount()) + kCaptureSeconds * kMsPerSecond;
     ::SetTimer(dlg, kCaptureWaitTimer, kCapturePollMs, nullptr);
 
     // Modal loop: own message pump so the main list keeps refreshing and the
@@ -4027,7 +4058,7 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
         case WM_CREATE: {
             g_captureWaitDeadline =
-                static_cast<int>(::GetTickCount()) + kCaptureSeconds * 1000;
+                static_cast<int>(::GetTickCount()) + kCaptureSeconds * kMsPerSecond;
             ::SetTimer(hwnd, kCaptureWaitTimer, kCapturePollMs, nullptr);
             return 0;
         }
