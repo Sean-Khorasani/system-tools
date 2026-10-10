@@ -53,6 +53,7 @@
 #include "Commands.h"    // abstract layer: details/preset/select helpers
 #include "BlockConn.h"   // R3: ParseLedgerBytes - the pure ledger parser
 #include "BlockedPeersDialog.h"  // 9.2.9: the dialog-template bounds
+#include "BookmarkFile.h"         // 9.2.10: the bookmark export/import codec
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -1645,6 +1646,196 @@ void CheckAlertRuleSerialisation(TestResult& r) {
 // number so cdit and the capacity arithmetic cannot be edited out of step -
 // a mismatch is an out-of-bounds read inside the dialog manager, not a
 // compile error.
+// 9.2.10 - the bookmark file codec. Both directions, because a hand-rolled
+// JSON reader is exactly the kind of code that works on the happy path and
+// silently accepts (or silently drops) everything else.
+//
+// The property that matters most is ALL-OR-NOTHING: an import is either the
+// whole file or nothing. A partial import is the failure this module exists
+// to make impossible, so several checks refuse a file whose LAST record is
+// corrupt and require that the good records before it do not arrive.
+void CheckBookmarkFile(TestResult& r) {
+    Bookmark a;
+    a.address = L"203.0.113.7";
+    a.port = 443;
+    a.tag = 3;
+    a.note = L"known good";
+    a.when = 1700000000;
+    Bookmark b;
+    b.address = L"198.51.100.22";
+    b.port = 80;
+    b.tag = kBookmarkTagNone;
+    b.when = 0;
+    const std::vector<Bookmark> items = {a, b};
+
+    // The writer is deterministic: same input, same bytes. That is what makes
+    // the file usable in a dotfiles repo, where an export that reordered
+    // itself would produce a diff on every run.
+    std::string json;
+    SerialiseBookmarks(items, &json);
+    std::string json2;
+    SerialiseBookmarks(items, &json2);
+    Check(r, "9.2.10.serialise.deterministic", json == json2,
+          "len=" + std::to_string(json.size()));
+    Check(r, "9.2.10.serialise.declares-its-version",
+          json.find("\"version\": 1") != std::string::npos, "");
+    std::string empty;
+    SerialiseBookmarks({}, &empty);
+    Check(r, "9.2.10.serialise.empty-list-is-valid",
+          empty.find("\"count\": 0") != std::string::npos, empty);
+
+    // Round trip, including a note with a quote, a backslash, a newline and a
+    // tab - the case a hand-rolled reader gets wrong.
+    Bookmark tricky;
+    tricky.address = L"203.0.113.9";
+    tricky.port = 8443;
+    tricky.tag = 5;
+    tricky.note = L"quote \" backslash \\ newline \n tab \t end";
+    tricky.when = 42;
+    std::string tj;
+    SerialiseBookmarks({tricky}, &tj);
+    std::vector<Bookmark> back;
+    std::wstring err;
+    Check(r, "9.2.10.roundtrip.parse-ok", ParseBookmarks(tj, &back, &err),
+          WideToUtf8(err));
+    Check(r, "9.2.10.roundtrip.one-record", back.size() == 1,
+          "n=" + std::to_string(back.size()));
+    if (back.size() == 1) {
+        const Bookmark& q = back[0];
+        Check(r, "9.2.10.roundtrip.address", q.address == tricky.address,
+              WideToUtf8(q.address));
+        Check(r, "9.2.10.roundtrip.port", q.port == tricky.port,
+              std::to_string(q.port));
+        Check(r, "9.2.10.roundtrip.tag", q.tag == tricky.tag,
+              std::to_string(q.tag));
+        Check(r, "9.2.10.roundtrip.note-with-escapes",
+              q.note == tricky.note, WideToUtf8(q.note));
+        Check(r, "9.2.10.roundtrip.when", q.when == tricky.when,
+              std::to_string(q.when));
+    }
+
+    // A non-ASCII note must survive: the reader decodes \uXXXX and its UTF-8
+    // decoder must agree with the encoder's.
+    Bookmark uni;
+    uni.address = L"2001:db8::1";
+    uni.port = 443;
+    uni.note = L"caf\u00e9 \u4e2d\u6587 \U0001F600";
+    uni.when = 7;
+    std::string uj;
+    SerialiseBookmarks({uni}, &uj);
+    std::vector<Bookmark> ub;
+    Check(r, "9.2.10.roundtrip.unicode-note",
+          ParseBookmarks(uj, &ub, nullptr) && ub.size() == 1 &&
+              ub[0].note == uni.note,
+          WideToUtf8(ub.empty() ? L"no record" : ub[0].note));
+
+    std::vector<Bookmark> nv;
+    Check(r, "9.2.10.refuse.missing-version",
+          !ParseBookmarks("{\"schema\":\"wintcp-bookmarks\",\"bookmarks\":[]}",
+                          &nv, &err) && !err.empty(),
+          WideToUtf8(err));
+    Check(r, "9.2.10.refuse.future-version",
+          !ParseBookmarks("{\"version\":2,\"bookmarks\":[]}", &nv, &err) &&
+              WideToUtf8(err).find("2") != std::string::npos,
+          WideToUtf8(err));
+    Check(r, "9.2.10.refuse.non-numeric-version",
+          !ParseBookmarks("{\"version\":\"1\",\"bookmarks\":[]}", &nv, nullptr),
+          "");
+    Check(r, "9.2.10.refuse.missing-array",
+          !ParseBookmarks("{\"version\":1}", &nv, nullptr), "");
+
+    // THE ONE THAT MATTERS: a corrupt LAST record must not let the good
+    // records before it through.
+    Check(r, "9.2.10.refuse.bad-last-record-refuses-the-whole-file",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"203.0.113.7\",\"port\":443,\"tag\":0,\"note\":"
+                          "\"\"},{\"address\":\"198.51.100.22\",\"port\":"
+                          "\"nope\",\"tag\":0,\"note\":\"\"}]}",
+                          &nv, &err) && nv.empty(),
+          "arrived=" + std::to_string(nv.size()));
+    Check(r, "9.2.10.refuse.missing-required-field",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"port\":443}]}", &nv,
+                          &err) &&
+              WideToUtf8(err).find("missing") != std::string::npos,
+          WideToUtf8(err));
+    Check(r, "9.2.10.refuse.record-not-an-object",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[\"203.0.113.7\"]}",
+                          &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.unterminated-array",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[}", &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.unterminated-string",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[\"abc]}", &nv,
+                          nullptr), "");
+    Check(r, "9.2.10.refuse.unterminated-document",
+          !ParseBookmarks("{\"version\":1", &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.trailing-content",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[]} garbage", &nv,
+                          nullptr), "");
+    Check(r, "9.2.10.refuse.not-an-object",
+          !ParseBookmarks("[1,2,3]", &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.empty-document",
+          !ParseBookmarks("", &nv, nullptr), "");
+
+    // A control character inside a string is not valid JSON.
+    std::string ctrl = "{\"version\":1,\"bookmarks\":[{\"address\":\"a\tb\","
+                       "\"port\":1,\"tag\":0,\"note\":\"\"}]}";
+    Check(r, "9.2.10.refuse.control-char-in-string",
+          !ParseBookmarks(ctrl, &nv, nullptr), "");
+    // An unpaired surrogate has no UTF-8 encoding.
+    Check(r, "9.2.10.refuse.unpaired-surrogate",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"\\ud800\",\"port\":1,\"tag\":0,\"note\":\"\"}]}",
+                          &nv, nullptr), "");
+    // A correct surrogate PAIR is accepted.
+    std::vector<Bookmark> pr;
+    Check(r, "9.2.10.accepts.a-surrogate-pair",
+          ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                         "\"1.2.3.4\",\"port\":1,\"tag\":0,\"note\":"
+                         "\"\\ud83d\\ude00\"}]}",
+                         &pr, nullptr) &&
+              pr.size() == 1 &&
+              pr[0].note == std::wstring(1, static_cast<wchar_t>(0xD83D)) +
+                                std::wstring(1, static_cast<wchar_t>(0xDE00)),
+          "");
+
+    // A fractional tag is refused rather than truncated to 1, which would be
+    // a bookmark with a colour the user never picked.
+    Check(r, "9.2.10.refuse.fractional-tag",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"1.2.3.4\",\"port\":1,\"tag\":1.5,\"note\":\"\"}]}",
+                          &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.port-out-of-range",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"1.2.3.4\",\"port\":70000,\"tag\":0,\"note\":"
+                          "\"\"}]}",
+                          &nv, nullptr), "");
+    Check(r, "9.2.10.refuse.negative-port",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"1.2.3.4\",\"port\":-1,\"tag\":0,\"note\":\"\"}]}",
+                          &nv, nullptr), "");
+
+    // An address that does not normalise. Importing a bookmark whose key
+    // differs from the key the GUI computes is importing a bookmark that can
+    // never be found again.
+    Check(r, "9.2.10.refuse.address-does-not-normalise",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
+                          "\"not-an-ip\",\"port\":1,\"tag\":0,\"note\":\"\"}]}",
+                          &nv, &err) && !WideToUtf8(err).empty(),
+          WideToUtf8(err));
+
+    // An unknown extra key is ACCEPTED: the schema reserves the right to add
+    // fields, and a reader that rejected unknown keys would make every future
+    // addition a breaking change.
+    std::vector<Bookmark> ek;
+    Check(r, "9.2.10.accepts.unknown-top-level-key",
+          ParseBookmarks("{\"version\":1,\"future\":{\"x\":[1,2]},"
+                         "\"bookmarks\":[]}",
+                         &ek, nullptr), "");
+    Check(r, "9.2.10.refuse.null-output",
+          !ParseBookmarks("{\"version\":1,\"bookmarks\":[]}", nullptr,
+                          nullptr), "");
+}
+
 constexpr int kDialogControls = 6;
 
 TestResult RunSelfTest() {
@@ -9266,6 +9457,7 @@ static const unsigned char kClientHello[] = {
     CheckColumnProfiles(r);
     CheckQuickFilters(r);
     CheckFontCache(r);
+    CheckBookmarkFile(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
