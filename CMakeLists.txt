@@ -74,6 +74,8 @@ add_executable(wintcp
     wintcp/src/IniFile.h
     wintcp/src/EmptyStateActions.cpp
     wintcp/src/EmptyStateActions.h
+    wintcp/src/ProcessTree.cpp
+    wintcp/src/ProcessTree.h
     wintcp/src/Elevate.cpp
     wintcp/src/Elevate.h
     wintcp/src/GeoIp.cpp

@@ -209,6 +209,7 @@
     <ClCompile Include="..\src\PresetFile.cpp" />
     <ClCompile Include="..\src\IniFile.cpp" />
     <ClCompile Include="..\src\EmptyStateActions.cpp" />
+    <ClCompile Include="..\src\ProcessTree.cpp" />
     <ClCompile Include="..\src\Cli.cpp" />
     <ClCompile Include="..\src\EtwTraffic.cpp" />
     <ClCompile Include="..\src\SocketTraffic.cpp" />

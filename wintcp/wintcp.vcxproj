@@ -224,6 +224,8 @@
     <ClCompile Include="src\PresetFile.cpp" />
     <ClCompile Include="src\IniFile.cpp" />
     <ClCompile Include="src\EmptyStateActions.cpp" />
+    <ClCompile Include="src\ProcessTree.cpp" />
+    <ClInclude Include="src\ProcessTree.h" />
     <ClInclude Include="src\EmptyStateActions.h" />
     <ClInclude Include="src\IniFile.h" />
     <ClInclude Include="src\PresetFile.h" />
