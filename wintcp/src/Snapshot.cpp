@@ -24,6 +24,12 @@ namespace {
 // source, never again.
 constexpr DWORD kCpuPrimeWaitMs = 250;
 
+// Width of the one-line GeoIP description ("version, N records, N nodes, N
+// bytes"). A database version string is bounded by the format itself, so this is
+// slack rather than a measured maximum - swprintf_s truncates rather than
+// overruns, which is the whole reason a fixed buffer is acceptable here.
+constexpr size_t kGeoDescriptionChars = 160;
+
 // The distinct PIDs in 'rows', in first-appearance order.
 //
 // One entry per DISTINCT process, not per row: the stat sampler and the socket
@@ -144,7 +150,7 @@ bool SnapshotSource::GeoIpLoaded() const { return geo_.Loaded(); }
 
 std::wstring SnapshotSource::GeoIpDescription() const {
     if (!geo_.Loaded()) return L"no database loaded";
-    wchar_t buf[160] = {0};
+    wchar_t buf[kGeoDescriptionChars] = {0};
     ::swprintf_s(buf, L"%ls, %llu records, %llu nodes, %zu bytes",
                  geo_.DatabaseVersion().c_str(),
                  static_cast<unsigned long long>(geo_.RecordCount()),
