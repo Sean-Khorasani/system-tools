@@ -204,6 +204,7 @@
     <ClCompile Include="..\src\Bookmarks.cpp" />
     <ClCompile Include="..\src\GeoIp.cpp" />
     <ClCompile Include="..\src\BlockConn.cpp" />
+    <ClCompile Include="..\src\BlockedPeersDialog.cpp" />
     <ClCompile Include="..\src\Cli.cpp" />
     <ClCompile Include="..\src\EtwTraffic.cpp" />
     <ClCompile Include="..\src\SocketTraffic.cpp" />

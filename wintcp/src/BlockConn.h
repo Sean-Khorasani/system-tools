@@ -125,6 +125,60 @@ int CountWinTcpRules(std::wstring* error = nullptr);
 // survives; the failing names are appended to 'error'.
 bool RemoveAllWinTcpRules(std::wstring* error);
 
+// 9.2.9: one WinTCP-tagged rule as the viewer reports it. Enumerating the
+// policy store cannot be used to FIND these (see the note on
+// CountWinTcpRules above), so the list is driven from the ledger and probed
+// by name - but once a rule is in hand every field below is read from the
+// rule itself rather than from the ledger, so a rule the user edited in
+// netsh or WF.msc is shown as it actually is, not as we recorded it.
+struct BlockedRule {
+    std::wstring name;          // the tagged rule name
+    std::wstring remoteAddrs;   // what get_RemoteAddresses reports, verbatim
+    std::wstring localPorts;    // get_LocalPorts, verbatim
+    std::wstring remotePorts;   // get_RemotePorts, verbatim
+    bool enabled = false;
+    // True when the rule is an OUTBOUND BLOCK. A tagged rule the user turned
+    // into a rule (disabled it, flipped it to allow, or changed direction) is
+    // reflected here rather than assumed, and the viewer says so - a block
+    // that is not blocking is the one thing this surface must not hide.
+    bool isBlocking = false;
+};
+
+// List the tagged rules the firewall still reports, in ledger order.
+// Returns false only when the policy could not be opened at all; a rule that
+// has been deleted out from under us is simply absent from the result, which
+// is the same rule CountWinTcpRules follows.
+bool ListBlockedRules(std::vector<BlockedRule>* out, std::wstring* error);
+
+// Delete ONE tagged rule by name, and drop that name from the ledger so a
+// later RemoveAllWinTcpRules does not go looking for it. Returns false with
+// the reason in 'error'.
+//
+// The ledger keeps its "endpoint\tports" pair SHAPE on rewrite: the removed
+// name is blanked in place rather than the line being dropped or
+// re-serialised. That matters because CountWinTcpRules and
+// RemoveAllWinTcpRules both split on the tab and read the FIRST field, so a
+// dropped or reshaped line would change what `blocks` counts - and the
+// viewer is not allowed to change that number as a side effect of looking.
+bool RemoveBlockedRule(const std::wstring& name, std::wstring* error);
+
+// 9.2.9, two PURE helpers so the viewer's ledger handling is testable
+// without touching the real file. Both are the reason RemoveBlockedRule can
+// promise not to change what `blocks` counts: the ledger's shape is decided
+// here, once, rather than inline at two call sites that could disagree.
+
+// The rule names a ledger line carries. A line is "endpoint\tports", so
+// there are up to two; an empty field (the shape a removal leaves behind)
+// is NOT a name, and a line with no tab yields its single name.
+std::vector<std::wstring> SplitLedgerNames(const std::wstring& line);
+
+// Blank every occurrence of 'name' in 'line' IN PLACE, leaving the tab
+// separators where they are so the field count does not change. Returns
+// true when anything was blanked. This is the whole trick behind not
+// disturbing CountWinTcpRules, which splits on the tab and reads field 0.
+bool BlankLedgerName(const std::wstring& line, const std::wstring& name,
+                     std::wstring* out);
+
 // R3: parse the ledger's bytes into rule-name pairs. PURE - no file, no
 // registry, no environment - so the selftest can drive it with hostile input
 // without touching the real ledger under %APPDATA%, which is the one thing it

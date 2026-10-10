@@ -1359,4 +1359,190 @@ bool RemoveAllWinTcpRules(std::wstring* error) {
     return ok;
 }
 
+std::vector<std::wstring> SplitLedgerNames(const std::wstring& line) {
+    std::vector<std::wstring> names;
+    size_t start = 0;
+    while (start <= line.size()) {
+        const size_t tab = line.find(L'\t', start);
+        const size_t len = tab == std::wstring::npos ? std::wstring::npos
+                                                     : tab - start;
+        const std::wstring name = line.substr(start, len);
+        if (!name.empty()) {
+            names.push_back(name);
+        }
+        if (tab == std::wstring::npos) break;
+        start = tab + 1;
+    }
+    return names;
+}
+
+bool BlankLedgerName(const std::wstring& line, const std::wstring& name,
+                     std::wstring* out) {
+    if (out == nullptr || name.empty()) return false;
+    std::wstring work(line);
+    bool touched = false;
+    size_t start = 0;
+    while (start <= work.size()) {
+        const size_t tab = work.find(L'\t', start);
+        const size_t len = tab == std::wstring::npos ? std::wstring::npos
+                                                     : tab - start;
+        if (work.compare(start, len, name) == 0) {
+            work.replace(start, len, std::wstring());
+            touched = true;
+        }
+        if (tab == std::wstring::npos) break;
+        start = tab + 1;
+    }
+    if (touched) {
+        *out = work;
+    }
+    return touched;
+}
+
+// ---- 9.2.9: the firewall viewer's engine half --------------------------------
+//
+// Everything the viewer shows comes from the rule itself once it is in hand -
+// enabled, direction, action, addresses and ports - so a rule the user edited
+// in netsh or WF.msc reads as it actually is. The LEDGER's only job here is to
+// supply the names, because the enumerator cannot (see the note on
+// CountWinTcpRules).
+
+// Read one BSTR property off a rule, tolerating a null return (which several
+// INetFwRule getters produce for "any" rather than for "empty").
+std::wstring ReadBstrProp(HRESULT (STDMETHODCALLTYPE INetFwRule::*get)(BSTR*),
+                          INetFwRule* rule) {
+    BSTR raw = nullptr;
+    const HRESULT hr = (rule->*get)(&raw);
+    if (FAILED(hr) || raw == nullptr) {
+        if (raw != nullptr) ::SysFreeString(raw);
+        return std::wstring();
+    }
+    std::wstring out(raw, ::SysStringLen(raw));
+    ::SysFreeString(raw);
+    return out;
+}
+
+bool ListBlockedRules(std::vector<BlockedRule>* out, std::wstring* error) {
+    if (out == nullptr) {
+        SetError(error, L"internal error: no output for ListBlockedRules");
+        return false;
+    }
+    out->clear();
+    if (error != nullptr) {
+        error->clear();
+    }
+    FwSession session;
+    if (!session.Open(error)) {
+        return false;
+    }
+    INetFwRules* rules = session.rules();
+
+    std::lock_guard<std::mutex> lock(g_ledgerLock);
+    std::wstring readErr;
+    const std::vector<std::wstring> pairs = ReadLedger(&readErr);
+    if (!readErr.empty()) {
+        SetError(error, readErr);
+        return false;
+    }
+
+    for (const std::wstring& pair : pairs) {
+        // One ledger line can hold up to two names: "endpoint\tports".
+        // Both are listed, because both are rules the user can delete and
+        // both are what RemoveAllWinTcpRules is supposed to clean up.
+        for (const std::wstring& name : SplitLedgerNames(pair)) {
+            BlockedRule entry;
+            entry.name = name;
+            BStr bname(name);
+            ComPtr<INetFwRule> rule;
+            if (bname.valid() && SUCCEEDED(rules->Item(bname, rule.receive())) &&
+                rule.get() != nullptr) {
+                VARIANT_BOOL vb = VARIANT_FALSE;
+                if (SUCCEEDED(rule.get()->get_Enabled(&vb))) {
+                    entry.enabled = (vb != VARIANT_FALSE);
+                }
+                NET_FW_RULE_DIRECTION dir = NET_FW_RULE_DIR_IN;
+                (void)rule.get()->get_Direction(&dir);
+                NET_FW_ACTION action = NET_FW_ACTION_ALLOW;
+                (void)rule.get()->get_Action(&action);
+                entry.isBlocking = (dir == NET_FW_RULE_DIR_OUT) &&
+                                   (action == NET_FW_ACTION_BLOCK);
+                entry.remoteAddrs =
+                    ReadBstrProp(&INetFwRule::get_RemoteAddresses, rule.get());
+                entry.localPorts =
+                    ReadBstrProp(&INetFwRule::get_LocalPorts, rule.get());
+                entry.remotePorts =
+                    ReadBstrProp(&INetFwRule::get_RemotePorts, rule.get());
+                out->push_back(std::move(entry));
+            }
+        }
+    }
+    return true;
+}
+
+bool RemoveBlockedRule(const std::wstring& name, std::wstring* error) {
+    if (error != nullptr) {
+        error->clear();
+    }
+    if (name.empty()) {
+        SetError(error, L"internal error: no rule name to remove");
+        return false;
+    }
+    FwSession session;
+    if (!session.Open(error)) {
+        return false;
+    }
+    INetFwRules* rules = session.rules();
+
+    BStr bname(name);
+    if (!bname.valid()) {
+        SetError(error, L"out of memory allocating rule name");
+        return false;
+    }
+    ComPtr<INetFwRule> found;
+    if (FAILED(rules->Item(bname, found.receive()))) {
+        // Already gone. The ledger still needs repairing below, so this is
+        // success rather than an error - same shape as
+        // RemoveAllWinTcpRules, which skips an absent rule silently.
+        found = ComPtr<INetFwRule>();
+    }
+    if (found.get() != nullptr) {
+        const HRESULT del = rules->Remove(bname);
+        if (FAILED(del)) {
+            SetError(error, L"could not remove \"" + name + L"\": " +
+                                FormatHresult(del));
+            return false;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(g_ledgerLock);
+    std::wstring readErr;
+    std::vector<std::wstring> pairs = ReadLedger(&readErr);
+    if (!readErr.empty()) {
+        // The rule IS out of the firewall, so report that; the ledger will be
+        // repaired the next time a clean rewrite happens.
+        SetError(error, readErr);
+        return false;
+    }
+    bool touched = false;
+    for (std::wstring& pair : pairs) {
+        std::wstring blanked;
+        if (BlankLedgerName(pair, name, &blanked)) {
+            pair = blanked;
+            touched = true;
+        }
+    }
+    // Only rewrite when something actually matched, so a caller passing a
+    // name that was never ours does not churn the file.
+    if (touched) {
+        std::vector<std::wstring> kept;
+        kept.reserve(pairs.size());
+        for (const std::wstring& p : pairs) {
+            if (p.empty()) continue;   // both halves gone
+            kept.push_back(p);
+        }
+        WriteLedger(kept);
+    }
+    return true;
+}
+
 }  // namespace wintcp

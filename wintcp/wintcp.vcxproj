@@ -219,6 +219,8 @@
     
     
     <ClCompile Include="src\BlockConn.cpp" />
+    <ClCompile Include="src\BlockedPeersDialog.cpp" />
+    <ClInclude Include="src\BlockedPeersDialog.h" />
     <ClCompile Include="src\GeoIp.cpp" />
     <ClCompile Include="src\Elevate.cpp" />
     <ClCompile Include="src\Pcapng.cpp" />
