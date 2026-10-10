@@ -58,6 +58,11 @@
 // 40023 is IDM_FILE_PRESET_SAVE - the View ids are not a contiguous block, and
 // a duplicate #define is a silently-shadowed menu command.
 #define IDM_VIEW_BLOCKED        40065
+// 9.4.2: offers the buttons for whatever empty state the table is in. Always
+// enabled; when there is nothing to fix it says so, which is itself the answer
+// to "why is my table empty" being asked at all. 40066 keeps it beside the
+// other View ids; 40200 is IDM_COL_BASE and must stay the boundary.
+#define IDM_VIEW_FIX_EMPTY      40066
 #define IDM_VIEW_ASNIP          40040
 
 // 9.4.4 column profiles and F5.11/9.4.3 quick filters. Appended after the

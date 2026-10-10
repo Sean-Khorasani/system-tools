@@ -54,6 +54,7 @@ BEGIN
         MENUITEM "Per-PID &traffic counters (ETW, admin)", IDM_VIEW_TRAFFIC
         MENUITEM "&GeoIP database (.mmdb)...", IDM_VIEW_GEOIP
         MENUITEM "Blocked &peers...",    IDM_VIEW_BLOCKED
+        MENUITEM "&Fix what''s hiding the rows...", IDM_VIEW_FIX_EMPTY
     MENUITEM "ASN &database (.mmdb)...", IDM_VIEW_ASNIP
         MENUITEM "Performa&nce graphs...", IDM_VIEW_CHARTS
         MENUITEM SEPARATOR

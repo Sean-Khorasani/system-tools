@@ -29,6 +29,8 @@
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
 #include "BlockedPeersDialog.h"  // 9.2.9: View > Blocked peers...
+#include "EmptyStateActions.h"   // 9.4.2: the empty-state button decision
+#include "Elevate.h"             // 9.4.2: Reelevate for the traffic case
 #include "FontCache.h"
 #include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
@@ -1777,6 +1779,117 @@ void MainWindow::UpdateEmptyState() {
         return;
     }
 }
+
+// ---- 9.4.2: the buttons half ------------------------------------------------
+// UpdateEmptyState says WHY the table is empty; this offers the fix as a
+// click. The decision - which case, which buttons - is made by the pure
+// DecideEmptyState (EmptyStateActions.cpp) so the window runs the same
+// predicate the selftest pins, and there is no second copy here to drift.
+void MainWindow::ShowEmptyStateActions() {
+    const EmptyStateOffer offer = DecideEmptyState(
+        store_.Rows().size(), store_.View().size(),
+        (visibleCols_ & (1u << COL_COUNTRY)) != 0, geo_.Loaded(),
+        asnGeo_.Loaded(), AnyTrafficColVisible(), etw_.Running(),
+        fallbackFlag_->load(), IsElevated());
+
+    // Nothing to offer. The status-bar sentence UpdateEmptyState already sets
+    // is the whole answer, and an empty-state message with no action is still
+    // useful - a dialog with no buttons would just be an extra click.
+    if (offer.ButtonCount() == 0) {
+        // Reached only through the menu item, which is how a user asks "why is
+        // my table empty?" directly. Saying there is nothing to fix is the
+        // answer, and it is different from the dialog not appearing at all -
+        // which would look like the menu item did nothing.
+        ::MessageBoxW(hwnd_,
+                      offer.message[0] != L'\0'
+                          ? (std::wstring(offer.message) +
+                             L", and there is nothing to fix.")
+                                .c_str()
+                          : L"The table is showing everything it has. "
+                            L"There is nothing to fix right now.",
+                      L"WinTCP", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // Same delay-load guard ResolveMinimize uses, for the same reason: without
+    // comctl32 the dialog cannot be shown at all, and the sentence on the
+    // status bar must survive that.
+    if (!DelayLoadGuard(hwnd_, "comctl32.dll")) return;
+
+    TASKDIALOGCONFIG tc = {};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = hwnd_;
+    tc.dwFlags = TDF_USE_HICON_MAIN;
+    tc.hMainIcon = ::LoadIconW(nullptr, IDI_INFORMATION);
+    tc.pszWindowTitle = L"WinTCP";
+    tc.pszMainInstruction = offer.message;
+    tc.pszContent = L"WinTCP can put that right for you.";
+
+    // Button ids start above 100 so they cannot collide with the standard
+    // IDOK/IDCANCEL the dialog would otherwise return.
+    enum {
+        kBtnClear = 101, kBtnEdit, kBtnPickGeo, kBtnRunAdmin
+    };
+    TASKDIALOG_BUTTON btns[4] = {};
+    size_t n = 0;
+    // In the declarative order - the same order the bench asserts the offer
+    // carries, so a test and the dialog cannot disagree.
+    if (offer.offerClear) {
+        btns[n].nButtonID = kBtnClear;
+        btns[n].pszButtonText = kEmptyActionClear;
+        ++n;
+    }
+    if (offer.offerEdit) {
+        btns[n].nButtonID = kBtnEdit;
+        btns[n].pszButtonText = kEmptyActionEdit;
+        ++n;
+    }
+    if (offer.offerPickGeo) {
+        btns[n].nButtonID = kBtnPickGeo;
+        btns[n].pszButtonText = kEmptyActionPickGeo;
+        ++n;
+    }
+    if (offer.offerRunAdmin) {
+        btns[n].nButtonID = kBtnRunAdmin;
+        btns[n].pszButtonText = kEmptyActionRunAdmin;
+        ++n;
+    }
+    tc.pButtons = btns;
+    tc.cButtons = static_cast<UINT>(n);
+    tc.nDefaultButton = btns[0].nButtonID;   // the first is the safest action
+
+    int which = 0;
+    if (::TaskDialogIndirect(&tc, &which, nullptr, nullptr) != S_OK) return;
+
+    switch (which) {
+        case kBtnClear:
+            // ClearFilterBox is the existing path: it empties the control AND
+            // reapplies the view, so the table comes back with its filter gone
+            // rather than just losing the text.
+            ClearFilterBox();
+            UpdateStatusBar(L"filter cleared");
+            break;
+        case kBtnEdit:
+            // Focus the box with its text selected, so the expression can be
+            // fixed rather than thrown away - a different intent from clearing,
+            // and the reason both buttons are offered.
+            FocusFilterBox();
+            break;
+        case kBtnPickGeo:
+            LoadGeoIpDatabase();
+            break;
+        case kBtnRunAdmin:
+            // Reelevate returns true only when it actually started a new
+            // instance, and the contract is that the caller then exits
+            // immediately - there is no path back here.
+            if (Reelevate(L"Per-PID traffic counters")) {
+                ::PostQuitMessage(0);
+            }
+            break;
+        default:
+            break;
+    }
+}
 // ---- 9.4.4 column profiles -------------------------------------------------
 // A profile is a named COLUMN MASK, nothing else. That is a deliberate narrowing:
 // a preset (File > Save view as preset) is a full ViewState - filter, sort,
@@ -2652,6 +2765,13 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             }
             break;
         }
+        case IDM_VIEW_FIX_EMPTY:
+            // 9.4.2. DecideEmptyState answers both halves: whether there is
+            // anything to fix, and what the buttons are. "Nothing to fix" is a
+            // real answer here, not a failure - it is what "why is my table
+            // empty" deserves when the table is empty for a legitimate reason.
+            ShowEmptyStateActions();
+            break;
         case IDM_VIEW_FREEZE:
             frozen_ = !frozen_;
             // Stamped from GetTickCount64 (a monotonic counter), not from
