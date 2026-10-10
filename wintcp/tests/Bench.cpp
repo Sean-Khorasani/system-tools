@@ -54,6 +54,7 @@
 #include "BlockConn.h"   // R3: ParseLedgerBytes - the pure ledger parser
 #include "BlockedPeersDialog.h"  // 9.2.9: the dialog-template bounds
 #include "BookmarkFile.h"         // 9.2.10: the bookmark export/import codec
+#include "PresetFile.h"           // 9.2.10: the preset export/import codec
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -1834,6 +1835,159 @@ void CheckBookmarkFile(TestResult& r) {
     Check(r, "9.2.10.refuse.null-output",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[]}", nullptr,
                           nullptr), "");
+}
+
+// 9.2.10 - the preset file codec. The sibling of BookmarkFile's, over the same
+// all-or-nothing rule: a preset that loads half is a view the user never saved,
+// and unlike a bookmark the failure is subtle - it is believed.
+void CheckPresetFile(TestResult& r) {
+    PresetRecord a;
+    a.name = L"listening sockets";
+    a.view.grouped = true;
+    a.view.filter = L"state:listen exclude:127.";
+
+    PresetRecord b;
+    b.name = L"chrome by traffic";
+    b.view.filter = L"process:chrome.exe";
+    b.view.sortColumn = COL_TRAFFIC;
+    b.view.sortAsc = false;
+    b.view.colVisible = 0x0000000Fu;
+    b.view.sources = 3;
+
+    const std::vector<PresetRecord> items = {a, b};
+    std::string json;
+    SerialisePresets(items, &json);
+    std::string json2;
+    SerialisePresets(items, &json2);
+    Check(r, "9.2.10.preset.deterministic", json == json2,
+          "len=" + std::to_string(json.size()));
+    Check(r, "9.2.10.preset.declares-its-version",
+          json.find("\"version\": 1") != std::string::npos, "");
+    std::string empty;
+    SerialisePresets({}, &empty);
+    Check(r, "9.2.10.preset.empty-list-is-valid",
+          empty.find("\"count\": 0") != std::string::npos, empty);
+
+    // Round trip: every axis of ViewState survives, including the two that
+    // look redundant with a default (sortAsc, preserveSelection) - a preset
+    // that dropped one of those would open a view the user did not save.
+    std::vector<PresetRecord> back;
+    std::wstring err;
+    Check(r, "9.2.10.preset.roundtrip.parse-ok",
+          ParsePresets(json, &back, &err), WideToUtf8(err));
+    Check(r, "9.2.10.preset.roundtrip.two-records", back.size() == 2,
+          "n=" + std::to_string(back.size()));
+    if (back.size() == 2) {
+        const PresetRecord& x = back[0];
+        Check(r, "9.2.10.preset.roundtrip.name", x.name == a.name,
+              WideToUtf8(x.name));
+        Check(r, "9.2.10.preset.roundtrip.grouped", x.view.grouped, "");
+        Check(r, "9.2.10.preset.roundtrip.filter", x.view.filter == a.view.filter,
+              WideToUtf8(x.view.filter));
+        const PresetRecord& y = back[1];
+        Check(r, "9.2.10.preset.roundtrip.sort-column",
+              y.view.sortColumn == COL_TRAFFIC,
+              std::to_string(y.view.sortColumn));
+        Check(r, "9.2.10.preset.roundtrip.sort-asc",
+              !y.view.sortAsc, "");
+        Check(r, "9.2.10.preset.roundtrip.col-visible",
+              y.view.colVisible == b.view.colVisible,
+              std::to_string(y.view.colVisible));
+        Check(r, "9.2.10.preset.roundtrip.sources",
+              y.view.sources == b.view.sources,
+              std::to_string(y.view.sources));
+    }
+
+    // A frozen view carries its frozen-at time, and a frozen view WITHOUT one
+    // is refused rather than half-loaded - it could not be unfrozen correctly.
+    const char* kFrozenNoTime =
+        "{\"version\":1,\"presets\":[{\"name\":\"x\",\"frozen\":true}]}";
+    std::vector<PresetRecord> nv;
+    Check(r, "9.2.10.preset.refuse.frozen-without-time",
+          !ParsePresets(kFrozenNoTime, &nv, &err) && !WideToUtf8(err).empty(),
+          WideToUtf8(err));
+
+    // A name the storage layer would refuse is refused here too, decided by
+    // Presets::IsValidName rather than a second spelling of the rule: a
+    // backslash would create a subkey, and a control character is invisible in
+    // a dialog.
+    const char* kBadName =
+        "{\"version\":1,\"presets\":[{\"name\":\"a\\\\b\",\"filter\":\"\"}]}";
+    Check(r, "9.2.10.preset.refuse.name-with-a-backslash",
+          !ParsePresets(kBadName, &nv, nullptr), "");
+    const char* kEmptyName =
+        "{\"version\":1,\"presets\":[{\"name\":\"\",\"filter\":\"\"}]}";
+    Check(r, "9.2.10.preset.refuse.empty-name",
+          !ParsePresets(kEmptyName, &nv, nullptr), "");
+
+    // A sort column outside the table is a view the renderer could not draw,
+    // so it is refused rather than clamped.
+    const char* kBadSort =
+        "{\"version\":1,\"presets\":[{\"name\":\"x\",\"filter\":\"\","
+        "\"sortColumn\":9999}]}";
+    Check(r, "9.2.10.preset.refuse.sort-column-out-of-range",
+          !ParsePresets(kBadSort, &nv, nullptr), "");
+    const char* kNegSort =
+        "{\"version\":1,\"presets\":[{\"name\":\"x\",\"filter\":\"\","
+        "\"sortColumn\":-1}]}";
+    Check(r, "9.2.10.preset.refuse.negative-sort-column",
+          !ParsePresets(kNegSort, &nv, nullptr), "");
+
+    // THE ONE THAT MATTERS: a corrupt last record refuses the whole file.
+    const char* kBadTail =
+        "{\"version\":1,\"presets\":[{\"name\":\"good\",\"filter\":\"\"},"
+        "{\"name\":\"bad\",\"filter\":123}]}";
+    Check(r, "9.2.10.preset.refuse.bad-last-record-refuses-the-whole-file",
+          !ParsePresets(kBadTail, &nv, &err) && nv.empty(),
+          "arrived=" + std::to_string(nv.size()));
+    Check(r, "9.2.10.preset.refuse.missing-required-field",
+          !ParsePresets("{\"version\":1,\"presets\":[{\"name\":\"x\"}]}", &nv,
+                        &err) &&
+              WideToUtf8(err).find("missing") != std::string::npos,
+          WideToUtf8(err));
+
+    // Version and document rules, same as the bookmark file's.
+    Check(r, "9.2.10.preset.refuse.missing-version",
+          !ParsePresets("{\"presets\":[]}", &nv, &err) && !err.empty(),
+          WideToUtf8(err));
+    Check(r, "9.2.10.preset.refuse.future-version",
+          !ParsePresets("{\"version\":2,\"presets\":[]}", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.missing-array",
+          !ParsePresets("{\"version\":1}", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.record-not-an-object",
+          !ParsePresets("{\"version\":1,\"presets\":[\"x\"]}", &nv, nullptr),
+          "");
+    Check(r, "9.2.10.preset.refuse.unterminated-array",
+          !ParsePresets("{\"version\":1,\"presets\":[}", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.unterminated-document",
+          !ParsePresets("{\"version\":1", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.trailing-content",
+          !ParsePresets("{\"version\":1,\"presets\":[]} junk", &nv, nullptr),
+          "");
+    Check(r, "9.2.10.preset.refuse.not-an-object",
+          !ParsePresets("[1,2,3]", &nv, nullptr), "");
+    Check(r, "9.2.10.preset.refuse.empty-document",
+          !ParsePresets("", &nv, nullptr), "");
+    std::string ctrl = "{\"version\":1,\"presets\":[{\"name\":\"a\tb\","
+                       "\"filter\":\"\"}]}";
+    Check(r, "9.2.10.preset.refuse.control-char-in-string",
+          !ParsePresets(ctrl, &nv, nullptr), "");
+
+    // A boolean field must be true or false, not a number: "frozen":1 is not
+    // a state anything can act on.
+    Check(r, "9.2.10.preset.refuse.boolean-as-a-number",
+          !ParsePresets("{\"version\":1,\"presets\":[{\"name\":\"x\","
+                        "\"filter\":\"\",\"grouped\":1}]}",
+                        &nv, nullptr), "");
+
+    // An unknown extra key is accepted, so adding an axis later is not a
+    // breaking change.
+    std::vector<PresetRecord> ek;
+    Check(r, "9.2.10.preset.accepts.unknown-top-level-key",
+          ParsePresets("{\"version\":1,\"future\":1,\"presets\":[]}", &ek,
+                       nullptr), "");
+    Check(r, "9.2.10.preset.refuse.null-output",
+          !ParsePresets("{\"version\":1,\"presets\":[]}", nullptr, nullptr), "");
 }
 
 constexpr int kDialogControls = 6;
@@ -9458,6 +9612,7 @@ static const unsigned char kClientHello[] = {
     CheckQuickFilters(r);
     CheckFontCache(r);
     CheckBookmarkFile(r);
+    CheckPresetFile(r);
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
