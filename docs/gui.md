@@ -284,8 +284,11 @@ The path is the only thing remembered, not the database's contents: a file repla
 Each row is read from the rule the firewall actually holds, not from what the ledger remembered writing, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up **as it really is** — a row tagged `[disabled]` or `[not a block]` — rather than being counted as protection. A block that is not blocking is the one state this window must never pass off as cover. A rule deleted out from under the ledger is simply absent from the list.
 
 - **Delete** removes the selected rule.
+- **Enable** / **Disable** leave the rule installed and flip its Enabled state. Disabling is not deleting: a disabled rule keeps its identity, its name and its description, so "turn this off for an hour and put it back" is one step instead of delete-then-re-derive. A rule recreated from scratch is a rule whose name may change and whose description is gone.
 - **Remove all** removes every WinTCP rule — the same function the tray menu's **Remove all WinTCP blocks** runs, reached here without the trip through the tray.
-- **Close** looks and leaves. The list is modal, and it is created from a template built in memory, so it can be dismissed without touching the view's state — a listing that could change the rows would have to say so.
+- **Close** dismisses the dialog.
+
+**The list is re-read from the firewall after every action**, and the selection follows the rule it was on when that rule still exists. A manager that closed after each action would take three operations per change, and a manager that kept its own copy of the list would show a state the firewall was not in. If the re-read fails, the list is left as it was rather than emptied — an empty list on a failed read would read as "you have no rules", which is the one answer this dialog must never give wrongly.
 
 From the command line the same information is available as `wintcp.exe blocks --list`, in `table`, `csv` or `json` — see [`block`, `unblock`, `blocks`](cli.md#block-unblock-blocks). The window and the verb read the same rules, so they cannot disagree.
 
