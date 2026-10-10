@@ -50,6 +50,14 @@ const size_t kWheelSampleNum = 7u;
 const size_t kWheelSampleDen = 8u;
 const double kWheelValueFactor = 0.5;
 
+// Text bounds for the locale-independent formatters below. A double's longest
+// round-trippable spelling is 24 characters, a 64-bit integer's is 20, and an
+// ISO-8601 UTC timestamp is exactly 20 digits and punctuation - so 40 and 32
+// are slack per call rather than a shared maximum, and every one of the three
+// formatters truncates rather than overruns.
+constexpr size_t kDoubleTextChars = 40;
+constexpr size_t kIntTextChars = 32;
+
 bool IsFiniteValue(double v) {
     return std::isfinite(v);
 }
@@ -143,14 +151,14 @@ bool MinMaxFinite(const std::vector<double>& a, const std::vector<double>* b,
 // punctuation only, which no locale or code page rewrites.
 std::string FormatNumber(double v) {
     if (!IsFiniteValue(v)) return std::string();
-    char buf[40] = {0};
+    char buf[kDoubleTextChars] = {0};
     const std::to_chars_result r = std::to_chars(buf, buf + sizeof(buf) - 1, v);
     if (r.ec != std::errc()) return std::string();
     return std::string(buf, r.ptr);
 }
 
 std::string FormatI64(long long v) {
-    char buf[32] = {0};
+    char buf[kIntTextChars] = {0};
     const std::to_chars_result r = std::to_chars(buf, buf + sizeof(buf) - 1, v);
     if (r.ec != std::errc()) return std::string();
     return std::string(buf, r.ptr);
@@ -161,9 +169,9 @@ std::string FormatSize(size_t v) {
 }
 
 std::string FormatU64(ULONGLONG v) {
-    wchar_t wbuf[32];
+    wchar_t wbuf[kIntTextChars];
     ::swprintf_s(wbuf, L"%llu", v);
-    char buf[32] = {0};
+    char buf[kIntTextChars] = {0};
     if (::WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf,
                               static_cast<int>(sizeof(buf)), nullptr,
                               nullptr) == 0) {
@@ -174,7 +182,7 @@ std::string FormatU64(ULONGLONG v) {
 
 std::string FormatIsoUtc(const SYSTEMTIME& st) {
     // Digits and punctuation only.
-    char buf[32] = {0};
+    char buf[kIntTextChars] = {0};
     const int n = ::sprintf_s(
         buf, "%04u-%02u-%02uT%02u:%02u:%02uZ",
         static_cast<unsigned>(st.wYear), static_cast<unsigned>(st.wMonth),
