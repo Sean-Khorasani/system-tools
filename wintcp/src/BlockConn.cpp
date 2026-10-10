@@ -53,6 +53,18 @@ constexpr IID kIidRule = __uuidof(INetFwRule);
 
 const wchar_t* const kRuleNamePrefix = L"WinTCP block: ";
 
+// "error %lu" plus NUL, and "0x%08lX" plus NUL. Both are fixed formats over a
+// bounded value, and swprintf_s truncates rather than overruns.
+constexpr size_t kErrCodeChars = 32;
+constexpr size_t kHresultChars = 16;
+
+// Bytes in the address field of a BlockRequest. Same name as the copies in
+// TcpReasm.cpp, TcpTable.cpp and StreamCapture.cpp on purpose, so a grep finds
+// every place an address width is assumed - the firewall rule's hex identity
+// and the all-zero test both read it.
+constexpr size_t kIpv6AddrBytes = 16;
+constexpr size_t kIpv4AddrBytes = 4;
+
 }  // namespace
 
 // Forward declarations for the ledger, which is defined at the end of the
@@ -93,7 +105,7 @@ std::wstring FormatWin32(DWORD code) {
         text.pop_back();
     }
     if (text.empty()) {
-        wchar_t codeBuf[32];
+        wchar_t codeBuf[kErrCodeChars];
         ::swprintf_s(codeBuf, L"error %lu", static_cast<unsigned long>(code));
         text = codeBuf;
     }
@@ -104,7 +116,7 @@ std::wstring FormatHresult(HRESULT hr) {
     if (SUCCEEDED(hr)) {
         return L"ok";
     }
-    wchar_t hex[16];
+    wchar_t hex[kHresultChars];
     ::swprintf_s(hex, L"0x%08lX", static_cast<unsigned long>(hr));
     return std::wstring(hex) + L" (" + FormatWin32(static_cast<DWORD>(hr)) + L")";
 }
@@ -140,7 +152,8 @@ void AppendHexByte(unsigned char b, std::wstring* out) {
 // unlike the readable render it is the same length for every address, which is
 // what makes the name-length budget exact rather than an estimate.
 std::wstring FormatAddressHex(const unsigned char* raw, bool ipv6) {
-    const int bytes = ipv6 ? 16 : 4;
+    const int bytes = ipv6 ? static_cast<int>(kIpv6AddrBytes)
+                           : static_cast<int>(kIpv4AddrBytes);
     std::wstring out;
     out.reserve(static_cast<size_t>(bytes) * 2);
     for (int i = 0; i < bytes; ++i) {
@@ -257,7 +270,7 @@ bool ValidateRequest(const BlockRequest& req, std::wstring* error) {
         SetError(error, L"remote port is 0 - not a usable TCP endpoint");
         return false;
     }
-    const size_t addrBytes = req.ipv6 ? 16 : 4;
+    const size_t addrBytes = req.ipv6 ? kIpv6AddrBytes : kIpv4AddrBytes;
     if (IsAllZero(req.remoteAddr, addrBytes)) {
         // The unspecified address matches no connection, and in the port-pair
         // rule it would behave as "any". Refuse rather than install a rule
