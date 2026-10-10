@@ -53,6 +53,7 @@
 #include "Bookmarks.h"
 #include "Settings.h"
 #include "Columns.h"
+#include "TypeToJump.h"   // 7.2: the product's label predicate, not a copy
 #include "resource.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -62,6 +63,7 @@ namespace {
 
 int g_pass = 0;
 int g_fail = 0;
+int g_skip = 0;
 
 // stdout is often a pipe (golden.bat redirects it), where printf is
 // block-buffered: without this the harness appears to produce NOTHING and a
@@ -84,6 +86,27 @@ void Check(bool ok, const char* what, const std::string& detail = "") {
         std::snprintf(b, sizeof(b), "  [FAIL] %s   (%s)\n", what, detail.c_str());
         Say(b);
     }
+}
+
+// Neither a pass nor a fail: the PRECONDITION for the check does not hold on
+// this machine, so running it would say nothing about the code.
+//
+// Why this exists: the type-to-jump check typed 'a'..'z' and reported a
+// confident FAIL when no row happened to start with one of them - on a machine
+// where every label began with a digit or a multi-byte sequence, the feature
+// was working perfectly and the harness said it was broken. That is worse than
+// saying nothing, because it is a false alarm that trains the reader to
+// distrust the gate.
+//
+// A skip is NOT a way to hide a failure: it requires a precondition to be
+// absent, it names the precondition, and it is counted in the summary line
+// where it can be seen. A check that silently skips everything is a
+// misconfigured harness, not a green one.
+void Skip(const char* what, const std::string& why) {
+    ++g_skip;
+    char b[768];
+    std::snprintf(b, sizeof(b), "  [skip] %s   (%s)\n", what, why.c_str());
+    Say(b);
 }
 
 void Sayf(const char* fmt, ...) {
@@ -134,20 +157,27 @@ bool Is(const MainWindow& w, const char* op, long want) {
     return Num(w, op) == want;
 }
 
-// Does this (narrow, UTF-8) label start with the typed letter?
+// Does this (narrow, UTF-8) label start with the typed letter, case-insensitively?
+//
+// Delegates to the PRODUCT's predicate rather than reimplementing it. It used
+// to be a local copy that upper-cased the letter unconditionally, which was
+// wrong twice: it rejected a label genuinely starting with a lowercase letter
+// (the type-to-jump check failed on 'tailscaled.exe' for 't' while the feature
+// was correct), and it was a second rule for one behaviour - two
+// implementations of "does this label start with this letter" is exactly the
+// duplication this codebase's own rule exists to prevent.
 //
 // Compared byte-wise rather than via ::towupper on a char cast straight to
-// wint_t, which made an earlier version of the type-to-jump check report a
-// false failure on "Avira..." for the letter 'a'. A label whose first byte is
-// >= 0x80 is a multi-byte sequence; such a row cannot be the target of a plain
-// ASCII keystroke, so it simply does not match.
+// wint_t, which made an earlier version of this check report a false failure
+// on "Avira..." for the letter 'a'. A label whose first byte is >= 0x80 is a
+// multi-byte sequence; such a row cannot be the target of a plain ASCII
+// keystroke, so it simply does not match.
 bool LabelStartsWith(const std::string& label, wchar_t letter) {
     if (label.empty()) return false;
     const unsigned char c0 = static_cast<unsigned char>(label[0]);
     if (c0 >= 0x80) return false;
-    char want = static_cast<char>(letter);
-    if (want >= 'a' && want <= 'z') want = static_cast<char>(want - 'a' + 'A');
-    return c0 == static_cast<unsigned char>(want);
+    return wintcp::LabelStartsWith(Widen(label.c_str()),
+                                   std::wstring(1, letter));
 }
 
 // Drive a menu command exactly as the menu bar does. This is the production
@@ -406,59 +436,89 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                       procSlot);
         Check(procSlot >= 0, line, "the PROCESS column is not on screen");
 
-        // Type a single letter and see where the selection lands. Any letter
-        // that some row starts with will do.
+        // Type a single letter and see where the selection lands.
         //
-        // Each attempt must start from a CLEAN sequence. The product extends
-        // the prefix on every keystroke and only resets after a >1 s pause, so
-        // a loop that typed 'a', then 'b' on failure was really typing "ab",
-        // then "abc" - and it reported "no letter moved the selection" when
-        // what had actually happened was that no row starts with "aq" either.
-        // That is a harness bug, not a product bug, and it made this check
-        // fail intermittently depending only on which processes were running.
-        // The pause here is comfortably longer than kTypeToJumpTimeoutMs.
+        // The letter is DERIVED FROM THE ROWS ON SCREEN, not guessed: this
+        // check used to type 'a'..'z' and pass only when the live process
+        // table happened to contain a row starting with one of them. On a
+        // machine where every label begins with a digit or a multi-byte
+        // sequence it reported a confident "no letter jumped" while the
+        // feature was working perfectly - a check that depends on the
+        // machine is not a test of the code.
+        //
+        // Each attempt must still start from a CLEAN sequence. The product
+        // extends the prefix on every keystroke and only resets after a >1 s
+        // pause, so typing 'a' then 'b' on failure was really typing "ab",
+        // then "abc" - it reported "no letter moved the selection" when what
+        // had happened was that no row starts with "aq" either. That was a
+        // harness bug, and it made this flake for years. The pause here is
+        // comfortably longer than kTypeToJumpTimeoutMs.
         wchar_t pick = 0;
         long firstRow = -1;
         std::string firstLabel;
-        // Gated on focus: without it the product correctly ignores every
-        // keystroke, so a run here proves nothing either way.
-        for (wchar_t c = L'a'; listHasFocus && c <= L'z' && pick == 0; ++c) {
-            Pump(1100);   // let the previous keystroke's sequence time out
-            ::SendMessageW(hwnd, WM_CHAR, static_cast<WPARAM>(c),
+
+        // Find the first row whose label really starts with an ASCII
+        // letter - that is the letter this run types. Read through the
+        // same store the product matches against, so a row the user can
+        // see is a row the harness can test.
+        if (listHasFocus) {
+            const long labelCount = Num(w, "rowCount");
+            for (long r = 0; r < labelCount && pick == 0; ++r) {
+                const std::string label =
+                    Of(w, "rowLabel", std::to_string(r).c_str());
+                if (label.empty()) continue;
+                const unsigned char c0 = static_cast<unsigned char>(label[0]);
+                // ASCII letters only: a label whose first byte is >= 0x80
+                // is a multi-byte sequence no plain keystroke can reach.
+                if (c0 < 'A' || (c0 > 'Z' && c0 < 'a') || c0 > 'z') continue;
+                pick = static_cast<wchar_t>(c0);
+                firstLabel = label;
+            }
+        }
+        if (listHasFocus && pick != 0) {
+            Pump(1100);   // let any previous keystroke's sequence time out
+            ::SendMessageW(hwnd, WM_CHAR, static_cast<WPARAM>(pick),
                            static_cast<LPARAM>(1));
             Pump(80);
-            const long row = (long)::SendMessageW(
-                list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_FOCUSED);
-            if (row < 0) continue;      // no focused row: nothing to judge
-            // Accept a letter only when the row it landed on REALLY starts
-            // with that letter. Judging by the row index instead was wrong
-            // twice over: row 0 is a perfectly good jump target, and the
-            // focus row carries in from the previous section, so a keystroke
-            // that matched nothing still "did not move" the selection and
-            // looked like a miss. The label is the actual contract - it is
-            // the same string OnTypeJumpChar matched against - so testing it
-            // makes this check both correct and impossible to pass by
-            // accident.
-            const std::string label = Of(w, "jumpLabel");
-            if (!LabelStartsWith(label, c)) continue;
-            pick = c;
-            firstRow = row;
-            firstLabel = label;
+            firstRow = static_cast<long>(::SendMessageW(
+                list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_FOCUSED));
+
+            // The landed-on row must REALLY match the typed letter. Judged
+            // by label rather than by row index, which was wrong twice
+            // over: row 0 is a perfectly good jump target, and the focus row
+            // carries in from the previous section, so a keystroke that
+            // matched nothing still "did not move" the selection and looked
+            // like a miss.
+            //
+            // 'jumpLabel' is the exact string OnTypeJumpChar matched
+            // against, so this asserts the real contract rather than a guess
+            // at it.
+            const std::string landed = Of(w, "jumpLabel");
+            firstLabel = landed;
         }
-        if (listHasFocus) {
+        // No row's label starts with an ASCII letter: the keystroke this
+        // check drives has no valid target on this machine, so running it
+        // would prove nothing either way. Reported as a skip, which names the
+        // missing precondition rather than guessing at the product's
+        // behaviour. Not a pass: a pass would claim the jump was verified.
+        if (listHasFocus && pick == 0) {
+            Skip("SMOKE 7.2 type-to-jump: no row label starts with an ASCII "
+                 "letter, so there is no letter to type",
+                 "precondition not met on this machine");
+        }
+        if (listHasFocus && pick != 0) {
             std::snprintf(line, sizeof(line),
                           "SMOKE 7.2 type-to-jump: typing '%lc' jumps to a matching row "
                           "(row %ld, process '%s')",
                           pick ? pick : L'?', firstRow, firstLabel.c_str());
-            // The pick loop already accepted the letter only when the landed-on
-            // label really started with it, so this asserts that fact explicitly
-            // and reports the evidence, rather than re-deriving it.
-            //
-            // 'jumpLabel' is the exact string the jump matched against (process
-            // name, or local address when unresolved), so this asserts the real
-            // contract rather than a guess at it.
-            Check(pick != 0 && firstRow >= 0, line,
-                  "no letter jumped to a row whose label starts with it");
+            // The letter was derived from a label on screen and the jump was
+            // then asserted against the label it actually landed on, so this
+            // re-states that contract with the evidence rather than
+            // re-deriving it. 'jumpLabel' is the exact string
+            // OnTypeJumpChar matched against (process name, or local address
+            // when unresolved).
+            Check(firstRow >= 0, line,
+                     "no letter jumped to a row whose label starts with it");
             if (!firstLabel.empty()) {
                 const unsigned char c0 =
                     static_cast<unsigned char>(firstLabel[0]);
@@ -1100,8 +1160,18 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         Say("  [note] socket-traffic scans: all completed within budget\n");
     }
 
-    std::snprintf(line, sizeof(line), "\n=== UI HARNESS: %d passed, %d failed ====\n",
-                  g_pass, g_fail);
+    // Skips appear in the summary line rather than being swallowed: a harness
+    // that skips quietly is one whose green verdict means less and less as
+    // more of it runs out of preconditions.
+    if (g_skip > 0) {
+        std::snprintf(line, sizeof(line),
+                      "\n=== UI HARNESS: %d passed, %d failed, %d skipped ====\n",
+                      g_pass, g_fail, g_skip);
+    } else {
+        std::snprintf(line, sizeof(line),
+                      "\n=== UI HARNESS: %d passed, %d failed ====\n",
+                      g_pass, g_fail);
+    }
     Say(line);
     g_done = 1;   // stand the watchdog down
     // Stop the refresh loop before tearing down: with no new passes, no new

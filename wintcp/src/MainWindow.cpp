@@ -653,6 +653,30 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
                        reinterpret_cast<LPARAM>(&di));
         return buf;
     }
+    if (::wcscmp(op, L"rowLabel") == 0) {
+        // The label OnTypeJumpChar builds its candidate list from for the
+        // row named in 'arg': the process name where there is one, the local
+        // address otherwise. Same string 'jumpLabel' reports, but for ANY
+        // row rather than only the focused one.
+        //
+        // Why it exists: the type-to-jump check used to type 'a'..'z' and
+        // pass only when the live process table happened to contain a row
+        // starting with one of them. That made it pass or fail on which
+        // processes were running rather than on whether the feature works -
+        // it failed once on a machine where every label started with a digit
+        // or a multi-byte sequence. A test that depends on the machine is not
+        // a test of the code. With this op the check derives its letter from
+        // the rows that are actually on screen.
+        if (arg == nullptr) return L"";
+        const long row = ::_wtol(arg);
+        if (row < 0) return L"";
+        const Connection* c = store_.ViewRow(static_cast<size_t>(row));
+        if (c == nullptr) return L"";
+        ::wcsncpy_s(buf, c->processName.empty() ? c->localAddress.c_str()
+                                                : c->processName.c_str(),
+                    _TRUNCATE);
+        return buf;
+    }
     if (::wcscmp(op, L"jumpLabel") == 0) {
         // The exact string OnTypeJumpChar builds its candidate list from for
         // the focused row: the process name where there is one, the local
