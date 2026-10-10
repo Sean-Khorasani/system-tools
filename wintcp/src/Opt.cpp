@@ -1577,6 +1577,7 @@ std::string JsonEscapeOpt(const std::wstring& s) {
         // Short tail: scalar rest, no SIMD setup.
         if (ulen - i < 16) break;
         size_t j = i;
+        bool cleanToEnd = false;
         for (;;) {
             const __m128i v = _mm_loadu_si128(
                 reinterpret_cast<const __m128i*>(p + j));
@@ -1589,20 +1590,25 @@ std::string JsonEscapeOpt(const std::wstring& s) {
                     _mm_cmplt_epi8(v, kSp)));
             const unsigned m =
                 static_cast<unsigned>(_mm_movemask_epi8(special));
-            if (m == 0) {
-                j += 16;
-                if (j + 16 > ulen) break;
-                continue;
+            if (m != 0) {
+                unsigned long bit = 0;
+                if (_BitScanForward(&bit, m) == 0) break;
+                j += bit;
+                break;
             }
-            unsigned long bit = 0;
-            if (_BitScanForward(&bit, m) == 0) break;
-            j += bit;
+            j += 16;
+            // Room for another full window: keep scanning. Otherwise this is
+            // the tail - hand it to the scalar loop below rather than
+            // treating p[j] as special, because it is usually not.
+            if (j + 16 <= ulen) continue;
+            cleanToEnd = true;
             break;
         }
         out.append(p + i, j - i);
-        if (j >= ulen) break;
-        emitSpecial(static_cast<unsigned char>(p[j]));
-        i = j + 1;
+        i = j;
+        if (cleanToEnd || i >= ulen) break;
+        emitSpecial(static_cast<unsigned char>(p[i]));
+        i += 1;
 #else
         break;
 #endif
