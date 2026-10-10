@@ -10,6 +10,8 @@ kill --pid 999999 --dry-run
 kill --pid 4 ;expect=2
 block --select "remote:20.47.110.73 state:estab" --dry-run
 blocks
+blocks --list
+blocks --list --format json
 unblock --address 20.47.110.73 --port 443 --dry-run
 list --group --traffic --sort nettotal --desc --limit 4 --columns pid,process,nettotal,rx,tx
 list --group --traffic --sort tx --desc --limit 4 --columns pid,process,tx,rx
