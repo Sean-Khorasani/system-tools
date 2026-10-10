@@ -225,6 +225,8 @@
     <ClCompile Include="src\IniFile.cpp" />
     <ClCompile Include="src\EmptyStateActions.cpp" />
     <ClCompile Include="src\ProcessTree.cpp" />
+    <ClCompile Include="src\Sha256.cpp" />
+    <ClInclude Include="src\Sha256.h" />
     <ClInclude Include="src\ProcessTree.h" />
     <ClInclude Include="src\EmptyStateActions.h" />
     <ClInclude Include="src\IniFile.h" />
