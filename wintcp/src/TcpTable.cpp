@@ -29,6 +29,17 @@ constexpr int kTableQueryAttempts = 8;
 constexpr ULONG kTableMinProbeBytes = 64;
 constexpr ULONG kTableMaxBytes = 1024u * 1024u * 1024u;
 
+// Bytes in the address field of every MIB_TCP6ROW_OWNER_PID / MIB_UDP6ROW pair
+// and of the IN6_ADDR they are copied into. Same name as TcpReasm.cpp's copy on
+// purpose, so a grep finds both: the IP Helper struct field and the socket scan
+// key must agree on this width or a v6 row stops being the connection it is.
+constexpr size_t kIpv6AddrBytes = 16;
+
+// "UNKNOWN(%lu)" plus a NUL. The state field is a DWORD, so ten digits is the
+// widest render; this is that plus slack, and swprintf_s truncates rather than
+// overruns in any case.
+constexpr size_t kUnknownStateChars = 48;
+
 // Printable rendering of an IPv4 address stored in network byte order.
 //
 // The body is wintcp::FormatIpv4Opt (Opt.cpp): digit-table emitters straight
@@ -154,7 +165,7 @@ std::wstring TcpStateToString(DWORD state) {
         case MIB_TCP_STATE_DELETE_TCB: return L"DELETE_TCB";
         default: break;
     }
-    wchar_t buf[48] = {0};
+    wchar_t buf[kUnknownStateChars] = {0};
     ::swprintf_s(buf, L"UNKNOWN(%lu)", static_cast<unsigned long>(state));
     return std::wstring(buf);
 }
@@ -205,8 +216,8 @@ bool EnumerateEndpoints(std::vector<Connection>& out, std::wstring& errorMessage
             Connection info;
             info.family = AF_INET6;
             info.protocol = IPPROTO_TCP;
-            std::memcpy(info.local6.s6_addr, row.ucLocalAddr, 16);
-            std::memcpy(info.remote6.s6_addr, row.ucRemoteAddr, 16);
+            std::memcpy(info.local6.s6_addr, row.ucLocalAddr, kIpv6AddrBytes);
+            std::memcpy(info.remote6.s6_addr, row.ucRemoteAddr, kIpv6AddrBytes);
             info.localScope = row.dwLocalScopeId;
             info.remoteScope = row.dwRemoteScopeId;
             info.localPort  = PortNetworkToHost(row.dwLocalPort);
@@ -262,7 +273,7 @@ bool EnumerateEndpoints(std::vector<Connection>& out, std::wstring& errorMessage
             Connection info;
             info.family = AF_INET6;
             info.protocol = IPPROTO_UDP;
-            std::memcpy(info.local6.s6_addr, row.ucLocalAddr, 16);
+            std::memcpy(info.local6.s6_addr, row.ucLocalAddr, kIpv6AddrBytes);
             info.localScope = row.dwLocalScopeId;
             info.localPort  = PortNetworkToHost(row.dwLocalPort);
             info.state = 0;
