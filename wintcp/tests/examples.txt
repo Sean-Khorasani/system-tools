@@ -1,11 +1,11 @@
-bookmark export --out bookmarks.json --force
-bookmark export --out bookmarks.json --force
-bookmark import --in bookmarks.json
-bookmark import --in bookmarks.json --yes
-preset export --out presets.json --force
-preset export --out presets.json --force
-preset import --in presets.json
-preset import --in presets.json --yes
+bookmark export --out %TEMP%\rmc_bookmarks.json --force
+bookmark export --out %TEMP%\rmc_bookmarks.json --force
+bookmark import --in %TEMP%\rmc_bookmarks.json
+bookmark import --in %TEMP%\rmc_bookmarks.json --yes
+preset export --out %TEMP%\rmc_presets.json --force
+preset export --out %TEMP%\rmc_presets.json --force
+preset import --in %TEMP%\rmc_presets.json
+preset import --in %TEMP%\rmc_presets.json --yes
 list --filter "process:AnyDesk.exe state:estab" --columns pid,process,local,remote,rport,state
 close --select "pid:5168 remote:107.155.105.90" --dry-run
 kill --select "local:port:49665" --dry-run
