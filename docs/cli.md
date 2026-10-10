@@ -303,6 +303,16 @@ The default end-mode is the hybrid: `WM_CLOSE`, then terminate if the process is
 
 `blocks` counts rules carrying the WinTCP tag, in any direction and family.
 
+`blocks --list` prints the rules themselves instead of the count, in `--format table|csv|json` (default `table`). Each row is read from the rule the firewall actually holds rather than from what the ledger remembers, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up as it really is — an `En` of `NO` and a `Block` of `NOT` — instead of being reported as protection. A rule that was deleted out from under the ledger is simply absent from the list.
+
+Listing never writes anything and never re-counts: `wintcp.exe blocks` still prints exactly the number it printed before `--list` existed, and a script that parses it is unaffected. Only `blocks` accepts `--list`; typing it at another verb is refused rather than ignored.
+
+```
+wintcp.exe blocks                     # the count
+wintcp.exe blocks --list              # every tagged rule
+wintcp.exe blocks --list --format json
+```
+
 ### `capture`
 
 `capture --select SEL --secs N --yes` records one TCP stream for a fixed window (`--secs` 1 to 60, default 5), then converts and reassembles it. The run is `N seconds + convert + parse` with no interaction.

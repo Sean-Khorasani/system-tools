@@ -277,6 +277,18 @@ Reloading works on a live session: picking another file replaces the previous on
 
 The path is the only thing remembered, not the database's contents: a file replaced in place is picked up on the next refresh. From the command line `--db FILE` stays explicit per run, and `list --watch --db FILE` re-reads the file on every tick, so a refreshed database shows up without restarting anything.
 
+## Blocked peers
+
+**View → Blocked peers…** lists the firewall rules **Block this connection** created, and lets you delete one or all of them. It needs no elevation to open or to delete a rule.
+
+Each row is read from the rule the firewall actually holds, not from what the ledger remembered writing, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up **as it really is** — a row tagged `[disabled]` or `[not a block]` — rather than being counted as protection. A block that is not blocking is the one state this window must never pass off as cover. A rule deleted out from under the ledger is simply absent from the list.
+
+- **Delete** removes the selected rule.
+- **Remove all** removes every WinTCP rule — the same function the tray menu's **Remove all WinTCP blocks** runs, reached here without the trip through the tray.
+- **Close** looks and leaves. The list is modal, and it is created from a template built in memory, so it can be dismissed without touching the view's state — a listing that could change the rows would have to say so.
+
+From the command line the same information is available as `wintcp.exe blocks --list`, in `table`, `csv` or `json` — see [`block`, `unblock`, `blocks`](cli.md#block-unblock-blocks). The window and the verb read the same rules, so they cannot disagree.
+
 ### The ASN database is a second file
 
 **View → ASN database (.mmdb)...** is a separate picker, for a separate reason: GeoLite2-Country and GeoLite2-ASN are different MaxMind products with different record shapes, so one database cannot answer both. Supply either, both or neither — the window holds them independently, so picking one never disturbs the other.
