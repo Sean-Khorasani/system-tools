@@ -70,6 +70,8 @@ add_executable(wintcp
     wintcp/src/BookmarkFile.h
     wintcp/src/PresetFile.cpp
     wintcp/src/PresetFile.h
+    wintcp/src/IniFile.cpp
+    wintcp/src/IniFile.h
     wintcp/src/Elevate.cpp
     wintcp/src/Elevate.h
     wintcp/src/GeoIp.cpp

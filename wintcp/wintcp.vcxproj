@@ -222,6 +222,8 @@
     <ClCompile Include="src\BlockedPeersDialog.cpp" />
     <ClCompile Include="src\BookmarkFile.cpp" />
     <ClCompile Include="src\PresetFile.cpp" />
+    <ClCompile Include="src\IniFile.cpp" />
+    <ClInclude Include="src\IniFile.h" />
     <ClInclude Include="src\PresetFile.h" />
     <ClInclude Include="src\BookmarkFile.h" />
     <ClInclude Include="src\BlockedPeersDialog.h" />
