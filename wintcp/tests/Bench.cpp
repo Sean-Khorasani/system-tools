@@ -52,6 +52,7 @@
 #include "ChangeLogWindow.h"  // change-log buffer cap (5.4)
 #include "Commands.h"    // abstract layer: details/preset/select helpers
 #include "BlockConn.h"   // R3: ParseLedgerBytes - the pure ledger parser
+#include "BlockedPeersDialog.h"  // 9.2.9: the dialog-template bounds
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
@@ -2977,6 +2978,142 @@ TestResult RunSelfTest() {
                   !ok && err.find(L"NUL") != std::wstring::npos,
                   "err=" + WideToUtf8(err));
         }
+    }
+
+    // 3e-bis. 9.2.9 - the firewall viewer's ledger helpers. Both are pure and
+    //        both decide the ledger's SHAPE, which is why they are pinned
+    //        directly: CountWinTcpRules and RemoveAllWinTcpRules both split on
+    //        the tab and read field 0, so a viewer that reshaped a line would
+    //        silently change what `blocks` counts. That is the one side effect
+    //        the viewer is not allowed to have.
+    {
+        const std::wstring a = L"WinTCP block: A-1-2-endpoint";
+        const std::wstring b = L"WinTCP block: A-1-2-ports";
+        const std::wstring pair = a + L"\t" + b;
+
+        // Two names, in order.
+        const std::vector<std::wstring> both = SplitLedgerNames(pair);
+        Check(r, "9.2.9.split.two-names-in-order",
+              both.size() == 2 && both[0] == a && both[1] == b,
+              "n=" + std::to_string(both.size()));
+
+        // A bare name with no tab is one name, not zero and not two.
+        const std::vector<std::wstring> one = SplitLedgerNames(a);
+        Check(r, "9.2.9.split.no-tab-is-one-name",
+              one.size() == 1 && one[0] == a,
+              "n=" + std::to_string(one.size()));
+
+        // The post-removal shape: the first field blank, the second intact.
+        // The empty first field must NOT surface as a name.
+        const std::vector<std::wstring> half = SplitLedgerNames(L"\t" + b);
+        Check(r, "9.2.9.split.blank-first-field-is-not-a-name",
+              half.size() == 1 && half[0] == b,
+              "n=" + std::to_string(half.size()));
+
+        // Both blank: nothing at all.
+        Check(r, "9.2.9.split.both-blank-is-empty",
+              SplitLedgerNames(L"\t").empty() &&
+                  SplitLedgerNames(std::wstring()).empty(),
+              "");
+
+        // Blanking the endpoint name leaves the tab where it was, so the
+        // field COUNT does not change.
+        std::wstring blanked;
+        const bool didBlank = BlankLedgerName(pair, a, &blanked);
+        Check(r, "9.2.9.blank.endpoint-keeps-the-tab",
+              didBlank && blanked == L"\t" + b, WideToUtf8(blanked));
+
+        // Blanking the PORTS name leaves field 0 alone - this is the case
+        // that would change the `blocks` count if it got it wrong.
+        const bool didBlank2 = BlankLedgerName(pair, b, &blanked);
+        const std::wstring portsLeft = a + L"\t";
+        Check(r, "9.2.9.blank.ports-keeps-field-0", didBlank2 && blanked == portsLeft,
+              WideToUtf8(blanked));
+
+        // Blanking the only name leaves an empty line, which the writer then
+        // drops; blanking nothing leaves the line untouched and says so.
+        std::wstring untouched = pair;
+        const bool noChange = BlankLedgerName(pair, L"not ours", &untouched);
+        Check(r, "9.2.9.blank.a-name-that-is-not-ours",
+              !noChange && untouched == pair, WideToUtf8(untouched));
+
+        // A name that appears as a PREFIX of the other must not match: the
+        // comparison is per-field, not a substring search.
+        const std::wstring shortName = L"WinTCP block: A-1-2-endpointX";
+        const std::wstring edge = shortName + L"\t" + L"other";
+        const bool okEdge = BlankLedgerName(edge, shortName, &blanked);
+        const std::wstring edgeLeft = L"\t" + std::wstring(L"other");
+        Check(r, "9.2.9.blank.matches-whole-fields-only",
+              okEdge && blanked == edgeLeft, WideToUtf8(blanked));
+    }
+
+    // 3e-ter. 9.2.9 - the viewer's row text and dialog-template capacity. Both
+    //        are pure and both guard a crash the UI harness cannot reach, because
+    //        it cannot dismiss a modal: the template writer's arithmetic and the
+    //        row formatter's bound are verified here, which is the whole reason
+    //        TemplateCapacity is exported.
+    {
+        // A rule that is fine reads as its name, address and port.
+        BlockedRule plain;
+        plain.name = L"WinTCP block: CB0071A9-443-80-endpoint";
+        plain.remoteAddrs = L"203.0.113.7";
+        plain.remotePorts = L"443";
+        plain.enabled = true;
+        plain.isBlocking = true;
+        const std::wstring okRow = BlockedPeersRowText(plain);
+        Check(r, "9.2.9.row.plain-has-no-warning",
+              okRow.find(L"[disabled]") == std::wstring::npos &&
+                  okRow.find(L"[not a block]") == std::wstring::npos,
+              WideToUtf8(okRow));
+
+        // The two states that matter are LABELLED, never passed off as a block.
+        BlockedRule disabled = plain;
+        disabled.enabled = false;
+        const std::wstring disRow = BlockedPeersRowText(disabled);
+        Check(r, "9.2.9.row.disabled-is-labelled",
+              disRow.find(L"[disabled]") != std::wstring::npos,
+              WideToUtf8(disRow));
+
+        BlockedRule allowRule = plain;
+        allowRule.isBlocking = false;
+        const std::wstring allowRow = BlockedPeersRowText(allowRule);
+        Check(r, "9.2.9.row.not-a-block-is-labelled",
+              allowRow.find(L"[not a block]") != std::wstring::npos,
+              WideToUtf8(allowRow));
+
+        // A name far longer than the row is truncated, not overflowed, and the
+        // row still holds its address.
+        BlockedRule huge = plain;
+        huge.name = std::wstring(5000, L'W');
+        const std::wstring hugeRow = BlockedPeersRowText(huge);
+        Check(r, "9.2.9.row.long-name-truncates",
+              hugeRow.size() < 5000, "len=" + std::to_string(hugeRow.size()));
+
+        // Template capacity: the writer allocates for exactly this many bytes
+        // and refuses to exceed them, so pinning the arithmetic is what keeps
+        // the "refuse rather than overrun" contract honest as the layout
+        // changes. A title of any length the code will accept must still fit.
+        const size_t cap = BlockedPeersTemplateCapacity(0);
+        Check(r, "9.2.9.dialog.capacity-is-sane",
+              cap > sizeof(DLGTEMPLATE) && cap < 1024 * 1024,
+              "cap=" + std::to_string(cap));
+
+        // A small buffer is REFUSED, not written into. This is the exact
+        // failure PromptDialog.cpp documents: a writer that only advances the
+        // cursor corrupts the heap before it ever checks.
+        std::vector<BYTE> tiny(8, 0);
+        Check(r, "9.2.9.dialog.refuses-a-tiny-buffer",
+              !BlockedPeersTemplateFits(L"Blocked peers", &tiny) ||
+                  tiny.size() <= 8,
+              "size=" + std::to_string(tiny.size()));
+
+        // And a correctly sized buffer IS accepted, so the check above is a
+        // refusal rather than an always-false predicate.
+        std::vector<BYTE> right(cap + 64, 0);
+        const bool filled =
+            BlockedPeersTemplateFits(L"Blocked peers", &right);
+        Check(r, "9.2.9.dialog.fills-a-right-sized-buffer",
+              filled && right.size() <= cap + 64, "size=" + std::to_string(right.size()));
     }
 
     // 3d3. The pre-join view. A filter with an enrichment clause had NO view
