@@ -71,6 +71,10 @@ constexpr uint8_t kTypeBool = 14;
 
 // A 5-bit size of 29/30/31 means the size continues in the next 1/2/3 bytes.
 constexpr uint8_t kSizeExtended29 = 29;
+// Named so PayloadSize can test against it the same way it tests 29. The
+// neighbouring bases below are the spec's; a bare 30 here would be the one
+// case whose spelling did not match the constant that documents it.
+constexpr uint8_t kSizeExtended30 = 30;
 // The spec's two larger extended forms: a 2-byte size adds to 285, a 3-byte
 // size adds to 65821. Both numbers are arbitrary-looking but they are the
 // spec's, not ours, and the arithmetic is checked against them - a reader that
@@ -421,18 +425,18 @@ private:
             *size = s;
             return true;
         }
-        if (s == 29) {
+        if (s == kSizeExtended29) {
             if (*pos >= size_) return false;
             *size = kSizeExtended29 + static_cast<uint32_t>(data_[*pos]);
             *pos += 1;
             return true;
         }
         // 30 -> 2 bytes added to 285; 31 -> 3 bytes added to 65821.
-        const size_t extra = (s == 30) ? kSizeExtraBytes30 : kSizeExtraBytes31;
+        const size_t extra = (s == kSizeExtended30) ? kSizeExtraBytes30 : kSizeExtraBytes31;
         if (*pos + extra > size_) return false;
         uint64_t v = 0;
         ReadBytes(data_ + *pos, extra, &v);
-        *size = static_cast<uint32_t>((s == 30 ? kSizeExtended30Base : kSizeExtended31Base) + v);
+        *size = static_cast<uint32_t>((s == kSizeExtended30 ? kSizeExtended30Base : kSizeExtended31Base) + v);
         *pos += extra;
         return true;
     }
