@@ -41,12 +41,26 @@ constexpr uint8_t kHsClientHello = 1;
 constexpr uint8_t kHsServerHello = 2;
 constexpr uint8_t kHsCertificate = 11;
 
+// The Random field of a ClientHello and a ServerHello is 32 octets in both
+// (RFC 8446 s4.1.2). Four call sites skip it, and a wrong width desynchronises
+// the rest of the parse - the session id starts immediately after it.
+constexpr size_t kHelloRandomBytes = 32;
+
+// "YYYY-MM-DD" for a certificate validity date, plus NUL.
+constexpr size_t kDateTextChars = 32;
+
+// CertGetNameStringW output width. A subject DN is bounded by the certificate
+// size, not by this, and CertGetNameStringW truncates rather than overruns -
+// so this is slack chosen so a long organisational name still reads, and the
+// same buffer is reused for subject and issuer.
+constexpr size_t kCertNameChars = 512;
+
 std::string FormatFiletime(const FILETIME& ft) {
     FILETIME local = {};
     SYSTEMTIME st = {};
     if (::FileTimeToLocalFileTime(&ft, &local) == FALSE) return std::string();
     if (::FileTimeToSystemTime(&local, &st) == FALSE) return std::string();
-    char buf[32] = {0};
+    char buf[kDateTextChars] = {0};
     std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u",
                   static_cast<unsigned>(st.wYear),
                   static_cast<unsigned>(st.wMonth),
@@ -58,10 +72,10 @@ std::string FormatFiletime(const FILETIME& ft) {
 
 std::string TlsRecordTypeName(uint8_t type) {
     switch (type) {
-        case 20: return "ChangeCipherSpec";
-        case 21: return "Alert";
-        case 22: return "Handshake";
-        case 23: return "Encrypted record";
+        case kTlsChangeCipherSpec: return "ChangeCipherSpec";
+        case kTlsAlert:           return "Alert";
+        case kTlsHandshake:       return "Handshake";
+        case kTlsApplicationData: return "Encrypted record";
         default: return std::string();
     }
 }
@@ -120,7 +134,8 @@ bool LooksLikeTls(const std::string& b) {
     // A record header is 5 bytes: type 20-23, version 0x03xx, length.
     if (b.size() < 5) return false;
     const unsigned char* p = reinterpret_cast<const unsigned char*>(b.data());
-    if (p[0] < 20 || p[0] > 23) return false;
+    if (p[0] < kTlsChangeCipherSpec || p[0] > kTlsApplicationData)
+        return false;
     if (p[1] != 0x03) return false;
     return true;
 }
@@ -222,7 +237,7 @@ void ParseClientHelloExtensions(Reader& r, uint32_t extLen, TlsHandshake* hs) {
         // (Opt.cpp): only 0x0000 (server_name) and 0x0010 (ALPN) are
         // handled, and a 17-entry table turns the if/else chain into one
         // range check plus an indexed load. A/B bench: 1.26x.
-        // The length checks are theirs alone, unchanged, so a short
+        // The length checks are theirs own, unchanged, so a short
         // extension is still refused before its body is read.
         switch (ClassifyTlsExtensionOpt(type)) {
             case TlsExtAction::kSni:
@@ -241,12 +256,12 @@ void ParseClientHelloExtensions(Reader& r, uint32_t extLen, TlsHandshake* hs) {
                                 nameLen);
                             // Trailing NUL/dot strip is
                             // wintcp::StripSniTailOpt (Opt.cpp): SSE2
-                            // 16-byte tail scan with a scalar finish, for a
-                            // scalar loop that popped one byte at a time.
-                            // A/B bench: 16.99x on the names that exercise
-                            // the SIMD path; names under 32 bytes stay
-                            // scalar inside it, because one SIMD step costs
-                            // more than a handful of byte pops.
+                            // 16-byte tail scan with a scalar finish, for
+                            // a scalar loop that popped one byte at a
+                            // time. A/B bench: 16.99x on the names that
+                            // exercise the SIMD path; names under 32 bytes
+                            // stay scalar inside it, because one SIMD step
+                            // costs more than a handful of byte pops.
                             hs->sni.resize(StripSniTailOpt(
                                 hs->sni.empty() ? nullptr : &hs->sni[0],
                                 hs->sni.size()));
@@ -281,8 +296,8 @@ void ParseClientHello(const unsigned char* p, size_t n, TlsHandshake* hs) {
     uint16_t ver = 0;
     if (!r.U16(&ver)) return;
     hs->clientVersion = ver;
-    if (!r.Need(32)) return;
-    r.Skip(32);
+    if (!r.Need(kHelloRandomBytes)) return;
+    r.Skip(kHelloRandomBytes);
     uint8_t sidLen = 0;
     if (!r.U8(&sidLen) || !r.Need(sidLen)) return;
     r.Skip(sidLen);
@@ -311,8 +326,8 @@ void ParseServerHello(const unsigned char* p, size_t n, TlsHandshake* hs) {
     uint16_t ver = 0;
     if (!r.U16(&ver)) return;
     hs->serverVersion = ver;
-    if (!r.Need(32)) return;   // random
-    r.Skip(32);
+    if (!r.Need(kHelloRandomBytes)) return;   // random
+    r.Skip(kHelloRandomBytes);
     uint8_t sidLen = 0;
     if (!r.U8(&sidLen) || !r.Need(sidLen)) return;
     r.Skip(sidLen);
@@ -367,11 +382,11 @@ static void FillCertFromDer(const unsigned char* der, size_t derLen,
         ::CertCreateCertificateContext(X509_ASN_ENCODING, der, len);
     if (ctx == nullptr) return;
 
-    wchar_t name[512] = {0};
+    wchar_t name[kCertNameChars] = {0};
     // CertGetNameStringW takes the buffer size BY VALUE, not by pointer, and
     // updates nothing - a &chars here does not even compile.
     if (::CertGetNameStringW(ctx, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr,
-                             name, 512) != 0) {
+                             name, kCertNameChars) != 0) {
         // WideToUtf8, not assign(begin, end): the latter narrows wchar_t to
         // char and mangles any non-ASCII subject. DN components are routinely
         // UTF-8 (internationalised domains, CJK organisations).
@@ -381,7 +396,7 @@ static void FillCertFromDer(const unsigned char* der, size_t derLen,
     // CERT_NAME_ISSUER_STR is 3; spelled numerically because the symbolic
     // constant is not exposed at this _WIN32_WINNT level.
     if (::CertGetNameStringW(ctx, 3 /*CERT_NAME_ISSUER_STR*/, 0, nullptr, name,
-                             512) != 0) {
+                             kCertNameChars) != 0) {
         hs->certIssuer = WideToUtf8(name);
     }
     std::string from = FormatFiletime(ctx->pCertInfo->NotBefore);
