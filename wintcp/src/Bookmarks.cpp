@@ -43,6 +43,18 @@ constexpr size_t kMaxAddressChars = 128;
 // Bounded so a pathological key cannot spin a caller loop forever.
 constexpr DWORD kMaxSubKeys = 65536u;
 
+// FILETIME epoch arithmetic, named because the two functions below are the
+// only bridge between the registry's UTC unix seconds and the Windows
+// 1601-based tick count, and both magic numbers are needed in both
+// directions: ticks are 100 ns, and 11644473600 seconds separate the two
+// epochs. A digit lost in either one moves every bookmark's timestamp.
+constexpr std::uint64_t kFileTimeTicksPerSecond = 10000000ULL;
+constexpr std::uint64_t kFileTimeEpochOffsetTicks = 116444736000000000ULL;
+
+// The first byte of fe80::/8, which is where a numeric scope id carries
+// meaning. Same name as Utils.cpp's copy on purpose, so a grep finds both.
+constexpr unsigned char kLinkLocalFirstByte = 0xFE;
+
 // A link-local address written without a scope is completed with the
 // interface index, which is exactly what the display code appends
 // (TcpTable.cpp PrintIpv6 renders "fe80::1%12"). Using it here rather than
@@ -125,7 +137,7 @@ bool WriteQword(HKEY key, const wchar_t* name, std::uint64_t value) {
 
 // True for fe00::/8 - see the note on NormalizeAddress().
 bool IsScopedFamily(const unsigned char* a) {
-    return a[0] == 0xFE;
+    return a[0] == kLinkLocalFirstByte;
 }
 
 bool IsUnspecified(const unsigned char* a) {
@@ -191,13 +203,15 @@ std::uint64_t FileTimeToUnixSeconds(const FILETIME& ft) {
     ticks.LowPart = ft.dwLowDateTime;
     ticks.HighPart = ft.dwHighDateTime;
     // 11644473600 seconds between 1601-01-01 and 1970-01-01.
-    if (ticks.QuadPart < 116444736000000000ULL) return 0;
-    return (ticks.QuadPart - 116444736000000000ULL) / 10000000ULL;
+    if (ticks.QuadPart < kFileTimeEpochOffsetTicks) return 0;
+    return (ticks.QuadPart - kFileTimeEpochOffsetTicks) /
+           kFileTimeTicksPerSecond;
 }
 
 FILETIME UnixSecondsToFileTime(std::uint64_t seconds) {
     ULARGE_INTEGER ticks = {};
-    ticks.QuadPart = seconds * 10000000ULL + 116444736000000000ULL;
+    ticks.QuadPart = seconds * kFileTimeTicksPerSecond +
+                     kFileTimeEpochOffsetTicks;
     FILETIME out;
     out.dwLowDateTime = ticks.LowPart;
     out.dwHighDateTime = ticks.HighPart;
