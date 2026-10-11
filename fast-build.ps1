@@ -162,14 +162,21 @@ try {
     # ---- sources --------------------------------------------------------------------
     # Same split as build.bat: the product is main.cpp + everything else in
     # wintcp\src; the test driver is the same src set minus main.cpp plus the
-    # three files in wintcp\tests. d2probe.cpp is deliberately NOT part of
-    # either (docs/development.md). GLOB, never a hand list: a hand-kept list is
-    # how this project collected nine identical link failures before.
+    # everything in wintcp\tests. d2probe.cpp is deliberately NOT part of
+    # either (docs/development.md).
+    #
+    # GLOB, never a hand list. This line used to name 'TestMain.cpp',
+    # 'Bench.cpp' and 'UiHarness.cpp' explicitly while claiming to be a glob
+    # just above it, and adding wintcp\tests\BenchSync.cpp (9.6.2/C12) broke
+    # the link with eight LNK2019s - build.bat, CMakeLists.txt and the vcxproj
+    # were all updated and this one was not. That is the same "four build
+    # paths must stay in step" trap the tracker's §6 warns about, reached
+    # through the one path that spelled itself out. So it globs now.
     $srcCpp  = @(Get-ChildItem -LiteralPath $SrcDir -Filter '*.cpp' | ForEach-Object { $_.FullName })
     $mainCpp = Join-Path $SrcDir 'main.cpp'
     if (-not (Test-Path -LiteralPath $mainCpp)) { Die 3 "wintcp\src\main.cpp not found; is the tree complete?" }
     $coreCpp = @($srcCpp | Where-Object { $_.ToLower() -ne $mainCpp.ToLower() })
-    $tstCpp  = @('TestMain.cpp', 'Bench.cpp', 'UiHarness.cpp') | ForEach-Object { Join-Path $TstSrc $_ }
+    $tstCpp  = @(Get-ChildItem -LiteralPath $TstSrc -Filter '*.cpp' | Where-Object { $_.Name -ne 'd2probe.cpp' } | ForEach-Object { $_.FullName })
     foreach ($f in $tstCpp) { if (-not (Test-Path -LiteralPath $f)) { Die 3 "missing $f" } }
 
     $prodCpp = @($mainCpp) + $coreCpp                       # 40 currently
