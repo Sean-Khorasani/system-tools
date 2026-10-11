@@ -4,6 +4,8 @@
 
 #include "BlockedPeersDialog.h"
 
+#include <algorithm>
+#include <commctrl.h>
 #include <cstring>
 #include <vector>
 
@@ -48,6 +50,17 @@ struct BlockedPeersState {
     std::vector<BlockedRule> rules;
     BlockedPeersChoice choice = BlockedPeersChoice::kRefused;
     std::wstring failure;
+    // Set the moment a rule is actually deleted, enabled,
+    // disabled or every rule removed. The close paths report
+    // kChanged only when this is set, so dismissing the viewer
+    // without touching anything reports kClosed - a refresh of
+    // the main table is earned, not assumed (G22).
+    bool dirty = false;
+    // G14: click-to-sort state. Column, then direction; a second click on
+    // the same header flips the direction, a click elsewhere re-sorts
+    // ascending. Name order is the default, matching the ledger.
+    int sortCol = kBlockedColRule;
+    bool sortAsc = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -113,6 +126,63 @@ bool WriteItem(BYTE** cursor, const BYTE* end, DWORD style,
 // Build the whole template. Returns an empty vector on any refusal; the caller
 // must not hand a partial template to the dialog manager, because cdit says
 // kControlCount and fewer controls would make it read past the end.
+// Write one DLGITEMTEMPLATE whose class is a STRING (e.g. L"SysListView32")
+// rather than an ordinal. Same bounds-checked contract as WriteItem above:
+// alignment first, every write preceded by a capacity check, false on any
+// refusal. The caption is the control's initial text (null for the list:
+// its columns and rows are filled at runtime, not from the template).
+bool WriteItemWithClass(BYTE** cursor, const BYTE* end, DWORD style,
+                        short ix, short iy, short icx, short icy, int id,
+                        const wchar_t* className, const wchar_t* caption) {
+    BYTE*& p = *cursor;
+    const auto usable = [&p, end](size_t n) {
+        const std::ptrdiff_t room = end - p;
+        return room >= 0 && n <= static_cast<size_t>(room);
+    };
+
+    const auto addr = reinterpret_cast<uintptr_t>(p);
+    const auto aligned = (addr + 3u) & ~static_cast<uintptr_t>(3u);
+    if (aligned < addr) return false;
+    const size_t skip = static_cast<size_t>(aligned - addr);
+    if (!usable(skip)) return false;
+    if (end - p < 0) return false;
+    p = reinterpret_cast<BYTE*>(aligned);
+
+    if (!usable(sizeof(DLGITEMTEMPLATE))) return false;
+    auto* it = reinterpret_cast<DLGITEMTEMPLATE*>(p);
+    it->style = style;
+    it->x = ix;
+    it->y = iy;
+    it->cx = icx;
+    it->cy = icy;
+    it->id = static_cast<WORD>(id);
+    p += sizeof(DLGITEMTEMPLATE);
+
+    // Class as a null-terminated string, DWORD-padded like every string in
+    // a template. An ordinal (0xFFFF + value) would also work for the
+    // six built-in classes, but SysListView32 is not one of them.
+    if (className == nullptr) return false;
+    const size_t classChars = wcslen(className) + 1;
+    const size_t classBytes = Pad4(classChars * sizeof(wchar_t));
+    if (!usable(classBytes)) return false;
+    memcpy(p, className, classChars * sizeof(wchar_t));
+    p += classBytes;
+
+    const size_t n = (caption == nullptr) ? 1 : wcslen(caption) + 1;
+    const size_t bytes = Pad4(n * sizeof(wchar_t));
+    if (!usable(bytes)) return false;
+    if (caption != nullptr) {
+        memcpy(p, caption, n * sizeof(wchar_t));
+    } else {
+        memset(p, 0, bytes);
+    }
+    p += bytes;
+
+    if (!usable(2)) return false;
+    memset(p, 0, 2);   // no extra data
+    p += 2;
+    return true;
+}
 std::vector<BYTE> MakeTemplate(const wchar_t* title) {
     if (title == nullptr) return std::vector<BYTE>();
 
@@ -167,32 +237,219 @@ std::vector<BYTE> MakeTemplate(const wchar_t* title) {
     memcpy(p, kFont, (sizeof(kFont) / sizeof(wchar_t)) * sizeof(wchar_t));
     p += fontBytes;
 
-    // List box: the working area. Slightly shorter than the viewer's was, to
-    // make room for the second button row the editor adds.
-    const DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER |
-                            LBS_NOTIFY | LBS_HASSTRINGS;
-    if (!WriteItem(&p, end, listStyle, 8, 8, 320, 96, kIdList, 0x83,
-                   nullptr)) {
+    // G14: a report view, not a plain list box - Rule / Remote / Status
+    // columns with a header and click-to-sort, so state is a sortable
+    // column instead of a "[disabled]" text suffix. Single-select: every
+    // action below acts on exactly one rule.
+    const DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP |
+                            LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL;
+    if (!WriteItemWithClass(&p, end, listStyle, 8, 8, 320, 92, kIdList,
+                            L"SysListView32", nullptr)) {
         return std::vector<BYTE>();
     }
-    // Row 1: the lifecycle actions.
+    // Two button rows at the new readable size (G14: the old 76x16
+    // buttons were barely tappable). Row 1: the lifecycle actions.
+    // Row 2: Remove all and Close.
     if (!WriteItem(&p, end,
-                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 8, 112,
-                   76, 16, kIdDelete, 0x81, L"Delete") ||
-        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 88, 112,
-                   76, 16, kIdEnable, 0x81, L"Enable") ||
-        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 168, 112,
-                   76, 16, kIdDisable, 0x81, L"Disable") ||
-        // Row 2: Remove all and Close.
-        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 8, 132,
-                   98, 16, kIdRemoveAll, 0x81, L"Remove all") ||
-        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 110, 132,
-                   98, 16, kIdClose, 0x81, L"Close")) {
+                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 8,
+                   106, 88, 23, kIdDelete, 0x81, L"Delete") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 100, 106,
+                   88, 23, kIdEnable, 0x81, L"Enable") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 192, 106,
+                   88, 23, kIdDisable, 0x81, L"Disable") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 8, 133,
+                   132, 23, kIdRemoveAll, 0x81, L"Remove all") ||
+        !WriteItem(&p, end, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 144, 133,
+                   132, 23, kIdClose, 0x81, L"Close")) {
         return std::vector<BYTE>();
     }
 
     buf.resize(static_cast<size_t>(p - begin));
     return buf;
+}
+
+// Sort rank for the Status column: blocking-and-enabled first (the
+// healthy state), then disabled, then rules that are no longer blocks at
+// all. Any total order would sort; this one puts the surprising rows last,
+// where a reader scanning for trouble looks.
+int StatusRank(const BlockedRule& r) {
+    if (!r.isBlocking) return 2;
+    return r.enabled ? 0 : 1;
+}
+
+// Order st->rules by the current click-to-sort column, with the rule name
+// as the tiebreak so Status/Remote sorts are stable in a way a reader can
+// follow (two "disabled" rows keep ledger order otherwise only by luck of
+// stable_sort - and luck is not a contract).
+void SortRules(BlockedPeersState* st) {
+    if (st == nullptr) return;
+    const int col = st->sortCol;
+    const bool asc = st->sortAsc;
+    std::stable_sort(st->rules.begin(), st->rules.end(),
+                     [col, asc](const BlockedRule& a, const BlockedRule& b) {
+                         int c = 0;
+                         if (col == kBlockedColRemote) {
+                             c = BlockedPeersCellText(a, col).compare(
+                                 BlockedPeersCellText(b, col));
+                         } else if (col == kBlockedColStatus) {
+                             c = StatusRank(a) - StatusRank(b);
+                         } else {
+                             c = a.name.compare(b.name);
+                         }
+                         if (c == 0 && col != kBlockedColRule)
+                             c = a.name.compare(b.name);
+                         return asc ? (c < 0) : (c > 0);
+                     });
+}
+
+// The one selected rule, or -1. Single-select list, so "the selection" is
+// one index - the multi-select walk the list box needed is gone with it.
+int SelectedRuleIndex(HWND list) {
+    if (list == nullptr) return -1;
+    return static_cast<int>(::SendMessageW(
+        list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
+        MAKELPARAM(LVNI_SELECTED, 0)));
+}
+
+// Enable the per-rule actions only when there is a rule to act on. The
+// empty list carries a placeholder row (G35) that is not a rule, so the
+// buttons must not invite acting on it.
+void SyncActionButtons(HWND dlg, bool haveRules) {
+    if (dlg == nullptr) return;
+    const int ids[] = {kIdDelete, kIdEnable, kIdDisable, kIdRemoveAll};
+    for (int id : ids) {
+        HWND b = ::GetDlgItem(dlg, id);
+        if (b != nullptr) ::EnableWindow(b, haveRules ? TRUE : FALSE);
+    }
+}
+
+// The header's sort arrow follows st->sortCol/st->sortAsc, so the header
+// says which column orders the list instead of the user having to guess.
+void UpdateSortIndicator(HWND list, const BlockedPeersState* st) {
+    if (list == nullptr || st == nullptr) return;
+    HWND hdr = reinterpret_cast<HWND>(
+        ::SendMessageW(list, LVM_GETHEADER, 0, 0));
+    if (hdr == nullptr) return;
+    for (int c = 0; c < kBlockedColCount; ++c) {
+        HDITEMW hdi = {};
+        hdi.mask = HDI_FORMAT;
+        if (::SendMessageW(hdr, HDM_GETITEMW, static_cast<WPARAM>(c),
+                           reinterpret_cast<LPARAM>(&hdi)) == FALSE)
+            continue;
+        hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (c == st->sortCol)
+            hdi.fmt |= (st->sortAsc ? HDF_SORTUP : HDF_SORTDOWN);
+        ::SendMessageW(hdr, HDM_SETITEMW, static_cast<WPARAM>(c),
+                       reinterpret_cast<LPARAM>(&hdi));
+    }
+}
+
+// Create the Rule/Remote/Status columns once, sharing the list's width.
+// Fixed fractions, not persisted: the dialog is fixed-size, so the only
+// width the columns ever have is this one.
+void SetupColumns(HWND list) {
+    if (list == nullptr) return;
+    HWND hdr = reinterpret_cast<HWND>(
+        ::SendMessageW(list, LVM_GETHEADER, 0, 0));
+    if (hdr != nullptr &&
+        ::SendMessageW(hdr, HDM_GETITEMCOUNT, 0, 0) > 0)
+        return;   // already built (a second Show reuses the dialog)
+    RECT rc = {};
+    ::GetClientRect(list, &rc);
+    int total = rc.right - rc.left;
+    if (total <= 0) total = 320;
+    const wchar_t* titles[kBlockedColCount] = {L"Rule", L"Remote", L"Status"};
+    const int widths[kBlockedColCount] = {total * 45 / 100,
+                                          total * 32 / 100,
+                                          total - total * 45 / 100 -
+                                              total * 32 / 100};
+    for (int c = 0; c < kBlockedColCount; ++c) {
+        LVCOLUMNW col = {};
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+        col.fmt = LVCFMT_LEFT;
+        col.cx = (widths[c] > 0) ? widths[c] : 10;
+        col.pszText = const_cast<LPWSTR>(titles[c]);
+        col.iSubItem = c;
+        ::SendMessageW(list, LVM_INSERTCOLUMNW, static_cast<WPARAM>(c),
+                       reinterpret_cast<LPARAM>(&col));
+    }
+    ::SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
+                   LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                       LVS_EX_LABELTIP);
+}
+
+// Render st->rules into the list: sorted, with the selection following the
+// rule it was on. keepName is the selected rule before the rebuild (empty
+// = none); the row is found by NAME because a re-sort moves indices.
+void FillItems(HWND list, BlockedPeersState* st,
+               const std::wstring& keepName) {
+    if (list == nullptr || st == nullptr) return;
+    SortRules(st);
+    ::SendMessageW(list, WM_SETREDRAW, FALSE, 0);
+    ::SendMessageW(list, LVM_DELETEALLITEMS, 0, 0);
+    if (st->rules.empty()) {
+        // G35: an empty viewer names its next action instead of sitting
+        // blank. Blocking a connection is what adds the first row, so
+        // the placeholder points there.
+        LVITEMW it = {};
+        it.mask = LVIF_TEXT;
+        it.iItem = 0;
+        it.iSubItem = 0;
+        wchar_t place[] =
+            L"(no blocked rules \u2014 blocking a connection adds one here)";
+        it.pszText = place;
+        ::SendMessageW(list, LVM_INSERTITEMW, 0,
+                       reinterpret_cast<LPARAM>(&it));
+    } else {
+        for (size_t i = 0; i < st->rules.size(); ++i) {
+            const BlockedRule& r = st->rules[i];
+            std::wstring cells[kBlockedColCount];
+            for (int c = 0; c < kBlockedColCount; ++c)
+                cells[c] = BlockedPeersCellText(r, c);
+            LVITEMW it = {};
+            it.mask = LVIF_TEXT;
+            it.iItem = static_cast<int>(i);
+            it.iSubItem = 0;
+            it.pszText = cells[0].data();
+            const LRESULT at = ::SendMessageW(
+                list, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&it));
+            if (at < 0) continue;
+            for (int c = 1; c < kBlockedColCount; ++c) {
+                LVITEMW sub = {};
+                sub.mask = LVIF_TEXT;
+                sub.iItem = static_cast<int>(at);
+                sub.iSubItem = c;
+                sub.pszText = cells[c].data();
+                ::SendMessageW(list, LVM_SETITEMTEXTW,
+                               static_cast<WPARAM>(at),
+                               reinterpret_cast<LPARAM>(&sub));
+            }
+        }
+    }
+    // Restore the selection by name, or park it on the first rule. The
+    // placeholder is never selected: it is not a rule and the actions
+    // refuse anything that is not one.
+    int restore = -1;
+    if (!st->rules.empty()) {
+        for (size_t i = 0; i < st->rules.size(); ++i) {
+            if (st->rules[i].name == keepName) {
+                restore = static_cast<int>(i);
+                break;
+            }
+        }
+        if (restore < 0) restore = 0;
+        LVITEMW sel = {};
+        sel.mask = LVIF_STATE;
+        sel.iItem = restore;
+        sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+        sel.state = LVIS_SELECTED | LVIS_FOCUSED;
+        ::SendMessageW(list, LVM_SETITEMSTATE, static_cast<WPARAM>(restore),
+                       reinterpret_cast<LPARAM>(&sel));
+    }
+    ::SendMessageW(list, WM_SETREDRAW, TRUE, 0);
+    ::InvalidateRect(list, nullptr, TRUE);
+    UpdateSortIndicator(list, st);
+    SyncActionButtons(::GetParent(list), !st->rules.empty());
 }
 
 // Repopulate the list from the firewall. Called on init and after every
@@ -203,16 +460,12 @@ std::vector<BYTE> MakeTemplate(const wchar_t* title) {
 // point of an editor is that you change one thing and SEE the result, so this
 // spends the cost of a re-list and keeps the selection on the same rule when
 // it still exists.
-void ReloadRules(HWND list, std::vector<BlockedRule>* rules) {
-    if (list == nullptr || rules == nullptr) {
-        return;
-    }
-    const LRESULT sel = ::SendMessageW(list, LB_GETCURSEL, 0, 0);
+void ReloadRules(HWND list, BlockedPeersState* st) {
+    if (list == nullptr || st == nullptr) return;
+    const int sel = SelectedRuleIndex(list);
     std::wstring keepName;
-    if (sel != LB_ERR && sel >= 0 &&
-        static_cast<size_t>(sel) < rules->size()) {
-        keepName = (*rules)[static_cast<size_t>(sel)].name;
-    }
+    if (sel >= 0 && static_cast<size_t>(sel) < st->rules.size())
+        keepName = st->rules[static_cast<size_t>(sel)].name;
 
     std::wstring error;
     std::vector<BlockedRule> fresh;
@@ -228,24 +481,27 @@ void ReloadRules(HWND list, std::vector<BlockedRule>* rules) {
         }
         return;
     }
-    *rules = std::move(fresh);
+    st->rules = std::move(fresh);
+    FillItems(list, st, keepName);
+}
 
-    ::SendMessageW(list, WM_SETREDRAW, FALSE, 0);
-    ::SendMessageW(list, LB_RESETCONTENT, 0, 0);
-    int restore = -1;
-    for (size_t i = 0; i < rules->size(); ++i) {
-        const std::wstring row = BlockedPeersRowText((*rules)[i]);
-        const LRESULT at =
-            ::SendMessageW(list, LB_ADDSTRING, 0,
-                           reinterpret_cast<LPARAM>(row.c_str()));
-        if (at != LB_ERR && (*rules)[i].name == keepName) {
-            restore = static_cast<int>(at);
-        }
+// A header click re-sorts what is already shown. The firewall is NOT
+// re-queried: sorting is a view operation, and a COM round trip per
+// click would make the header feel stuck.
+void OnSortClick(HWND list, BlockedPeersState* st, int col) {
+    if (list == nullptr || st == nullptr) return;
+    if (col < 0 || col >= kBlockedColCount) return;
+    if (st->sortCol == col) {
+        st->sortAsc = !st->sortAsc;
+    } else {
+        st->sortCol = col;
+        st->sortAsc = true;
     }
-    ::SendMessageW(list, LB_SETCURSEL,
-                   restore >= 0 ? restore : (rules->empty() ? -1 : 0), 0);
-    ::SendMessageW(list, WM_SETREDRAW, TRUE, 0);
-    ::InvalidateRect(list, nullptr, TRUE);
+    const int sel = SelectedRuleIndex(list);
+    std::wstring keep;
+    if (sel >= 0 && static_cast<size_t>(sel) < st->rules.size())
+        keep = st->rules[static_cast<size_t>(sel)].name;
+    FillItems(list, st, keep);
 }
 
 INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -259,7 +515,9 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     switch (msg) {
         case WM_INITDIALOG: {
-            ReloadRules(GetDlgItem(hwnd, kIdList), &st->rules);
+            HWND list = GetDlgItem(hwnd, kIdList);
+            SetupColumns(list);
+            ReloadRules(list, st);
             RECT rc = {};
             ::GetWindowRect(hwnd, &rc);
             RECT own = {};
@@ -272,19 +530,47 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             return TRUE;
         }
+        case WM_NOTIFY: {
+            // G14: header clicks sort. The notification arrives from the
+            // list's header with the list's own id, so anything else is
+            // left to the default handler.
+            auto* nm = reinterpret_cast<LPNMHDR>(lp);
+            if (nm != nullptr && nm->idFrom == kIdList &&
+                nm->code == HDN_ITEMCLICK) {
+                auto* hn = reinterpret_cast<LPNMHEADERW>(lp);
+                OnSortClick(GetDlgItem(hwnd, kIdList), st, hn->iItem);
+                return TRUE;
+            }
+            break;
+        }
         case WM_COMMAND: {
             const int id = LOWORD(wp);
             const int code = HIWORD(wp);
             if (id == kIdClose || id == IDCANCEL) {
-                st->choice = BlockedPeersChoice::kChanged;
+                // G22: dismissing the viewer is not a change. Only
+                // report kChanged when a rule was actually added to
+                // or removed from the blocked set - otherwise the
+                // caller refreshes the main table for nothing.
+                st->choice = st->dirty
+                                 ? BlockedPeersChoice::kChanged
+                                 : BlockedPeersChoice::kClosed;
                 ::EndDialog(hwnd, TRUE);
                 return TRUE;
             }
             if (code != BN_CLICKED) break;
             HWND list = GetDlgItem(hwnd, kIdList);
-            const LRESULT sel = ::SendMessageW(list, LB_GETCURSEL, 0, 0);
+            const int sel = SelectedRuleIndex(list);
             if (id == kIdDelete || id == kIdEnable || id == kIdDisable) {
-                if (sel == LB_ERR || sel < 0 ||
+                // The empty list's placeholder row (G35) is not a rule,
+                // and a click with no selection is not an action either.
+                // Each refusal names its own cause so neither reads as a
+                // broken button.
+                if (st->rules.empty()) {
+                    ::MessageBoxW(hwnd, L"There are no blocked rules.",
+                                  L"WinTCP", MB_OK | MB_ICONINFORMATION);
+                    return TRUE;
+                }
+                if (sel < 0 ||
                     static_cast<size_t>(sel) >= st->rules.size()) {
                     ::MessageBoxW(hwnd, L"Select a rule first.", L"WinTCP",
                                   MB_OK | MB_ICONINFORMATION);
@@ -296,6 +582,20 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 bool ok = false;
                 const wchar_t* what = L"delete";
                 if (id == kIdDelete) {
+                    // Deleting a rule is not reversible from
+                    // here: the rule is gone and the peer can
+                    // connect again, so it is confirmed by name
+                    // before it runs (G18). Enable and disable
+                    // are reversible and need no confirm.
+                    std::wstring prompt =
+                        L"Delete the block on \"" + name +
+                        L"\"?\r\n\r\nThe peer will be able to "
+                        L"connect again.";
+                    if (::MessageBoxW(hwnd, prompt.c_str(),
+                                      L"WinTCP - Delete block",
+                                      MB_YESNO | MB_ICONWARNING |
+                                          MB_DEFBUTTON2) != IDYES)
+                        return TRUE;
                     ok = RemoveBlockedRule(name, &error);
                 } else if (id == kIdEnable) {
                     ok = SetBlockedRuleEnabled(name, true, &error);
@@ -312,12 +612,29 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                   L"WinTCP", MB_OK | MB_ICONERROR);
                     return TRUE;
                 }
+                st->dirty = true;   // a rule was changed (G22)
                 // Stay open and re-read. A manager that closes after every
                 // action is three actions per change.
-                ReloadRules(list, &st->rules);
+                ReloadRules(list, st);
                 return TRUE;
             }
             if (id == kIdRemoveAll) {
+                if (st->rules.empty()) {
+                    ::MessageBoxW(hwnd, L"No rules to remove.",
+                                  L"WinTCP", MB_OK | MB_ICONINFORMATION);
+                    return TRUE;
+                }
+                // Removing every rule at once unblocks every peer
+                // this application blocked, so it is confirmed
+                // before it runs (G18).
+                if (::MessageBoxW(hwnd,
+                                  L"Remove EVERY blocked rule?\r\n\r\n"
+                                  L"This unblocks all previously "
+                                  L"blocked peers.",
+                                  L"WinTCP - Remove all blocks",
+                                  MB_YESNO | MB_ICONWARNING |
+                                      MB_DEFBUTTON2) != IDYES)
+                    return TRUE;
                 std::wstring error;
                 if (!RemoveAllWinTcpRules(&error)) {
                     ::MessageBoxW(
@@ -326,13 +643,16 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         L"WinTCP", MB_OK | MB_ICONERROR);
                     return TRUE;
                 }
-                ReloadRules(list, &st->rules);
+                st->dirty = true;   // every rule was removed (G22)
+                ReloadRules(list, st);
                 return TRUE;
             }
             break;
         }
         case WM_CLOSE:
-            st->choice = BlockedPeersChoice::kChanged;
+            st->choice = st->dirty
+                             ? BlockedPeersChoice::kChanged
+                             : BlockedPeersChoice::kClosed;
             ::EndDialog(hwnd, FALSE);
             return TRUE;
         default:
@@ -361,6 +681,30 @@ std::wstring BlockedPeersRowText(const BlockedRule& r) {
 
 int BlockedPeersControlCount() {
     return kControlCount;
+}
+
+// One cell of the report view (G14). The columns render the same fields
+// the single-line row text renders, split so each is sortable: the name
+// identifies, Remote scopes ("any" when the rule carries no scope), and
+// Status states - with the two warning states as column values rather
+// than text suffixes, so sorting by Status groups them.
+std::wstring BlockedPeersCellText(const BlockedRule& r, int column) {
+    if (column == kBlockedColRemote) {
+        if (r.remoteAddrs.empty()) return std::wstring(L"any");
+        std::wstring text = r.remoteAddrs;
+        if (!r.remotePorts.empty()) text += L":" + r.remotePorts;
+        if (text.size() > kRowTextChars) {
+            return Utf8ToWide(
+                TruncateToWidthOpt(WideToUtf8(text), kRowTextChars).c_str());
+        }
+        return text;
+    }
+    if (column == kBlockedColStatus) {
+        if (!r.isBlocking) return std::wstring(L"not a block");
+        return r.enabled ? std::wstring(L"enabled")
+                         : std::wstring(L"disabled");
+    }
+    return r.name;
 }
 
 size_t BlockedPeersTemplateCapacity(size_t titleChars) {

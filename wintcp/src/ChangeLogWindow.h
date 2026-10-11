@@ -258,6 +258,10 @@ private:
 
     std::vector<Entry> events_;       // capped at kMaxEvents, oldest first
     unsigned long long dropped_ = 0;  // evicted by the cap since last Clear()
+    // G30: the receipt of a fallback copy-all ("copied all N rows"). Shown
+    // in the status line until new data arrives, so the count is visible
+    // without a modal per copy.
+    std::wstring copyNote_;
 
     bool paused_ = false;
     bool follow_ = true;

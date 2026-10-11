@@ -58,6 +58,14 @@ private:
     void CreateFonts();
     void DeleteFonts();
     void CleanupPdh();
+    // G34: the window is display-only no longer. Two focusable buttons -
+    // Copy (a values table identical to the captions, for keyboard and
+    // screen-reader users) and Export (the full histories as CSV through
+    // the existing ChartExport module) - plus ValuesText, the one
+    // derivation captions, clipboard and accessible name all share.
+    void ExportCharts();
+    void CopyValues();
+    std::wstring ValuesText() const;
 
     // One sampler tick. Every source validates independently and pushes
     // only real readings, so no panel ever shows a fabricated 0.
@@ -67,6 +75,10 @@ private:
     bool dark_ = false;
     HFONT font_ = nullptr;
     HFONT boldFont_ = nullptr;
+    // G34: in-window Export/Copy buttons (focusable, so the values they
+    // carry are keyboard-reachable). Owned children, nulled on destroy.
+    HWND hwndExport_ = nullptr;
+    HWND hwndCopy_ = nullptr;
     UINT_PTR timerOn_ = 0;
 
     // History (oldest -> newest), capped at kMaxSamples.
