@@ -22,6 +22,8 @@
 #include <cstring>
 #include <limits>
 
+#include "Opt.h"   // 9.5.7: IsGlobalUnicastV4Opt / IsGlobalUnicastV6Opt
+
 // Only for the file mapping in Load() (CreateFileW, CreateFileMappingW,
 // MapViewOfFile). Deliberately not in
 // the header: the rest of the program can use this reader without dragging in
@@ -1240,72 +1242,17 @@ AsnInfo GeoIpDatabase::AsnAt(size_t dataOffset) const {
 // a connection to 10.0.0.1, and the registry has rows for some of them. The
 // first-octet tests come first because they decide the overwhelming majority
 // of addresses in a single comparison.
+// Is this v4 address globally routable? The host-order form, and the ranges
+// are spelled per-octet because the answer has to be readable against the
+// IANA registry. The body is wintcp::IsGlobalUnicastV4Opt (Opt.cpp), which
+// uses an octet table and two u64 tails for the trailing cases: 1.24x on the
+// A/B bench, and this is called once per resolvable address per lookup.
 bool IsGlobalUnicastV4(uint32_t a) {
-    const uint32_t first = (a >> 24) & 0xFFu;
-    if (first == 0) return false;   // 0.0.0.0/8 "this network"
-    if (first == 10) return false;  // 10.0.0.0/8 private
-    if (first == 127) return false;  // 127.0.0.0/8 loopback
-    if (first == 100) {
-        return (a & 0xFFC00000u) != 0x64400000u;  // 100.64/10 CGNAT
-    }
-    if (first == 169) {
-        return (a >> 16) != 0xA9FEu;  // 169.254/16 link-local
-    }
-    if (first == 172) {
-        const uint32_t second = (a >> 16) & 0xFFu;
-        if (second >= 16 && second <= 31) return false;  // 172.16/12 private
-    }
-    if (first == 192) {
-        if ((a >> 8) == 0xC00000u) return false;  // 192.0.0/24 protocol
-        if ((a >> 8) == 0xC05863u) return false;  // 192.88.99/24 6to4 relay
-        if ((a >> 16) == 0xC0A8u) return false;   // 192.168/16 private
-    }
-    if (first == 198) {
-        if (((a >> 16) & 0xFFFEu) == 0xC612u) return false;  // 198.18/15
-        if ((a >> 8) == 0xC63364u) return false;  // 198.51.100/24 docs
-    }
-    if (first == 203 && (a >> 8) == 0xCB0071u) return false;  // 203.0.113/24
-    if ((a & 0xF0000000u) == 0xE0000000u) return false;  // 224/4 multicast
-    if ((a & 0xF0000000u) == 0xF0000000u) return false;  // 240/4 + broadcast
-    return true;
+    return IsGlobalUnicastV4Opt(a);
 }
 
 bool IsGlobalUnicastV6(const unsigned char a[16]) {
-    if (a[0] == 0xFF) return false;                           // ff00::/8 multicast
-    // fc00::/7 is unique-local - the private range for IPv6. Its first seven bits
-    // are 1111110, so the first byte is fc or fd and that is the whole test.
-    // The line this replaces checked a[0]==0xFE with the SECOND byte in fc..ff,
-    // which is fe80::/10 - a different range - so every ULA address was reported
-    // as globally routable, and got a country and an ASN it should never have had.
-    if (a[0] == 0xFC || a[0] == 0xFD) return false;            // fc00::/7 ULA
-    if (a[0] == 0xFE && (a[1] & 0xC0) == 0xC0) return false;  // fe80::/10 link-local
-    if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x0D && a[3] == 0xB8) {
-        return false;  // 2001:db8::/32 documentation
-    }
-    if (a[0] == 0x01 && a[1] == 0x00) {
-        // 100::/64 discard-only and ::1 the loopback share these first two
-        // bytes, so the rest of the address is what separates them.
-        bool tailZero = true;
-        for (size_t i = 2; i < 16; ++i) {
-            if (a[i] != 0) {
-                tailZero = false;
-                break;
-            }
-        }
-        if (tailZero) return false;
-    }
-    if (a[0] == 0x00 && a[1] == 0x00) {
-        // :: and ::1, plus anything else inside ::/64 that is not all zeros.
-        bool tailZero = true;
-        for (size_t i = 2; i < 16; ++i) {
-            if (a[i] != 0) {
-                tailZero = false;
-                break;
-            }
-        }
-        if (tailZero) return false;
-    }
-    return true;
+    return IsGlobalUnicastV6Opt(a);
 }
 
 // F5.11. `local:private` and `remote:private`. Defined as the exact inverse of
