@@ -127,6 +127,9 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
               --changes and --quiet (exit 2, naming the conflict).
 --traffic     per-PID byte totals via one bounded socket scan.
 --dns         reverse-DNS the printed rows only (slow; bound with --limit).
+              Answers are cached to disk at %APPDATA%\WinTCP\dns-cache.txt and
+              reused for 24 h, so a peer already seen by an earlier run costs
+              a file read instead of a query. Delete the file to start over.
 --dns-timeout MS  per-lookup budget (ms) for --dns. A lookup that exceeds it
               shows `host: pending` instead of stalling the run; the count of
               pending lookups is written to stderr. 1..60000; default 3000.
@@ -164,7 +167,7 @@ Some columns and filters need the switch that supplies their data. When it is mi
 
 | You want | Add | Why |
 |---|---|---|
-| `host` column, `host:` filter | `--dns` | Reverse DNS runs only on the printed rows. It is slow; bound it with `--limit`. |
+| `host` column, `host:` filter | `--dns` | Reverse DNS runs only on the printed rows. It is slow; bound it with `--limit`. Answers are cached on disk for 24 h, so a second run over the same peers is fast. |
 | `country` column, `country:` filter | `--db FILE` | A memory-mapped lookup; no network. |
 | `country` column's ASN half, `asn:` filter | `--asn-db FILE` | A second memory-mapped lookup, against GeoLite2-ASN. Separate from `--db` because the two are different files. |
 | `traffic`, `rx`, `tx`, `nettotal` | `--traffic` | One bounded socket scan, joined per PID. |
@@ -214,6 +217,7 @@ Value conventions:
 - `retrans` prints `0 B` for a connection that has genuinely never retransmitted. That is a real answer, not a missing one.
 - `ppid` prints `<pid> <parent name>`, or just the number when the parent was not in the snapshot. An **unknown** parent prints `—`: the snapshot not covering a parent is not the same as a process having no parent, and the two are not collapsed.
 - `host` prints the PTR name, or `—` when there is no name / the lookup failed. With `--dns-timeout` set, a lookup still in flight prints `pending` instead of `—` so a slow resolver is distinguishable from a missing one; the count of such stalls is one line on stderr.
+- **`host` may be up to a day old.** The answer cache holds a name for 24 h rather than re-querying every run, which is the only way a `--dns` pass over familiar peers finishes in reasonable time. A peer whose reverse DNS changed shows the previous name until the entry expires. What it does **not** hold is a *missing* name: `getnameinfo` returns "" both for "no PTR record" and for "the query failed", and the two cannot be told apart, so remembering either would show `—` for a name that exists. Delete `%APPDATA%\WinTCP\dns-cache.txt` to force a fresh read of every peer.
 - `integrity` prints the mandatory level as a word, never the RID: `12288` answers no question a reader has, `High` answers "could this have written to HKLM".
 - `cwnd` is the kernel's congestion window in bytes. Each `rtt`/`minrtt`/`cwnd`/`retrans` field is gated on its own known flag, so a socket with TCP timestamps off still shows its real congestion window.
 - UDP rows print `*:*` for the remote and `—` for the state, as `netstat` does. `proto` prints `UDPv4` / `UDPv6` rather than a generic `UDP`.

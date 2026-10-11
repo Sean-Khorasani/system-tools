@@ -30,6 +30,7 @@
 #include <iphlpapi.h>   // MIB_TCP_STATE_LISTEN, IPPROTO_TCP
 
 #include "BookmarkFile.h"
+#include "DnsCache.h"   // F5.5
 #include "EmptyStateActions.h"
 #include "IniFile.h"
 #include "Opt.h"
@@ -1199,4 +1200,180 @@ void CheckIniFile(TestResult& r) {
     Check(r, "9.2.10.ini.accepts.an-unknown-key",
           err.empty() && extra.size() == 2, "n=" + std::to_string(extra.size()));
 }
+
+// ---------------------------------------------------------------------------
+// F5.5: the reverse-DNS answer cache.
+//
+// The rule this file exists to test is not "does it parse" - it is "can it
+// answer WRONG". Every check below is about a way a cache could hand back a
+// name that is not the peer's: a stale entry, a timestamp too far in the
+// future to ever expire, a negative remembered as fact, or a file whose
+// contents were not written by this module. A bug in any of those would be
+// invisible in a run and wrong in front of the user, which is why they are
+// pinned here rather than trusted.
+// ---------------------------------------------------------------------------
+void CheckDnsCache(TestResult& r) {
+    const int64_t now = NowEpoch();
+
+    // --- What an entry is allowed to be ----------------------------------
+    Check(r, "f5.5.dns.address.v4-ok", IsCacheableAddress(L"1.2.3.4"), "");
+    Check(r, "f5.5.dns.address.v6-ok",
+          IsCacheableAddress(L"2001:db8::8a2e:370:7334"), "");
+    // A scope suffix is stripped, so fe80::1%12 and fe80::1 are one peer.
+    Check(r, "f5.5.dns.address.scope-stripped",
+          IsCacheableAddress(L"fe80::1%12") &&
+              StripAddressScope(L"fe80::1%12") == L"fe80::1", "");
+    // Never a name: the cache answers addresses, and a line naming a host
+    // would let a file redirect a query it was never asked.
+    Check(r, "f5.5.dns.address.rejects-a-hostname",
+          !IsCacheableAddress(L"localhost") && !IsCacheableAddress(L"a.b.c"), "");
+    Check(r, "f5.5.dns.address.rejects-empty", !IsCacheableAddress(L""), "");
+
+    Check(r, "f5.5.dns.hostname.plain", IsCacheableHostname(L"host.example.com"),
+          "");
+    // A trailing dot is what a resolver may hand back, so it must survive.
+    Check(r, "f5.5.dns.hostname.trailing-dot",
+          IsCacheableHostname(L"host.example.com."), "");
+    // Punycode, which is the ASCII form of a non-ASCII name, is the answer
+    // that actually arrives.
+    Check(r, "f5.5.dns.hostname.punycode",
+          IsCacheableHostname(L"xn--e1afmkfd.xn--p1ai"), "");
+    // Rejected: empty is the negative case and is never recorded; a hyphen
+    // edge is not a legal host name; an empty label is not a name at all.
+    Check(r, "f5.5.dns.hostname.rejects-empty", !IsCacheableHostname(L""), "");
+    Check(r, "f5.5.dns.hostname.rejects-hyphen-edge",
+          !IsCacheableHostname(L"-host.example.com") &&
+              !IsCacheableHostname(L"host-.example.com"), "");
+    Check(r, "f5.5.dns.hostname.rejects-empty-label",
+          !IsCacheableHostname(L"a..b") && !IsCacheableHostname(L".a"), "");
+    // Non-ASCII is refused so a hand-edited file cannot widen what is
+    // displayed: the resolver hands back punycode, never raw letters.
+    Check(r, "f5.5.dns.hostname.rejects-non-ascii",
+          !IsCacheableHostname(L"hos\U000000e9.example.com"), "");
+    Check(r, "f5.5.dns.hostname.rejects-shell-metacharacters",
+          !IsCacheableHostname(L"host;rm -rf.example.com") &&
+              !IsCacheableHostname(L"host$(x).example.com"), "");
+    Check(r, "f5.5.dns.hostname.rejects-over-253",
+          !IsCacheableHostname(std::wstring(63, L'a') + L"." +
+                              std::wstring(63, L'b') + L"." +
+                              std::wstring(63, L'c') + L"." +
+                              std::wstring(63, L'd') + L"." + std::wstring(6, L'e')),
+          "");
+
+    // --- Round trip ------------------------------------------------------
+    std::vector<DnsCacheEntry> entries;
+    DnsCacheEntry a;
+    a.address = L"8.8.8.8";
+    a.hostname = L"dns.google";
+    a.solvedEpoch = now;
+    entries.push_back(a);
+    DnsCacheEntry b;
+    b.address = L"2001:4860:4860::8888";
+    b.hostname = L"dns64.example.net";
+    b.solvedEpoch = now - 3600;
+    entries.push_back(b);
+    const std::string text = SerializeDnsCache(entries);
+    std::vector<DnsCacheEntry> back;
+    std::wstring err;
+    Check(r, "f5.5.dns.roundtrip.serializes",
+          ParseDnsCacheText(text, &back, &err) && err.empty(), "");
+    Check(r, "f5.5.dns.roundtrip.entries-survive",
+          back.size() == 2 && back[0].address == L"8.8.8.8" &&
+              back[0].hostname == L"dns.google" &&
+              back[1].address == L"2001:4860:4860::8888" &&
+              back[1].solvedEpoch == now - 3600,
+          "n=" + std::to_string(back.size()));
+    // CRLF in, CRLF out: a file written on Windows must read back identically.
+    Check(r, "f5.5.dns.roundtrip.stable",
+          SerializeDnsCache(back) == text, "");
+
+    // --- What the parser is willing to believe ---------------------------
+    // A comment and a blank line are not entries and not errors.
+    Check(r, "f5.5.dns.parse.skips-comments-and-blanks",
+          ParseDnsCacheText("# a comment\r\n\r\n", &back, &err) &&
+              back.empty() && err.empty(), "");
+    // A line with the wrong field count is one we did not write. Skipped,
+    // not fatal: a single odd line costs one entry, while failing the file
+    // would let one byte disable the cache entirely.
+    Check(r, "f5.5.dns.parse.skips-wrong-field-count",
+          ParseDnsCacheText("no-tabs-here\r\n1.2.3.4\tok.example\r\n", &back, &err) &&
+              back.empty(), "");
+    Check(r, "f5.5.dns.parse.skips-too-many-fields",
+          ParseDnsCacheText("1.2.3.4\tok.example\t" +
+                            std::to_string(now) + "\textra\r\n", &back, &err) &&
+              back.empty(), "");
+    Check(r, "f5.5.dns.parse.skips-non-ascii-bytes",
+          ParseDnsCacheText("1.2.3.4\th\366St.example.com\t" +
+                            std::to_string(now) + "\r\n", &back, &err) &&
+              back.empty(), "");
+    Check(r, "f5.5.dns.parse.skips-non-digit-timestamp",
+          ParseDnsCacheText("1.2.3.4\tok.example\tnotanumber\r\n", &back, &err) &&
+              back.empty(), "");
+    Check(r, "f5.5.dns.parse.skips-hostname-field",
+          ParseDnsCacheText("1.2.3.4\t-not-a-name-\t" +
+                            std::to_string(now) + "\r\n", &back, &err) &&
+              back.empty(), "");
+    // An implausible address in the address field is a line about something
+    // this module never wrote.
+    Check(r, "f5.5.dns.parse.skips-hostname-in-address-field",
+          ParseDnsCacheText("some.host.example\tok.example\t" +
+                            std::to_string(now) + "\r\n", &back, &err) &&
+              back.empty(), "");
+    // A repeated address: the later line is what a human reader intends.
+    Check(r, "f5.5.dns.parse.duplicate-address-later-wins",
+          ParseDnsCacheText("1.2.3.4\tfirst.example\t" +
+                            std::to_string(now - 10) + "\r\n1.2.3.4\tsecond.example\t" +
+                            std::to_string(now) + "\r\n", &back, &err) &&
+              back.size() == 1 && back[0].hostname == L"second.example",
+          "");
+    // Valid lines among corrupt ones: the valid ones are still honoured.
+    Check(r, "f5.5.dns.parse.valid-survives-among-corrupt",
+          ParseDnsCacheText("garbage\r\n\r\n1.2.3.4\tok.example\t" +
+                            std::to_string(now) + "\r\nmore garbage\r\n", &back,
+                            &err) &&
+              back.size() == 1 && back[0].hostname == L"ok.example", "");
+    // A file over the size limit is refused WHOLE rather than read in part.
+    Check(r, "f5.5.dns.parse.refuses-oversized",
+          ParseDnsCacheText(std::string(kMaxCacheBytes + 1, 'x'), &back, &err) ==
+                  false &&
+              !err.empty(), "");
+    Check(r, "f5.5.dns.parse.oversized-leaves-output-alone",
+          back.empty(), "");
+
+    // --- Freshness: the rule that keeps the cache from answering wrong ----
+    DnsCacheEntry fresh;
+    fresh.address = L"8.8.8.8";
+    fresh.hostname = L"dns.google";
+    fresh.solvedEpoch = now;
+    // Just inside the window.
+    Check(r, "f5.5.dns.fresh.at-the-ttl",
+          DnsEntryFresh(fresh, now + kPositiveTtlHours * 3600 - 1), "");
+    // One second past it.
+    fresh.solvedEpoch = now - kPositiveTtlHours * 3600 - 1;
+    Check(r, "f5.5.dns.stale.past-the-ttl",
+          !DnsEntryFresh(fresh, now), "");
+    // The one way a file could pin an answer forever: a timestamp in the
+    // future, so the age never reaches the TTL. Refused - there is no skew
+    // allowance to permit it, because one would be exactly that loophole.
+    fresh.solvedEpoch = now + 400LL * 24 * 3600;
+    Check(r, "f5.5.dns.stale.implausibly-future-timestamp",
+          !DnsEntryFresh(fresh, now), "");
+    // A modestly future date is refused on the same rule, not tolerated: the
+    // cost of refusing is one re-query, and the answer is then re-recorded
+    // against this machine's clock.
+    fresh.solvedEpoch = now + 3600;
+    Check(r, "f5.5.dns.stale.any-future-timestamp",
+          !DnsEntryFresh(fresh, now), "");
+    // An entry with no answer is the negative case, which is never recorded
+    // in the first place and is not believed if it somehow lands there.
+    fresh.solvedEpoch = now;
+    fresh.hostname.clear();
+    Check(r, "f5.5.dns.stale.no-answer-recorded",
+          !DnsEntryFresh(fresh, now), "");
+    // A zero timestamp means "never recorded", not "recorded at the epoch".
+    fresh.hostname = L"dns.google";
+    fresh.solvedEpoch = 0;
+    Check(r, "f5.5.dns.stale.zero-timestamp", !DnsEntryFresh(fresh, now), "");
+}
+
 }  // namespace wintcp

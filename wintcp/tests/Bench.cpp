@@ -17,6 +17,7 @@ void CheckSha256(TestResult& r);
 void CheckExposure(TestResult& r);
 void CheckKillTree(TestResult& r);
 void CheckIniFile(TestResult& r);
+void CheckDnsCache(TestResult& r);   // F5.5: pure over strings, so it sits beside them
 }  // namespace wintcp
 
 #include "ColumnsWin.h"   // 9.4.4 profile masks
@@ -9424,6 +9425,7 @@ static const unsigned char kClientHello[] = {
     CheckBookmarkFile(r);
     CheckPresetFile(r);
     CheckIniFile(r);
+    CheckDnsCache(r);   // F5.5
     CheckEmptyState(r);
     CheckProcessTree(r);
     CheckKillTree(r);
