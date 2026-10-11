@@ -124,11 +124,31 @@ private:
     // 9.4.1: factored row painter. `withLeaders` is false for the pinned header
     // (the title/tab bar never draw a dotted leader); `fieldInSection` drives
     // the alternating-row shading and is advanced by the body loop in OnPaint.
+    // `textRight` is the value column's right edge: the body passes a
+    // scrollbar-aware edge (G8) so text stops clear of the native control,
+    // the header passes the full client edge.
     void PaintLine(HDC mem, const Line& l, int y, int lh, int cx, int m,
-                   int ruleX, bool withLeaders, int fieldInSection = 0);
+                   int ruleX, bool withLeaders, int textRight,
+                   int fieldInSection = 0);
     void OnMouseDown(int x, int y);
     void RebuildLayout();
+    // Keyboard tab switching (Ctrl+Tab / arrow keys): moves the
+    // active tab by delta within the model's tab roster.
+    void ActivateTab(int delta);
     void ScrollBy(int lines);
+    // Absolute scroll position, clamped to MaxScroll(). The scrollbar's
+    // thumb-track and the Home/End keys land here; ScrollBy is the
+    // relative form over it.
+    void SetScrollPosAbsolute(int pos);
+    // Body lines per page, for PageUp/PageDown. At least one, so a tiny
+    // body still pages rather than refusing the key.
+    int PageLines() const;
+    // Width of the native scrollbar control, for layout and for keeping
+    // value text clear of it.
+    int ScrollBarWidth() const;
+    // Push the current scroll facts into the native scrollbar (range,
+    // page, position); hides it when there is nothing to scroll.
+    void SyncScrollBar();
     int MaxScroll() const;
     void CopyTextToClipboard();
     void CenterOnOwner(HWND owner);
@@ -151,19 +171,34 @@ private:
 
     // Rendered lines, in logical units; totalContentHeight_ is their sum.
     std::vector<Line> lines_;
+    // G36: all three scroll facts are PHYSICAL pixels (S()-scaled at the
+    // window's own DPI). totalContentHeight_ used to sum logical heights
+    // while viewHeight_ was physical, so the thumb, the clamp and the
+    // click math disagreed off-96dpi. Line::height stays logical (it is a
+    // metric id); the scaling happens once when the total is accumulated.
     int totalContentHeight_ = 0;
-    int scrollPos_ = 0;                  // in logical pixels
-    int viewHeight_ = 0;                 // scrollable body height
+    int scrollPos_ = 0;                  // in physical pixels
+    int viewHeight_ = 0;                 // scrollable body height, physical
+    // The body's vertical scrollbar (G8). A real SCROLLBAR child, so the
+    // thumb, track, hover/press states and keyboard paging are the
+    // system's - the hand-drawn thumb it replaces had none of those and
+    // lived inset from the edge it scrolled.
+    HWND hwndScroll_ = nullptr;
     // Height of the fixed header (title + subtitle + tab bar) in logical px.
     // The body scrolls beneath it; it is recomputed in RebuildLayout so the
     // tab bar never overlaps the content.
     int headerHeight_ = 0;
 
     HFONT font_ = nullptr;               // borrowed from MainWindow
-    HFONT headerFont_ = nullptr;         // bold, owned
-    HFONT monoFont_ = nullptr;           // fixed-pitch, owned
-    HFONT smallFont_ = nullptr;          // notes, owned
+    // G33: the three derived faces are FontCache entries, borrowed like
+    // font_ itself - never DeleteObject here (see the destructor). The
+    // cache owns every handle; deleting one would break every other
+    // window holding it.
+    HFONT headerFont_ = nullptr;         // bold, ~125%
+    HFONT monoFont_ = nullptr;           // fixed-pitch for values
+    HFONT smallFont_ = nullptr;          // notes
     bool fontsReady_ = false;
+    UINT fontDpi_ = 0;                   // DPI the cached faces were built for
     bool dark_ = false;
 
     // System-derived palette, refreshed on WM_SYSCOLORCHANGE so high
@@ -171,10 +206,14 @@ private:
     HBRUSH brushWindow_ = nullptr;      // background
     HBRUSH brushAlternate_ = nullptr;   // alternating row shading
     HBRUSH brushSection_ = nullptr;     // section header band
+    HBRUSH brushSectionHover_ = nullptr; // section band under the pointer
     HBRUSH brushAccent_ = nullptr;      // section accent bar + collapse glyph
     COLORREF clrText_ = RGB(0, 0, 0);
     COLORREF clrDim_ = RGB(0x80, 0x80, 0x80);
     COLORREF clrHeader_ = RGB(0, 0, 0);
+    // Between clrDim_ and clrHeader_: the colour a hovered-but-inactive
+    // tab paints, so hover reads as neither selected nor idle.
+    COLORREF clrHover_ = RGB(0, 0, 0);
 
     // Which section the pointer is over, which tab it hovers, and which fields
     // are collapsed. Collapse state is per-window and never persisted: the
@@ -182,6 +221,12 @@ private:
     int hotSection_ = -1;
     int hotTab_ = -1;
     std::vector<unsigned char> collapsed_;
+    // The tab strip's geometry in physical pixels. The N tabs share ONE row:
+    // each tab Line carries its slot's x origin (indent) and measured width,
+    // but only the first tab's height is real layout - the strip is one
+    // kTabH tall, not N. RebuildLayout derives these with the totals below.
+    int tabBarY_ = 0;
+    int tabBarH_ = 0;
 
     static const wchar_t* kClassName;
 };

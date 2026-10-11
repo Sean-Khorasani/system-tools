@@ -43,7 +43,10 @@ BEGIN
         MENUITEM "&Established",      IDM_QFILTER_ESTAB
         MENUITEM "M&ine",             IDM_QFILTER_MINE
         MENUITEM SEPARATOR
-        MENUITEM "&Custom...\tF3",    IDM_QFILTER_CLEAR
+        ; G29: this never opened a dialog - it just focuses the filter box -
+        ; so the ellipsis (which promises one) and the F3 tag (which the
+        ; accelerator table never owned) are gone. F3 stays free for find-next.
+        MENUITEM "Focus custom &filter",    IDM_QFILTER_CLEAR
     END
     POPUP "&View"
     BEGIN
@@ -54,7 +57,10 @@ BEGIN
         MENUITEM "Per-PID &traffic counters (ETW, admin)", IDM_VIEW_TRAFFIC
         MENUITEM "&GeoIP database (.mmdb)...", IDM_VIEW_GEOIP
         MENUITEM "Blocked &peers...",    IDM_VIEW_BLOCKED
-        MENUITEM "&Fix what''s hiding the rows...", IDM_VIEW_FIX_EMPTY
+        MENUITEM "Ta&ble diagnostics...", IDM_VIEW_FIX_EMPTY
+        ; G28: a mangled column layout (mask/order/widths/sort/filter all
+        ; persist) recovers here instead of via the registry.
+        MENUITEM "&Reset columns && layout", IDM_VIEW_RESET_LAYOUT
     MENUITEM "ASN &database (.mmdb)...", IDM_VIEW_ASNIP
         MENUITEM "Performa&nce graphs...", IDM_VIEW_CHARTS
         MENUITEM SEPARATOR
@@ -62,6 +68,7 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "&Freeze view\tF6",     IDM_VIEW_FREEZE
         MENUITEM "&Group rows by process\tF7", IDM_VIEW_GROUP
+        MENUITEM "Process &tree...", IDM_VIEW_PROCESSTREE
         POPUP "Column &profile"
         BEGIN
             MENUITEM "&Default",         IDM_PROFILE_DEFAULT
@@ -128,8 +135,11 @@ BEGIN
     POPUP "P&rocess"
     BEGIN
         MENUITEM "&Block connection",            IDM_BLOCK_CONNECTION
-        MENUITEM "&Graceful close (WM_CLOSE)\tDel", IDM_CTX_KILL_PROCESS
-        MENUITEM "Close &connection",            IDM_CTX_CLOSE_CONNECTION
+        ; G19: Del closes the SELECTED CONNECTION (the row's own action);
+        ; ending the process behind it moved to Ctrl+Del, which has to be
+        ; deliberate - a stray keypress must not end a process.
+        MENUITEM "&Graceful close (WM_CLOSE)\tCtrl+Del", IDM_CTX_KILL_PROCESS
+        MENUITEM "Close &connection\tDel",            IDM_CTX_CLOSE_CONNECTION
         MENUITEM SEPARATOR
         MENUITEM "&Open file location",          IDM_OPEN_FILE_LOCATION
         ; REMOVED 2026-10-05 (todo.md 8.7 G1): "Process &properties",
@@ -171,7 +181,8 @@ BEGIN
     "A",        IDM_EDIT_SELECTALL,     VIRTKEY, CONTROL
     "F",        IDM_EDIT_FOCUSFILTER,   VIRTKEY, CONTROL
     "E",        IDM_FILE_EXPORT,        VIRTKEY, CONTROL
-     VK_DELETE,  IDM_CTX_KILL_PROCESS,   VIRTKEY
+     VK_DELETE,  IDM_CTX_CLOSE_CONNECTION,   VIRTKEY ; G19: Del closes the selected connection (the row's own action), not the process behind it - killing a process from an accidental keypress is the one irreversible thing here, so it moved to Ctrl+Del, which has to be deliberate.
+     VK_DELETE,  IDM_CTX_KILL_PROCESS,       VIRTKEY, CONTROL ; G19: Ctrl+Del kills the process.
      VK_ESCAPE,  IDM_EDIT_CLEARFILTER,   VIRTKEY
      VK_MULTIPLY,IDM_CTX_BOOKMARK,       VIRTKEY ; 9.4.8: asterisk (*) toggles a bookmark on the selected row (5.3)
 END

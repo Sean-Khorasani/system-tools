@@ -121,8 +121,10 @@ REM   3. High contrast: enable a high-contrast scheme. Every highlight colour
 REM      must come from COLOR_HIGHLIGHT / COLOR_WINDOW, not a hard-coded one.
 REM   4. DPI: drag the window between a 100% and a 150% monitor. Widths and
 REM      font re-derive on WM_DPICHANGED; nothing truncates or overlaps.
-REM  5. Tray: minimise to tray, then double-click the icon to restore. The
-REM     tray menu's always-on-top toggle works and persists.
+REM  5. Tray: minimise to tray, then single-click the icon to restore (double-
+REM     click works too). The tip names rows/frozen/grouped/alerts, and the
+REM     first hide explains itself once with a balloon. The tray menu's
+REM     always-on-top toggle works and persists.
 REM  12. First-minimize prompt (9.4.6): with the tray icon OFF, minimise and
 REM     confirm the "Minimize to tray or exit?" dialog appears; pick "Minimize
 REM     to tray" with "Don't ask again", then minimise again - the window should
@@ -135,7 +137,13 @@ REM  14. Screen reader (NVDA): tab to the list, read the focused row. NVDA must
 REM     announce the process name and state (e.g. "chrome.exe, TCP,
 REM     ESTABLISHED, 4 connections, column 3 of 16"). A custom accDescription
 REM     is NOT yet wired (9.4.8), so the per-row description is whatever the
-REM     standard ListView MSAA provides from the cells.
+REM     standard ListView MSAA provides from the cells. The Details window and
+REM     the Performance graphs DO expose an accessible name now (the plain-text
+REM     model and the current-values table): they must read as text, not as an
+REM     empty window.
+REM  15. Del / Ctrl+Del: with a row selected, Del must open Close-connection
+REM      (the row's own action), never End-process; Ctrl+Del must open the
+REM      End-process confirm. The Process menu shows both bindings.
 REM   6. Traffic columns: enable them, generate known traffic, and confirm the
 REM      numbers MOVE. This is the one manual check that overlaps D2 - if the
 REM      status bar reports timed-out scans, the columns are partial by design
@@ -143,9 +151,23 @@ REM      and the values are honest about it, but a human should confirm the
 REM      column does not silently read a stale total as a current one.
 REM   7. Details window: double-click a row. It opens centred over the main
 REM      window, scales with DPI, and refreshes while a watch is running.
+REM      Section headers carry a chevron and brighten on hover; the body has a
+REM      native scrollbar (drag the thumb, page with the arrows) and scrolls
+REM      with Up/Down/PageUp/PageDown/Home/End; tabs switch with Ctrl+Tab and
+REM      show a hand cursor. The tabs share one strip: every slot sits on the
+REM      same row in the same bold face - no cascading - and clicking a
+REM      section header toggles exactly the header under the cursor.
+REM   7b. Process tree (View - Process tree...): one node per process,
+REM      "name (PID n, k connections)", children under parents, roots
+REM      expanded one level. Refresh re-reads the main table; Esc hides.
+REM   7c. Blocked peers: Rule / Remote / Status columns with click-to-sort
+REM      and a sort arrow; Delete and Remove-all confirm with the safe button
+REM      defaulted; Esc dismisses without a spurious "changed" report.
 REM   8. Performance graphs: open them, let them run a minute, switch tabs.
 REM      The four panels keep drawing and do not leak GDI handles (check with
-REM      the task manager's GDI column over a long run).
+REM      the task manager's GDI column over a long run). Disk/Network panels
+REM      carry an R/W and down/up colour legend; Export writes the histories
+REM      as CSV and Copy values takes the current-values table; Esc hides.
 REM   9. Change log: enable it, cause some churn, confirm APPEAR / DISAPPEAR /
 REM      STATE rows appear with a timestamp and are append-only across restarts.
 REM  10. Elevation relaunch: from an unelevated shell, trigger a feature that

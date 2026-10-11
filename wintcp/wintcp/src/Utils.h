@@ -180,6 +180,24 @@ bool HasLowerSubstring(const std::wstring& haystackLower,
 // the system DPI (used before any window exists). Never returns 0.
 UINT QueryDpiForWindow(HWND hwnd);
 
+// Show 'path' in Explorer with the file pre-selected. One implementation
+// for the context menu and the Details button, which had drifted into two
+// spellings of the same action: the menu ran the "explore" verb against a
+// FILE path (a folder verb - the shell answers SE_ERR_NOASSOC, so the menu
+// item failed while the button worked), while the button runs
+// "explorer.exe /select,". Returns true when Explorer was launched;
+// otherwise false with 'error' set, and the caller reports it.
+bool ShowFileInExplorer(const std::wstring& path, std::wstring* error);
+
+// G21: expose a plain-text summary as a window's accessible name through
+// the Dynamic Annotation API (IAccPropServices), so screen readers and
+// UIA agents can read owner-drawn content (Details body, Charts values)
+// that no pixel scraping would recover. Best-effort and silent: when the
+// annotation service is unavailable the window simply keeps its default
+// accessibility behaviour. 'name' is capped internally, so callers pass
+// the full text without pre-truncating.
+void SetAccessibleName(HWND hwnd, const std::wstring& name);
+
 // ---- C10: did a Win32 string read fit? ---------------------------------
 //
 // A family of Win32 calls fills a caller-supplied buffer and signals trouble in

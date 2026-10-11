@@ -79,11 +79,16 @@ bool PromptForText(HWND owner, const wchar_t* title, const wchar_t* label,
 // no prompt. On success the buffer is truncated to the template's true length,
 // so its contents are exactly the bytes the dialog manager reads.
 bool TemplateFits(DWORD style, DWORD exStyle, short x, short y, short cx,
-                  short cy, const wchar_t* title, std::vector<BYTE>* buf);
+                  short cy, const wchar_t* title, std::vector<BYTE>* buf,
+                  const wchar_t* label = nullptr);
 
 // The capacities TemplateFits checks against, in wchar_t. Named so the test
 // asserts the boundary instead of restating the number.
 constexpr size_t kTemplateMaxChars = 128;   // a prompt title
 constexpr size_t kCaptionMaxChars = 32;     // "OK" / "Cancel"
+// G4: the instruction line above the edit (e.g. the numbered preset list a
+// Load/Delete prompt shows). Longer than a button caption by design, still
+// bounded so one prompt cannot size the template without limit.
+constexpr size_t kLabelMaxChars = 512;
 
 }  // namespace wintcp

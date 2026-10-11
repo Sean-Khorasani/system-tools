@@ -61,6 +61,21 @@ BlockedPeersChoice ShowBlockedPeersDialog(HWND owner, std::wstring* failure);
 // is labelled, never shown as though it were protection.
 std::wstring BlockedPeersRowText(const BlockedRule& rule);
 
+// Columns of the report view (G14): the rule name, the remote scope it
+// blocks, and its state. The state column replaces the old "[disabled]" /
+// "[not a block]" text suffixes, so state is a sortable column instead of
+// a substring embedded in a string.
+enum BlockedPeersColumn {
+    kBlockedColRule = 0,
+    kBlockedColRemote = 1,
+    kBlockedColStatus = 2,
+    kBlockedColCount = 3,
+};
+
+// Cell text for one rule in one column. Pure, so the selftest pins every
+// column the dialog renders - the same reason BlockedPeersRowText exists.
+std::wstring BlockedPeersCellText(const BlockedRule& rule, int column);
+
 // How many controls the template declares. Exported so the selftest can pin
 // it against the capacity arithmetic: cdit and the buffer size are two
 // spellings of the same fact, and a mismatch is an out-of-bounds read inside

@@ -3252,6 +3252,38 @@ TestResult RunSelfTest() {
         Check(r, "9.2.9.row.long-name-truncates",
               hugeRow.size() < 5000, "len=" + std::to_string(hugeRow.size()));
 
+        // G14: the report columns render the same fields the row text does,
+        // split so each is sortable. Name identifies, Remote scopes ("any"
+        // when the rule carries none), Status states without text suffixes.
+        Check(r, "9.2.9.cells.rule-is-the-name",
+              BlockedPeersCellText(plain, kBlockedColRule) == plain.name,
+              WideToUtf8(BlockedPeersCellText(plain, kBlockedColRule)));
+        Check(r, "9.2.9.cells.remote-scopes",
+              BlockedPeersCellText(plain, kBlockedColRemote) ==
+                  L"203.0.113.7:443",
+              WideToUtf8(BlockedPeersCellText(plain, kBlockedColRemote)));
+        BlockedRule anyScope = plain;
+        anyScope.remoteAddrs.clear();
+        anyScope.remotePorts.clear();
+        Check(r, "9.2.9.cells.empty-scope-reads-any",
+              BlockedPeersCellText(anyScope, kBlockedColRemote) == L"any",
+              WideToUtf8(BlockedPeersCellText(anyScope, kBlockedColRemote)));
+        Check(r, "9.2.9.cells.enabled-status",
+              BlockedPeersCellText(plain, kBlockedColStatus) == L"enabled",
+              WideToUtf8(BlockedPeersCellText(plain, kBlockedColStatus)));
+        Check(r, "9.2.9.cells.disabled-status",
+              BlockedPeersCellText(disabled, kBlockedColStatus) ==
+                  L"disabled",
+              WideToUtf8(BlockedPeersCellText(disabled, kBlockedColStatus)));
+        Check(r, "9.2.9.cells.not-a-block-status",
+              BlockedPeersCellText(allowRule, kBlockedColStatus) ==
+                  L"not a block",
+              WideToUtf8(
+                  BlockedPeersCellText(allowRule, kBlockedColStatus)));
+        Check(r, "9.2.9.cells.unknown-column-is-the-name",
+              BlockedPeersCellText(plain, 99) == plain.name,
+              WideToUtf8(BlockedPeersCellText(plain, 99)));
+
         // Template capacity: the writer allocates for exactly this many bytes
         // and refuses to exceed them, so pinning the arithmetic is what keeps
         // the "refuse rather than overrun" contract honest as the layout

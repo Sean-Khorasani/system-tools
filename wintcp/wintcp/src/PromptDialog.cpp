@@ -14,6 +14,7 @@ namespace {
 // template built in memory (see MakeTemplate below), so it has no entry in the
 // .rc and putting its ids in the shared header would suggest otherwise.
 enum : int {
+    kIdLabel = 999,   // the optional caption static above the edit
     kIdEdit = 1000,
     kIdOk   = IDOK,
     kIdCancel = IDCANCEL,
@@ -24,6 +25,26 @@ enum : int {
 // any caller may pass. The explicit length below keeps that true if a future
 // caller raises maxChars.
 constexpr size_t kEditReadChars = 1024;
+
+// The label static's geometry. One 8-DLU row per label line over a 10-DLU
+// base, capped at ten lines: a dozen-preset list fits, and a pathological
+// label cannot push the edit and buttons off the dialog.
+constexpr short kLabelBaseH = 10;
+constexpr short kLabelLineH = 8;
+constexpr int kMaxLabelLines = 10;
+
+// Lines in a label: one per '\n', plus the first. Shared by the template
+// writer (which positions the edit and buttons under the label) and
+// PromptForText (which sizes the dialog itself), so the two cannot
+// disagree about how tall the label is.
+int LabelLineCount(const wchar_t* label) {
+    if (label == nullptr || label[0] == L'\0') return 0;
+    int n = 1;
+    for (const wchar_t* p = label; *p != L'\0'; ++p) {
+        if (*p == L'\n') ++n;
+    }
+    return (n > kMaxLabelLines) ? kMaxLabelLines : n;
+}
 
 struct PromptState {
     std::wstring value;
@@ -148,21 +169,33 @@ namespace {
 constexpr size_t kTemplateSlack = 1024;
 
 std::vector<BYTE> MakeTemplate(DWORD style, DWORD exStyle, short x, short y,
-                               short cx, short cy, const wchar_t* title) {
+                                short cx, short cy, const wchar_t* title,
+                                const wchar_t* label) {
+    // A label adds a fourth control (a static) above the edit. The label's
+    // own length sizes its share: it can be a dozen preset lines, so the
+    // button-caption estimate cannot cover it and the slack must not have
+    // to. The writer still bounds-checks every byte; this only avoids the
+    // doubling retry on the first attempt.
+    const size_t nControls = (label != nullptr) ? 4 : 3;
+    const size_t labelChars =
+        (label != nullptr) ? wcslen(label) + 1 : 0;
     const size_t capacity =
         sizeof(DLGTEMPLATE) + 4 +
         Pad4((kTemplateMaxChars + 1) * sizeof(wchar_t)) +   // title
         2 + Pad4((sizeof(L"Segoe UI") / sizeof(wchar_t)) * sizeof(wchar_t)) +
-        3 * (sizeof(DLGITEMTEMPLATE) + 4 +
-             Pad4((kCaptionMaxChars + 1) * sizeof(wchar_t)) + 2) +
+        nControls * (sizeof(DLGITEMTEMPLATE) + 4 +
+                     Pad4((kCaptionMaxChars + 1) * sizeof(wchar_t)) + 2) +
+        Pad4(labelChars * sizeof(wchar_t)) +
         kTemplateSlack;
     std::vector<BYTE> buf(capacity, 0);
-    if (TemplateFits(style, exStyle, x, y, cx, cy, title, &buf)) return buf;
+    if (TemplateFits(style, exStyle, x, y, cx, cy, title, &buf, label))
+        return buf;
     // Only possible if the capacity arithmetic above was too small, which it is
     // not meant to be. Doubling and trying once more beats failing the dialog,
     // and the retry goes through the same bounds-checked writer.
     buf.assign(capacity * 2, 0);
-    if (TemplateFits(style, exStyle, x, y, cx, cy, title, &buf)) return buf;
+    if (TemplateFits(style, exStyle, x, y, cx, cy, title, &buf, label))
+        return buf;
     return std::vector<BYTE>();
 }
 
@@ -172,7 +205,7 @@ namespace {
 
 bool TemplateFitsImpl(DWORD style, DWORD exStyle, short x, short y, short cx,
                       short cy, const wchar_t* title,
-                      std::vector<BYTE>* bufIn) {
+                      std::vector<BYTE>* bufIn, const wchar_t* label) {
     // The byte count MUST match what is written below. It did not: the
     // allocation sized the buffer for a fixed 9 DLGITEMTEMPLATEs while only
     // three controls were ever written, and the OK/Cancel captions were never
@@ -242,7 +275,7 @@ bool TemplateFitsImpl(DWORD style, DWORD exStyle, short x, short y, short cx,
     auto* dt = reinterpret_cast<DLGTEMPLATE*>(p);
     dt->style = style | DS_SETFONT | DS_MODALFRAME | DS_CENTER;
     dt->dwExtendedStyle = exStyle;
-    dt->cdit = 3;                 // edit + OK + Cancel
+    dt->cdit = (label != nullptr) ? 4 : 3;   // [label] edit OK Cancel
     dt->x = x; dt->y = y; dt->cx = cx; dt->cy = cy;
     p += sizeof(DLGTEMPLATE);
 
@@ -288,7 +321,8 @@ bool TemplateFitsImpl(DWORD style, DWORD exStyle, short x, short y, short cx,
     // manager fewer would be the out-of-bounds read this file prevents.
     const auto item = [&p, &usable, end](DWORD s, short ix, short iy, short icx,
                                     short icy, WORD id, WORD cls,
-                                    const wchar_t* caption) {
+                                    const wchar_t* caption,
+                                    size_t maxCaption = kCaptionMaxChars) {
         // Align to the next DWORD. The mask is applied to the pointer's integer
         // value, NOT to the pointer itself: masking a BYTE* would require the
         // cast, and the original code cast through ULONG_PTR by hand.
@@ -328,8 +362,11 @@ bool TemplateFitsImpl(DWORD style, DWORD exStyle, short x, short y, short cx,
             // Captions here are compile-time literals ("OK", "Cancel"), but the
             // parameter is a pointer, so the length is checked rather than
             // assumed: this is the one write in the file that a caller passing
-            // a long string would otherwise run off the end on.
-            if (n > kCaptionMaxChars + 1) return false;
+            // a long string would otherwise run off the end on. The label
+            // static passes its own (longer) bound; buttons keep the tight
+            // one, so a wrong caption still refuses instead of growing the
+            // dialog without limit.
+            if (n > maxCaption + 1) return false;
             const size_t bytes = Pad4(n * sizeof(wchar_t));
             if (!usable(bytes)) return false;
             memcpy(p, caption, n * sizeof(wchar_t));
@@ -341,17 +378,48 @@ bool TemplateFitsImpl(DWORD style, DWORD exStyle, short x, short y, short cx,
         return true;
     };
 
-    // Any refusal here returns an empty vector. cdit says 3, so handing the
-    // dialog manager fewer than three controls would make it read past the end
-    // of the buffer - which is the out-of-bounds read this file exists to
-    // prevent. An empty template is refused by the caller instead.
-    if (!item(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-              10, 10, 240, 14, kIdEdit, 0x80, nullptr) ||
-        !item(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-              150, 32, 50, 16, kIdOk, 0x81, L"OK") ||
-        !item(WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-              206, 32, 50, 16, kIdCancel, 0x81, L"Cancel")) {
-        return false;
+    // Any refusal here returns an empty vector. cdit matches the
+    // control count actually written, so handing the dialog manager
+    // fewer than that would make it read past the end of the buffer -
+    // which is the out-of-bounds read this file exists to prevent.
+    // An empty template is refused by the caller instead.
+    //
+    // With a label, a STATIC caption sits above the edit and the
+    // edit and buttons move down to make room. Without one
+    // the compact layout (edit at the top) is kept, so a label-less
+    // prompt is unchanged. A multi-line label (the preset list) gets
+    // one 8-DLU row per line, capped, so all twelve presets fit
+    // instead of painting over the edit.
+    if (label != nullptr) {
+        const int labelLines = LabelLineCount(label);
+        const int shownLines = (labelLines > 1) ? labelLines : 1;
+        const short labelH = static_cast<short>(
+            kLabelBaseH + kLabelLineH * (shownLines - 1));
+        const short editY = static_cast<short>(8 + labelH + 4);
+        const short btnY = static_cast<short>(editY + 14 + 6);
+        // 0x82 is the STATIC class ordinal. SS_NOPREFIX keeps a
+        // '&' in a future label from being read as an accelerator.
+        if (!item(WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
+                  10, 8, 240, labelH, kIdLabel, 0x82, label,
+                  kLabelMaxChars))
+            return false;
+        if (!item(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP |
+                      ES_AUTOHSCROLL,
+                  10, editY, 240, 14, kIdEdit, 0x80, nullptr) ||
+            !item(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                  150, btnY, 50, 16, kIdOk, 0x81, L"OK") ||
+            !item(WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                  206, btnY, 50, 16, kIdCancel, 0x81, L"Cancel"))
+            return false;
+    } else {
+        if (!item(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP |
+                      ES_AUTOHSCROLL,
+                  10, 10, 240, 14, kIdEdit, 0x80, nullptr) ||
+            !item(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                  150, 32, 50, 16, kIdOk, 0x81, L"OK") ||
+            !item(WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                  206, 32, 50, 16, kIdCancel, 0x81, L"Cancel"))
+            return false;
     }
 
     buf.resize(static_cast<size_t>(p - begin));
@@ -364,8 +432,10 @@ bool TemplateFitsImpl(DWORD style, DWORD exStyle, short x, short y, short cx,
 // is in the anonymous namespace above; this is the one definition the selftest
 // links against, so what is tested is what ships.
 bool TemplateFits(DWORD style, DWORD exStyle, short x, short y, short cx,
-                  short cy, const wchar_t* title, std::vector<BYTE>* buf) {
-    return TemplateFitsImpl(style, exStyle, x, y, cx, cy, title, buf);
+                  short cy, const wchar_t* title, std::vector<BYTE>* buf,
+                  const wchar_t* label) {
+    return TemplateFitsImpl(style, exStyle, x, y, cx, cy, title, buf,
+                               label);
 }
 
 bool PromptForText(HWND owner, const wchar_t* title, const wchar_t* label,
@@ -383,21 +453,39 @@ bool PromptForText(HWND owner, const wchar_t* title, const wchar_t* label,
     if (st.value.size() > maxChars) st.value.resize(maxChars);
     st.maxChars = maxChars;
 
-    // 34 DLU tall is enough for the edit plus the two buttons; the width
-    // tracks the edit control above.
+    // The label is a real caption above the edit. A label longer
+    // than the label bound would refuse the whole template (and
+    // suppress the prompt), so it is truncated instead - a
+    // truncated label still reads, a missing prompt does not. The
+    // bound is the label's own (kLabelMaxChars), not the button
+    // caption's: a preset list is an instruction, not a caption.
+    std::wstring labelBuf;
+    if (label != nullptr && label[0] != L'\0') {
+        labelBuf = label;
+        if (labelBuf.size() > kLabelMaxChars)
+            labelBuf.resize(kLabelMaxChars);
+    }
+    const wchar_t* labelArg =
+        labelBuf.empty() ? nullptr : labelBuf.c_str();
+    // The dialog grows with the label: one row per line, so the edit
+    // and buttons stay clear of a multi-line instruction. The same
+    // LabelLineCount the template writer uses, so the frame and the
+    // controls agree.
+    short cy = 60;
+    if (labelArg != nullptr) {
+        const int lines = LabelLineCount(labelArg);
+        const int shownLines = (lines > 1) ? lines : 1;
+        const int labelH =
+            kLabelBaseH + kLabelLineH * (shownLines - 1);
+        cy = static_cast<short>(8 + labelH + 4 + 14 + 6 + 16 + 8);
+    }
     std::vector<BYTE> tpl = MakeTemplate(
-        DS_ABSALIGN | DS_CENTER, 0, 0, 0, 270, 60, title);
+        DS_ABSALIGN | DS_CENTER, 0, 0, 0, 270, cy, title, labelArg);
     // An empty template means MakeTemplate refused: a title beyond
     // kTemplateMaxChars, or a write that did not fit. DialogBoxIndirectParamW
     // would then read a zero-length template whose cdit still says 3, so it is
     // not called. The prompt simply does not appear.
     if (tpl.empty()) return false;
-
-    // The label goes in the dialog's own caption area: a static control would
-    // need a 4th item in the template and the extra machinery for a single
-    // sentence is not worth it. The prompt reads fine as a titled dialog with
-    // the pre-selected value showing what is being renamed.
-    (void)label;
 
     const INT_PTR rc = ::DialogBoxIndirectParamW(
         ::GetModuleHandleW(nullptr),

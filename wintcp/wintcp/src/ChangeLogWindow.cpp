@@ -372,6 +372,7 @@ void ChangeLogWindow::AppendEvents(const std::vector<RowChange>& events) {
 void ChangeLogWindow::AppendFormatted(const std::vector<RowChange>& events,
                                       const std::wstring& stamp) {
     events_.reserve(kMaxEvents);   // grow to the cap, never shrink back
+    copyNote_.clear();   // fresh data replaces the copy receipt (G30)
     for (const RowChange& ch : events) {
         Entry e;
         e.time = stamp;
@@ -539,6 +540,7 @@ void ChangeLogWindow::SyncList(size_t evicted) {
 void ChangeLogWindow::Clear() {
     events_.clear();
     dropped_ = 0;
+    copyNote_.clear();
     follow_ = true;
     pausedTop_ = 0;
     if (hwndList_ == nullptr) return;
@@ -637,15 +639,25 @@ std::string ChangeLogWindow::ToCsv() const {
 void ChangeLogWindow::CopySelection() {
     if (hwndList_ == nullptr) return;
     int i = ListView_GetNextItem(hwndList_, -1, LVNI_SELECTED);
-    if (i < 0) return;
-
-    // Selected rows, top to bottom. The cap is a guard: a future select-all
-    // must not be able to build a 5000-row clipboard buffer behind the
-    // user's back.
+    // G30: copying with no selection used to fail silently. Fall back to
+    // the whole buffer (capped like any copy) and say the count, so the
+    // clipboard always gets what the button promises and the user knows
+    // it was everything, not the row they thought was selected.
+    bool fellBackToAll = false;
     std::vector<int> sel;
-    while (i >= 0 && sel.size() < kMaxClipboardRows) {
-        sel.push_back(i);
-        i = ListView_GetNextItem(hwndList_, i, LVNI_SELECTED);
+    if (i < 0) {
+        fellBackToAll = true;
+        const int n = ListCount();
+        for (int k = 0; k < n && sel.size() < kMaxClipboardRows; ++k)
+            sel.push_back(k);
+    } else {
+        // Selected rows, top to bottom. The cap is a guard: a future select-all
+        // must not be able to build a 5000-row clipboard buffer behind the
+        // user's back.
+        while (i >= 0 && sel.size() < kMaxClipboardRows) {
+            sel.push_back(i);
+            i = ListView_GetNextItem(hwndList_, i, LVNI_SELECTED);
+        }
     }
     if (sel.empty()) return;
 
@@ -674,6 +686,13 @@ void ChangeLogWindow::CopySelection() {
         if (hMem != nullptr) ::GlobalFree(hMem);
     }
     ::CloseClipboard();
+    // The count is the fallback's receipt: without it a whole-log copy
+    // is indistinguishable from a one-row copy.
+    if (fellBackToAll) {
+        copyNote_ = L"copied all " + std::to_wstring(sel.size()) +
+                    L" rows (no selection)";
+        UpdateStatus();
+    }
 }
 
 void ChangeLogWindow::SaveToFile() {
@@ -826,6 +845,17 @@ void ChangeLogWindow::UpdateStatus() {
         text += std::to_wstring(dropped_);
         text += L" older events dropped";
     }
+    // G30: the fallback copy's receipt, until fresh data replaces it.
+    if (!copyNote_.empty()) {
+        text += L"  \u2022  ";
+        text += copyNote_;
+    }
+    // G35: an empty log names its next action instead of sitting blank.
+    // The buffer fills only while the main window logs to a file, so the
+    // hint points at the switch that starts the feed.
+    if (events_.empty())
+        text += L"  \u2022  no events yet - File > Log changes to file... "
+                L"starts the feed";
     if (paused_)
         text += L"  \u2022  PAUSED";
     else if (!follow_)
@@ -878,6 +908,16 @@ void ChangeLogWindow::OnCommand(WORD id, LPARAM lParam) {
             break;
         }
         case IDC_LOG_CLEAR:
+            // Clearing discards every recorded event, so it is
+            // confirmed when there is something to lose (G30).
+            if (!events_.empty() &&
+                ::MessageBoxW(hwnd_,
+                              L"Clear the change log?\r\n\r\n"
+                              L"Every recorded event will be discarded.",
+                              L"WinTCP - Clear change log",
+                              MB_YESNO | MB_ICONWARNING |
+                                  MB_DEFBUTTON2) != IDYES)
+                break;
             Clear();
             break;
         case IDC_LOG_SAVE:
@@ -948,6 +988,23 @@ LRESULT CALLBACK ChangeLogWindow::SubclassProc(HWND hwnd, UINT msg,
                                                UINT_PTR, DWORD_PTR refData) {
     auto* self = reinterpret_cast<ChangeLogWindow*>(refData);
     if (self == nullptr) return ::DefSubclassProc(hwnd, msg, wParam, lParam);
+    // G30: Ctrl+A selects the whole buffer. The main window's accelerator
+    // table does not reach this owned window's focused list, so the list
+    // handles it itself rather than relying on a menu id that never fires.
+    if (msg == WM_KEYDOWN && wParam == L'A' &&
+        (::GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+        const int n = self->ListCount();
+        for (int k = 0; k < n; ++k) {
+            ListView_SetItemState(hwnd, k, LVIS_SELECTED, LVIS_SELECTED);
+        }
+        return 0;
+    }
+    // G22: Esc hides even when the list owns the focus. Keys go to the
+    // focused child, so the parent's own WM_KEYDOWN never fires for them.
+    if (msg == WM_KEYDOWN && wParam == VK_ESCAPE) {
+        if (self->Handle() != nullptr) ::ShowWindow(self->Handle(), SW_HIDE);
+        return 0;
+    }
     if (msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_KEYDOWN ||
         msg == WM_LBUTTONUP) {
         const LRESULT r = ::DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -1134,6 +1191,13 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             Layout(LOWORD(lParam), HIWORD(lParam));
             return 0;
 
+        case WM_SYSCOLORCHANGE:
+            // G23: every colour here is live (COLOR_WINDOW brush, default
+            // list colours), so a theme or high-contrast switch needs no
+            // re-derivation - only a repaint to pick the new scheme up.
+            ::InvalidateRect(hwnd_, nullptr, TRUE);
+            return 0;
+
         case WM_GETMINMAXINFO: {
             // Wide enough for the fixed columns at 96 dpi, and tall enough
             // to be a list rather than a slot.
@@ -1180,6 +1244,16 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (HIWORD(wParam) == BN_CLICKED)
                 OnCommand(LOWORD(wParam), lParam);
             return 0;
+
+        case WM_KEYDOWN:
+            // G22/G30: Esc hides (never destroys - the buffer survives, and
+            // hiding is what every other secondary window does), matching
+            // the Close button and the Details window.
+            if (wParam == VK_ESCAPE) {
+                ::ShowWindow(hwnd_, SW_HIDE);
+                return 0;
+            }
+            break;
 
         case WM_CLOSE:
             // Hide, keep the buffer: the main window keeps feeding it while

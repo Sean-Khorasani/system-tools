@@ -44,6 +44,7 @@
 #include "Presets.h"
 #include "Bookmarks.h"
 #include "ChangeLogWindow.h"
+#include "ProcessTreeWindow.h"   // GUI process-tree view (View > Process tree)
 #include "TypeToJump.h"
 #include "SocketTraffic.h"
 
@@ -192,7 +193,13 @@ private:
                           std::uint64_t focusedId, int topIdx);
     void UpdateSortIndicator();            
     void UpdateStatusBar(const std::wstring& errorText);
+    void UpdateCaption();               // G27: the state-carrying title
+    void SyncGroupHeader();             // G27: "Process (N groups)" header
     void UpdateExposure();                   // 9.5.5: the exposure badge
+    void UpdateTrayTip();               // G26: rows/frozen/grouped/alerts tip
+    void InitTooltips();                // G31: control-bar tips
+    void UpdateStatusTips();            // G31: every status pane gets a tip
+    void ResetLayout();                 // G28: defaults + persist + rebuild
     // Status-bar panes 3 and 4, factored out so the countdown stays a pure
     // function of the last refresh tick and the auto-refresh interval.
     std::wstring SelectedSummary() const;
@@ -307,6 +314,12 @@ private:
     int VisibleToCol(int visibleIndex) const;   // -1 when out of range
     int ColToVisible(int columnId) const;       // -1 when hidden
 
+    // The index in the shell's system image list for a
+    // process image, or -1 when the shell has none (roadmap
+    // G9). Queries the shell by path, so an .exe shows its
+    // own icon rather than a generic one.
+    int ProcessIconIndex(const std::wstring& path) const;
+
     // members ----------------------------------------------------------------
     HINSTANCE hInstance_ = nullptr;
     HWND hwnd_ = nullptr;
@@ -319,6 +332,24 @@ private:
     HWND hwndProtoCbo_ = nullptr;
     HWND hwndStateCbo_ = nullptr;
     HWND hwndSearchEdit_ = nullptr;
+    // The shell's system small-icon list, attached to the list so
+    // each row can carry its process's icon (roadmap G9). Owned by
+    // the shell, not by us: it is never destroyed here, only
+    // attached and left for the list to release. Null until the
+    // shell image list is first resolved.
+    HIMAGELIST iconImageList_ = nullptr;
+    // G31: one tooltip control for the whole control bar. Created once in
+    // CreateControls; tools are added there and never removed, because the
+    // bar's children live as long as the window.
+    HWND hwndTip_ = nullptr;
+    // G25: a refresh has been requested but no result has arrived yet. Set
+    // in Refresh(), cleared in OnRefreshResult on every path (success,
+    // error, frozen-early-out), so a slow enum/DNS stall reads as
+    // "Refreshing..." instead of looking idle.
+    bool refreshInFlight_ = false;
+    // G26: the first-hide balloon ("where did the window go, click to
+    // restore") shows once per process, not once per minimize.
+    bool trayHideBalloonShown_ = false;
 
     ConnectionStore store_;
     RefreshEngine engine_;
@@ -453,6 +484,10 @@ private:
     // TakeChangeEvents is destructive, so there is exactly one drain and both
     // consumers get the batch. See WriteChangeLog().
     ChangeLogWindow changeLog_;
+
+    // The GUI process-tree view. Fed a snapshot supplier, not the store, so
+    // the tree renders values the refresh cannot reallocate mid-render.
+    ProcessTreeWindow tree_;
 
     // 4.3 GeoIP. Loaded lazily from the user-supplied .mmdb; never
     // downloaded. The module existed and was fully tested but was never
