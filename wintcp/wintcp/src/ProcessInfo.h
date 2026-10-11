@@ -24,6 +24,29 @@
 
 namespace wintcp {
 
+// One process from a Toolhelp snapshot: what a process-tree view needs and
+// nothing more. NOT the connection-bearing subset - the point of a process
+// tree is that chrome.exe shows its 32 renderers whether or not any of them
+// happens to hold a socket this second, which is what Task Manager's
+// Processes tab does and what a tree built from the connection table cannot
+// (a renderer between requests owns no endpoint and would be missing).
+struct ProcessRecord {
+    DWORD pid = 0;
+    DWORD ppid = 0;
+    std::wstring name;
+};
+
+// Every process on the machine, from ONE CreateToolhelp32Snapshot
+// (TH32CS_SNAPPROCESS). Best effort: an empty result means the snapshot
+// failed, which a caller reports rather than renders as an empty machine.
+//
+// th32ParentProcessID comes free on the entry already being walked, so the
+// parent costs nothing beyond the snapshot itself - the same reason
+// ProcessResolver reads it from here rather than per-PID. The Idle process
+// (PID 0) is skipped: it is not a process in any sense a tree can show, and
+// the engine's own node rule already excludes it.
+std::vector<ProcessRecord> EnumerateProcesses();
+
 // F5.2: a process's integrity level, from TokenIntegrityLevel's mandatory
 // label. The RID is what the label encodes (S-1-16-<rid>), and naming the
 // levels rather than printing RIDs is the point: 12288 tells a reader nothing,

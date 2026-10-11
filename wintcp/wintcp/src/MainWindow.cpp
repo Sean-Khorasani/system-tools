@@ -476,6 +476,39 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         ::swprintf_s(buf, L"%lld", (long long)n);
         return buf;
     }
+    if (::wcscmp(op, L"enumeratedProcesses") == 0) {
+        // How many processes the machine reports, straight from the same
+        // enumeration the tree is built from. The harness compares it with
+        // the tree's item count: a tree that drew only what the connection
+        // table happened to hold is smaller than this, and that difference
+        // is the user's "chrome's 32 processes are missing" in one number.
+        const std::vector<ProcessRecord> machine = EnumerateProcesses();
+        ::swprintf_s(buf, L"%zu", machine.size());
+        return buf;
+    }
+    if (::wcscmp(op, L"distinctConnectionPids") == 0) {
+        // Distinct PIDs across the connection rows - the size of the tree
+        // the old implementation produced.
+        std::set<DWORD> pids;
+        for (const Connection& c : store_.Rows()) pids.insert(c.pid);
+        ::swprintf_s(buf, L"%zu", pids.size());
+        return buf;
+    }
+    if (::wcscmp(op, L"connectionPidList") == 0) {
+        // The same set, comma-separated, so the harness can pick a tree node
+        // that owns NO connection and drive the path that answers it. Without
+        // this the harness has a count to compare with and no way to choose a
+        // node - and the connection-less process is most of the tree.
+        std::set<DWORD> pids;
+        for (const Connection& c : store_.Rows()) pids.insert(c.pid);
+        std::wstring all;
+        for (DWORD p : pids) {
+            if (!all.empty()) all += L',';
+            all += std::to_wstring(p);
+        }
+        ::wcscpy_s(buf, all.c_str());
+        return buf;
+    }
     if (::wcscmp(op, L"treeSelection") == 0) {
         // The list selection the tree's current node mapped to, as the pid
         // the node carries. Empty when nothing is selected or the tree has
@@ -496,6 +529,22 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"listSelectionCount") == 0) {
         const LRESULT n = ::SendMessageW(hwndList_, LVM_GETSELECTEDCOUNT, 0, 0);
         ::swprintf_s(buf, L"%lld", (long long)n);
+        return buf;
+    }
+    if (::wcscmp(op, L"listSelectionPid") == 0) {
+        // The PID of the first selected list row, or nothing. The harness
+        // compares it with the tree's caret pid so "the node mapped to a
+        // selection" is checked EXACTLY rather than as "a selection exists
+        // somewhere" - the caret can legitimately sit on a process that owns
+        // no connection (System, PID 4), where no row can be selected and an
+        // empty answer is the correct one.
+        const int sel = static_cast<int>(::SendMessageW(
+            hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
+            MAKELPARAM(LVNI_SELECTED, 0)));
+        if (sel == -1) return L"";
+        const Connection* c = store_.ViewRow(static_cast<size_t>(sel));
+        if (c == nullptr) return L"";
+        ::swprintf_s(buf, L"%lu", static_cast<unsigned long>(c->pid));
         return buf;
     }
     if (::wcscmp(op, L"preserveSelection") == 0) {
@@ -604,6 +653,22 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     }
     if (::wcscmp(op, L"detailsVisible") == 0) {
         return details_.IsVisible() ? L"1" : L"0";
+    }
+    if (::wcscmp(op, L"detailsTitle") == 0) {
+        // The current details model's header, e.g. "chrome.exe". The pid is
+        // NOT in it (the model puts it in the subtitle), so a check that needs
+        // to know WHICH process the window describes reads 'detailsPid'
+        // instead - which is also the pid the window tracks for its live
+        // updates, and therefore the thing that is wrong when the wrong
+        // Details opens.
+        return detailsModel_.title.c_str();
+    }
+    if (::wcscmp(op, L"detailsPid") == 0) {
+        // The pid the details window is describing. Set by every path that
+        // opens it, so an empty answer means "Details was never opened".
+        if (detailsPid_ == 0) return L"";
+        ::swprintf_s(buf, L"%lu", static_cast<unsigned long>(detailsPid_));
+        return buf;
     }
     if (::wcscmp(op, L"chartsVisible") == 0) {
         return charts_.IsVisible() ? L"1" : L"0";
@@ -2771,13 +2836,45 @@ void MainWindow::ToggleTreeMode() {
 
 void MainWindow::RebuildTree() {
     if (hwndTree_ == nullptr) return;
-    // store_.Rows() is the UNFILTERED row set, which is the rule the engine
-    // documents: a tree built from a filtered view is a broken tree, because
-    // the parents are missing. Copying by value is the price of that rule
-    // and it is paid only while the mode is on.
-    const std::vector<Connection> rows(store_.Rows());
+    // Two sources, merged here and nowhere else. WHO the processes are comes
+    // from one Toolhelp snapshot (EnumerateProcesses), so chrome.exe shows
+    // its 32 renderers whether or not any of them holds a socket this
+    // second; HOW MANY connections each owns comes from the store. The view
+    // module takes the merged list and knows about neither source.
+    //
+    // This used to aggregate the store's rows instead, which meant the tree
+    // held only processes that happened to own an endpoint. The user
+    // reported the result: "it always shows firefox.exe with one child but
+    // not chrome.exe's 32 processes" - every chrome renderer between
+    // requests owns no socket and was simply absent.
+    const std::vector<ProcessRecord> machine = EnumerateProcesses();
+    std::unordered_map<DWORD, size_t> connByPid;
+    connByPid.reserve(machine.size() * 2 + 1);
+    size_t totalConnections = 0;
+    for (const Connection& c : store_.Rows()) {
+        ++connByPid[c.pid];
+        ++totalConnections;
+    }
+    std::vector<ProcessTreeNode> procs;
+    procs.reserve(machine.size());
+    for (const ProcessRecord& r : machine) {
+        ProcessTreeNode n;
+        n.pid = r.pid;
+        n.ppid = r.ppid;
+        n.ppidKnown = true;   // Toolhelp carries the parent on the entry
+        n.name = r.name.empty() ? std::wstring(L"(unknown)") : r.name;
+        auto it = connByPid.find(r.pid);
+        n.connections = (it != connByPid.end()) ? it->second : 0;
+        procs.push_back(std::move(n));
+    }
+    // Kept: the tree's node carries only a pid, so a process with no
+    // connection row (most of the tree) still has to be able to show its
+    // Details. A copy, because the fill's own vector is its input and this
+    // outlives the call.
+    treeProcs_ = procs;
+
     bool depthExceeded = false;
-    const size_t procs = ProcessTreeFill(hwndTree_, rows, &depthExceeded);
+    const size_t count = ProcessTreeFill(hwndTree_, procs, &depthExceeded);
     // The fill preselects the first root; map that caret to a list SELECTION
     // here, so the mode opens with something selected - the status bar, the
     // context menu and every row command have a row to act on from the first
@@ -2795,14 +2892,16 @@ void MainWindow::RebuildTree() {
                 SelectViewRowForPid(static_cast<DWORD>(it.lParam));
         }
     }
-    std::wstring text = std::to_wstring(procs) + L" processes, " +
-                        std::to_wstring(rows.size()) + L" connections";
+    std::wstring text = std::to_wstring(count) + L" processes, " +
+                        std::to_wstring(totalConnections) + L" connections";
     if (depthExceeded)
         text += L"  \u2022  very deep chain: some nodes omitted";
-    // G35: an empty tree names its next action, like the other windows.
-    if (procs == 0)
-        text = L"No processes \u2014 the main table has no rows. Refresh, "
-               L"then switch back to the list view.";
+    // G35: an empty tree names its next action, like the other windows. The
+    // machine reporting no processes is a snapshot failure, not an idle
+    // machine, so the action is Refresh rather than "check the table".
+    if (count == 0)
+        text = L"No processes \u2014 the machine reports none. Press "
+               L"Refresh, then try the tree again.";
     treeSummary_ = text;
     UpdateStatusBar(lastError_);
 }
@@ -2837,6 +2936,40 @@ bool MainWindow::SelectViewRowForPid(DWORD pid) {
     ::SendMessageW(hwndList_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(viewIdx),
                    FALSE);
     return true;
+}
+
+const ProcessTreeNode* MainWindow::TreeProcessForPid(DWORD pid) const {
+    // The tree's node carries only a pid, so a process that owns NO
+    // connection has no row to map to - and its Details still has to work,
+    // because that is most of the tree (chrome's renderers between requests,
+    // the System process, and every idle service). The name comes from the
+    // list the fill drew.
+    if (pid == 0) return nullptr;
+    for (const ProcessTreeNode& p : treeProcs_)
+        if (p.pid == pid) return &p;
+    return nullptr;
+}
+
+void MainWindow::ShowDetailsForTreePid(DWORD pid) {
+    if (SelectViewRowForPid(pid)) {
+        ShowDetailsOfSelectedRow();
+        return;
+    }
+    // No connection row: build the process dossier from the tree's own data
+    // instead of doing nothing. A synthetic row carries only what is known
+    // (pid, name), and the details model answers the process questions from
+    // that - the same window Task Manager opens for a process with no
+    // sockets. The row is not stored anywhere and never appears in the list.
+    const ProcessTreeNode* p = TreeProcessForPid(pid);
+    if (p == nullptr) return;
+    Connection c = {};
+    c.pid = p->pid;
+    c.processName = p->name;
+    detailsPid_ = c.pid;
+    detailsExitedNoted_ = false;
+    detailsModel_ = BuildDetails(c);
+    details_.SetDark(ThemeIsDark());
+    details_.Show(hwnd_, font_, detailsModel_, std::wstring());
 }
 
 void MainWindow::UpdateTrayTip() {
@@ -3571,9 +3704,8 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
                 it.mask = TVIF_PARAM | TVIF_HANDLE;
                 it.hItem = item;
                 if (::SendMessageW(hwndTree_, TVM_GETITEMW, 0,
-                                   reinterpret_cast<LPARAM>(&it)) &&
-                    SelectViewRowForPid(static_cast<DWORD>(it.lParam)))
-                    ShowDetailsOfSelectedRow();
+                                   reinterpret_cast<LPARAM>(&it)))
+                    ShowDetailsForTreePid(static_cast<DWORD>(it.lParam));
                 break;
             }
             case NM_RCLICK: {

@@ -253,6 +253,26 @@ void ProcessResolver::BuildSnapshotIfNeeded() {
     ::CloseHandle(snap);
 }
 
+std::vector<ProcessRecord> EnumerateProcesses() {
+    std::vector<ProcessRecord> out;
+    HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;   // caller reports
+    PROCESSENTRY32W pe = {};
+    pe.dwSize = sizeof(pe);
+    if (::Process32FirstW(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID == 0) continue;   // the Idle process
+            ProcessRecord r;
+            r.pid = pe.th32ProcessID;
+            r.ppid = pe.th32ParentProcessID;
+            r.name = pe.szExeFile;
+            out.push_back(std::move(r));
+        } while (::Process32NextW(snap, &pe));
+    }
+    ::CloseHandle(snap);
+    return out;
+}
+
 void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
     e = Entry();
 

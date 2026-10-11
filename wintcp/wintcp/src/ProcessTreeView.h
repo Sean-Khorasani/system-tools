@@ -29,22 +29,34 @@
 #include <string>
 #include <vector>
 
-#include "Connection.h"
-
 namespace wintcp {
 
-// Empties 'tree' and refills it: one item per PROCESS (every row with the
-// PID folded in, labelled "name  (PID n, k connections)"), placed under its
-// parent where the parent is also in the set and as a root otherwise. Roots
-// are expanded one level, so the forest reads as a tree on open.
+// One process, already deduplicated. 'connections' is decoration for the
+// label ("name  (PID n, k connections)") and never affects the SHAPE: the
+// caller counts them from the connection table and passes the number in,
+// so this module holds no socket knowledge and a tree of all processes with
+// no connections at all renders exactly the same shape.
+struct ProcessTreeNode {
+    DWORD pid = 0;
+    DWORD ppid = 0;
+    bool ppidKnown = true;
+    std::wstring name;
+    size_t connections = 0;
+};
+
+// Empties 'tree' and refills it: one item per PROCESS in 'procs'
+// (exactly what is passed, so the caller decides which processes exist),
+// placed under its parent where the parent is also in the set and as a root
+// otherwise. Roots are expanded one level, so the forest reads as a tree on
+// open, and the first root is selected so the arrow keys work immediately.
 //
 // Returns the process count. '*depthExceeded' receives the engine's ceiling
 // flag so the caller can say so rather than truncating silently.
 //
-// 'rows' is taken BY VALUE on the caller's side: a refresh that reallocates
-// the store mid-render cannot corrupt the tree, because the values were
-// copied before the first insert.
-size_t ProcessTreeFill(HWND tree, const std::vector<Connection>& rows,
+// 'procs' is copied by the caller before the first insert, so a refresh that
+// replaces the store (or re-enumerates the machine) mid-render cannot
+// corrupt the tree.
+size_t ProcessTreeFill(HWND tree, const std::vector<ProcessTreeNode>& procs,
                        bool* depthExceeded);
 
 }  // namespace wintcp
