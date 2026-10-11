@@ -20,8 +20,11 @@ This page covers the desktop application. For the command-line mode see the [CLI
 - [Performance graphs](#performance-graphs)
 - [Traffic counters in the GUI](#traffic-counters-in-the-gui)
 - [GeoIP in the window](#geoip-in-the-window)
+- [Blocked peers](#blocked-peers)
+- [Alerts (F5.6)](#alerts-f56)
 - [Windows integration](#windows-integration)
 - [Settings and reset](#settings-and-reset)
+- [Process tree](#process-tree)
 
 ## Main window
 
@@ -90,13 +93,17 @@ The visible set, order, widths and sort persist between runs. The persisted colu
 
 ## Filtering and sorting
 
-Above the list are a **protocol** combo (All, TCPv4, TCPv6, UDP and so on), a **TCP-state** combo, and a **filter box** with a 250 ms debounce. The filter box accepts the field expressions described in the [filter language](filters.md): substring matches, field-restricted matches, ranges, numeric thresholds on live stats, side restrictions, quoting, `exclude:` and implicit AND.
+Above the list are a **Protocol** combo (All, TCPv4, TCPv6, UDP and so on), a **TCP-state** combo, and a **filter box** with a 250 ms debounce. Both combos carry visible captions (`Protocol:`, `State:`) like the `Filter:` box, and every control-bar control has a tooltip naming what it does. The filter box accepts the field expressions described in the [filter language](filters.md): substring matches, field-restricted matches, ranges, numeric thresholds on live stats, side restrictions, quoting, `exclude:` and implicit AND.
+
+The window enforces a minimum size (about 760x420 at 100%) so the right-anchored combos never run off a narrow window, and the search box stretches between the `Filter:` caption and the `Protocol:` caption to use whatever width is left.
 
 Click a column header to sort, and click again to reverse. Sorting by State uses the natural TCP-state order rather than alphabetical order. Sort column, direction, column widths and visibility, and the filter text all persist.
 
-Menu commands exist for *Select all*, *Focus filter* and *Clear filter*, and an accelerator table is provided.
+Menu commands exist for *Select all*, *Focus filter* and *Clear filter*, and an accelerator table is provided. **Filter → Focus custom filter** (no ellipsis, no dialog) does what it says: it puts the caret in the filter box.
 
-Presets saved with `wintcp.exe preset save` appear in the **File** menu, so a view built on the command line is available in the window.
+A refresh that has been requested but not yet answered reads `Refreshing...` in the status bar, so a slow enumeration or a DNS stall looks busy rather than idle. When the table itself is empty for a fixable reason, the reason is also drawn **in the list** where the rows would have been (with the action that clears it), not only in the status bar — and **View → Table diagnostics...** offers the same fix on demand.
+
+Presets saved with `wintcp.exe preset save` appear in the **File** menu, so a view built on the command line is available in the window. **Load preset...** and **Delete preset...** show the numbered preset list inside the prompt itself, so the number you type refers to something on screen.
 
 ## Actions
 
@@ -106,8 +113,8 @@ Right-click a row (or double-click to open Details):
 |---|---|
 | **Details** | Opens the [Details window](#details-window). Double-clicking a row does the same. |
 | **Copy selected / Copy all** | Copies rows to the clipboard. |
-| **End process** | Ends the owning process after verifying that the PID still refers to the same process (PID-reuse check). |
-| **Close connection** | Deletes the TCP entry with `SetTcpEntry(DELETE_TCB)`. IPv4 only, and requires administrator rights. |
+| **End process** | Ends the owning process after verifying that the PID still refers to the same process (PID-reuse check). Bound to `Ctrl`+`Del` — a stray keypress must not end a process. The scriptable path is `wintcp.exe kill <pid> --yes`. |
+| **Close connection** | Deletes the TCP entry with `SetTcpEntry(DELETE_TCB)`. IPv4 only, and requires administrator rights. Bound to `Del`. |
 | **Open file location** | Opens Explorer on the row's executable. |
 | **Block this connection** | Adds a firewall block rule. IPv4 only, and requires administrator rights. |
 | **Export selection.** | Writes the selected rows to a file. See [Export](#export). |
@@ -153,8 +160,9 @@ Fields are laid out as a **two-column table**, one row per field:
 - A **hairline rule** separates the label column from the value column.
 - Values are drawn in a fixed-pitch face only where alignment matters (byte counts, timestamps, addresses); everything else uses the UI font, including the labels.
 - Every section header carries an **accent bar** down its left edge, so the sections read as separated at a glance without hovering anything. Hovering a header highlights it, which is the cue that it can be collapsed.
-- Sections are collapsible by clicking their header. The state is per-window and is never persisted.
+- Sections are collapsible by clicking their header. A `[-]`/`[+]` chevron marks every collapsible header, and hovering one brightens its band. The state is per-window and is never persisted.
 - Long values are elided rather than wrapped; a visibly shortened value beats a silent cut. Copy the value to the clipboard to get all of it.
+- The body scrolls on a **native scrollbar** (arrows, paging, thumb-drag, Home/End all work), and the keyboard scrolls too: `Up`/`Down` step a line, `PageUp`/`PageDown` a page, `Home`/`End` jump. Tabs switch with `Ctrl`+`Tab` / `Ctrl`+`Shift`+`Tab` (or the `Left`/`Right` arrows when the window itself has focus); section headers and tabs show a hand cursor. The window's accessible name is the plain-text model, so screen readers announce the same text **Copy** puts on the clipboard.
 
 Two layout faults were fixed on 2026-10-05, both of which had been reported as "the window doesn't split correctly":
 
@@ -192,6 +200,8 @@ Two **View** switches change what a row *means* rather than what it shows:
 
 Grouping answers "who", not "which socket" - the difference between recipe 5 in the [cookbook](cookbook.md) (one row per process) and recipe 14 (everything known about one connection). Nine columns cannot survive that change honestly: **Local address**, **Local port**, **Remote address**, **Remote port**, **Duration**, **Hostname**, **TLS**, **Country** and **Note** each describe one connection, or in the case of a note one remote endpoint. Under `--group` the CLI refuses those nine in `csv`, `json` and `full`, because a file's header would promise a value its rows do not carry - and it names the offending columns so the mismatch is visible rather than silently repaired. The default `table` format is deliberately exempt: a grouped row already says what it is, because its **State** cell reads `4 connections`, its **Proto** cell reads `TCP+UDP`, and its **Process** cell falls back to the PID when the name is unknown. In a table a blank column next to those is self-explanatory; in a CSV it is a lie.
 
+A grouped or frozen view says so in three places, not just the status bar: the **caption** gains `[Grouped]` / `[Frozen]` (and `[Filtered]` when a filter is active), the **Process column header** reads `Process (N groups)` with the live group count, and **copied rows** carry `#`-comment header lines naming the mode — so a pasted table cannot be mistaken for a live flat one.
+
 ## Keyboard shortcuts
 
 **Help -> Keyboard shortcuts** (`F1`) opens the in-app sheet. The same set, in the order the sheet groups it - by what the keys do, not alphabetically:
@@ -208,7 +218,8 @@ Grouping answers "who", not "which socket" - the difference between recipe 5 in 
 | `Ctrl+S` | Save view as preset |
 | `Ctrl+E` | Export to CSV |
 | `Esc` | Clear the filter |
-| `Del` | Graceful close: `WM_CLOSE`, then terminate |
+| `Del` | Close the selected connection |
+| `Ctrl`+`Del` | End the selected process (graceful close first; the scriptable path is `wintcp.exe kill <pid> --yes`) |
 | `A`-`Z` | Type to jump to a row by process name |
 | `Backspace` | Back out of a type-to-jump prefix |
 | `Alt` | Underline a letter to walk the menus (hold `Ctrl` as well) |
@@ -238,6 +249,8 @@ For scripted exports and column control use `wintcp.exe export`; see [CLI refere
 
 **File → Change log** writes an append-only CSV of `APPEAR`, `DISAPPEAR` and `STATE` events, taken from the same diff that drives the row highlighting on each refresh.
 
+The **Change log window** (`File → Change log window...`) shows the same feed live: **Clear** asks for confirmation (with the safe button defaulted), **Copy** with no selection copies the whole buffer and says how many rows it took, `Ctrl`+`A` selects all, and `Esc` hides the window without losing the buffer. An empty window names its next action (`File → Log changes to file...` starts the feed) instead of sitting blank.
+
 ## Performance graphs
 
 **View → Performance graphs…** opens a modeless window with four live line charts, sampled once per second with a 120-sample history stretched across the plot area:
@@ -249,7 +262,9 @@ For scripted exports and column control use `wintcp.exe export`; see [CLI refere
 | Disk read / write B/s | PDH `PhysicalDisk(_Total)`, using locale-independent English counter paths. Shows `n/a` for that panel when counters are disabled. |
 | Network down / up B/s | 64-bit interface octet deltas from `GetIfTable2`. |
 
-Each panel is independent and has its own "collecting…" and `n/a` states. The charts are double-buffered, follow the system theme and enforce a minimum window size. The window opens centered over the main window; closing it with **X** hides it and stops the one-second sampling timer, the menu entry shows it again (and its check mark re-syncs when the menu opens), and it is destroyed with the application.
+Each panel is independent and has its own "collecting…" and `n/a` states; before the first samples land, one line over the plot area says traces are on their way. The two-line panels (Disk, Network) carry a **colour legend** (`R`/`W`, `down`/`up`) at the right of the caption row, so the two line colours are explained where they are drawn. The charts are double-buffered, follow the system theme (including high contrast, where the series borrow the system's contrast-picked highlight pair) and enforce a minimum window size. The window opens centered over the main window; closing it with **X** — or `Esc` — hides it and stops the one-second sampling timer, the menu entry shows it again (and its check mark re-syncs when the menu opens), and it is destroyed with the application.
+
+The window is display-only no longer: **&Export…** writes the full histories as CSV through the same exporter the tests pin (panel order, units and ceilings identical to the traces), and **&Copy values** puts the current-values table on the clipboard — the same table the window's accessible name announces, so keyboard and screen-reader users reach every number the traces show.
 
 ## Traffic counters in the GUI
 
@@ -281,12 +296,12 @@ The path is the only thing remembered, not the database's contents: a file repla
 
 **View → Blocked peers…** lists the firewall rules **Block this connection** created, and lets you delete one or all of them. It needs no elevation to open or to delete a rule.
 
-Each row is read from the rule the firewall actually holds, not from what the ledger remembered writing, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up **as it really is** — a row tagged `[disabled]` or `[not a block]` — rather than being counted as protection. A block that is not blocking is the one state this window must never pass off as cover. A rule deleted out from under the ledger is simply absent from the list.
+The list is a **report view** with sortable **Rule**, **Remote** and **Status** columns — click a header to sort, click again to reverse, with the arrow kept on the ordering column. Each row is read from the rule the firewall actually holds, not from what the ledger remembered writing, so a rule you disabled, or flipped to allow, in `netsh advfirewall` or WF.msc shows up **as it really is** — `disabled` or `not a block` in the Status column — rather than being counted as protection. A block that is not blocking is the one state this window must never pass off as cover. A rule deleted out from under the ledger is simply absent from the list. An empty list says blocking a connection adds the first row, instead of sitting blank, and the action buttons disable until there is a rule to act on.
 
-- **Delete** removes the selected rule.
+- **Delete** removes the selected rule, after a confirmation naming it.
 - **Enable** / **Disable** leave the rule installed and flip its Enabled state. Disabling is not deleting: a disabled rule keeps its identity, its name and its description, so "turn this off for an hour and put it back" is one step instead of delete-then-re-derive. A rule recreated from scratch is a rule whose name may change and whose description is gone.
-- **Remove all** removes every WinTCP rule — the same function the tray menu's **Remove all WinTCP blocks** runs, reached here without the trip through the tray.
-- **Close** dismisses the dialog.
+- **Remove all** removes every WinTCP rule — the same function the tray menu's **Remove all WinTCP blocks** runs, reached here without the trip through the tray — after a confirmation, with the safe button defaulted.
+- **Close** dismisses the dialog. Dismissing it (or `Esc`) without changing anything reports "looked and left", so the main table does not refresh for nothing.
 
 **The list is re-read from the firewall after every action**, and the selection follows the rule it was on when that rule still exists. A manager that closed after each action would take three operations per change, and a manager that kept its own copy of the list would show a state the firewall was not in. If the re-read fails, the list is left as it was rather than emptied — an empty list on a failed read would read as "you have no rules", which is the one answer this dialog must never give wrongly.
 
@@ -319,10 +334,17 @@ that does nothing is worse than no alert.
 ## Windows integration
 
 - **DPI.** Per-Monitor V2 DPI awareness via the manifest, 9 pt Segoe UI. Widths and fonts are recomputed on `WM_DPICHANGED`.
-- **Theme.** There is no dark-mode toggle. The list, status bar and filter box are painted from the live system colors (`GetSysColor`) and repaint on `WM_SYSCOLORCHANGE` and `WM_THEMECHANGED`, so light, dark and high-contrast schemes work without a restart.
-- **High contrast (9.4.9).** `DetailsDialog`. `MainWindow` and `DetailsDialog` both call `HighContrastActive()` (`SPI_GETHIGHCONTRAST`) and bypass their dark palette when it is set, deriving every colour from `GetSysColor` so the scheme's own values win. `MainWindow::ThemeIsDark` short-circuits to `false` under HC, and `DetailsDialog::ApplyColors` re-derives on `WM_SYSCOLORCHANGE`/`WM_THEMECHANGED`, so toggling HC mid-session repaints immediately. The hard-coded `kDark*` substitutes are never applied on top of an HC palette.
-- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; double-click (or single-click, line 759) restores. A balloon fires on a new listener via `ShowTrayBalloon` (Alerts.cpp), though the alert loop itself is not yet wired into the live refresh. **First-run minimize prompt (9.4.6):** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
+- **Theme.** There is no dark-mode toggle. The list, status bar and filter box are painted from the live system colors (`GetSysColor`) and repaint on `WM_SYSCOLORCHANGE` and `WM_THEMECHANGED`, so light, dark and high-contrast schemes work without a restart. One shared palette header (`Theme.h`) derives every self-painted surface: the Details bands, the charts background/grid and the dark substitutes (`0x202020`/`0xF0F0F0`) are single spellings now, not per-window copies.
+- **High contrast (9.4.9).** Every window probes `HighContrastActive()` from the same header (`SPI_GETHIGHCONTRAST`) and bypasses its dark palette when it is set, deriving every colour from `GetSysColor` so the scheme's own values win. `MainWindow::ThemeIsDark` short-circuits to `false` under HC; Details, Charts, Change log and the process tree all repaint on `WM_SYSCOLORCHANGE` without a restart. The shared dark substitutes are never applied on top of an HC palette, and the charts' fixed series colours yield to the system's highlight pair under HC.
+- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; single-click (double-click works too) restores, and the first hide explains that once per run with a balloon. The tray tip names what the window holds — rows shown / total, plus grouped, frozen and alert states — instead of a fixed title. A balloon fires on a new listener via `ShowTrayBalloon` (Alerts.cpp), though the alert loop itself is not yet wired into the live refresh. **First-run minimize prompt (9.4.6):** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
 - **Always on top** can be toggled from the menu or the tray.
 
 ## Settings and reset
 
+Window placement, columns (mask, order, widths), sort, filter, always-on-top, tray and the database paths all persist in `HKCU\Software\WinTCP`. When a persisted layout goes wrong, **View → Reset columns & layout** restores every default the startup path uses — visible set, widths, order, `PID`-ascending sort and an empty filter — and persists the fix through the same single write path, so it survives a restart. No registry editing required.
+
+## Process tree
+
+**View → Process tree...** shows the processes behind the sockets as a tree, in the style of Task Manager's Processes tab: one node per process, labelled `name (PID n, k connections)`, with children under their parents. Roots are processes nothing in the set claims as a child — the engine's definition, which survives recycled parent PIDs rather than trusting "PPID 0".
+
+The tree renders the main table's snapshot (taken when the window opens, re-taken on **Refresh**), over the same pure `ProcessTree` engine the `killtree` verb plans on — so the view and the verb cannot disagree about the shape. A very deep chain reports that some nodes were omitted instead of truncating silently. `Esc` or **Close** hides the window without losing the snapshot; **Refresh** re-reads the main table. An empty tree says the main table has no rows and points at refreshing it, instead of sitting blank.
