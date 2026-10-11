@@ -662,10 +662,12 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 }  // namespace
 
-// The row for one rule. Exported because the selftest pins it: the one place
-// it runs is a modal the UI harness cannot dismiss, so it would otherwise be
-// an untested capacity rule - which is the failure PromptDialog.cpp documents
-// at length. What is tested is what ships.
+// The single-column row text from the old list-box layout. NOT what the
+// dialog shows any more - the report view paints Rule/Remote/Status cells
+// (BlockedPeersCellText), which is the G14 fix. It stays exported because
+// the selftest pins it: a truncation capacity is untestable through a modal
+// the UI harness cannot dismiss, so what is tested is what ships as a
+// unit-tested helper rather than nothing.
 std::wstring BlockedPeersRowText(const BlockedRule& r) {
     std::wstring text = r.name;
     if (!r.enabled) text += L"  [disabled]";

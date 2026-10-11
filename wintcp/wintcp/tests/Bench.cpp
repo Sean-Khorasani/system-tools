@@ -74,6 +74,7 @@ void CheckDnsCache(TestResult& r);   // F5.5: pure over strings, so it sits besi
 #include "IniFile.h"              // 9.2.10: the portable wintcp.ini
 #include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
 #include "ProcessTree.h"          // 9.5.6: the process tree
+#include "RowAccessible.h"        // G21: the accessible row-text builders
 #include "Sha256.h"               // 9.5.7: the image hash
 #include "ExposureScore.h"        // 9.5.7: the exposure badge predicate
 #include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
@@ -6317,6 +6318,71 @@ TestResult RunSelfTest() {
         for (const Shortcut& s : sc)
             if (sheet.find(s.keys) == std::wstring::npos) allRendered = false;
         Check(r, "sheet.renders-every-entry", allRendered);
+    }
+
+    // G21 - the accessible row text. Pure builders, pinned here so what a
+    // screen reader hears is asserted without COM and without a window:
+    // the MSAA wrapper only carries these answers, it never re-derives
+    // them, and the harness reads the same derivation through accRow.
+    {
+        Connection c;
+        c.processName = L"chrome.exe";
+        c.protoLabel = L"TCPv4";
+        c.stateLabel = L"ESTABLISHED";
+        c.pid = 1234;
+        const AccessibleRowText flat = FlatRowAccessibleText(c, 8);
+        Check(r, "g21.acc.flat-name",
+              flat.name == L"chrome.exe, TCPv4, ESTABLISHED",
+              WideToUtf8(flat.name));
+        Check(r, "g21.acc.flat-description",
+              flat.description == L"PID 1234, 8 connections",
+              WideToUtf8(flat.description));
+
+        // Singular reads singular: "1 connection", never "1 connections".
+        const AccessibleRowText one = FlatRowAccessibleText(c, 1);
+        Check(r, "g21.acc.singular-connection",
+              one.description == L"PID 1234, 1 connection",
+              WideToUtf8(one.description));
+
+        // An empty process name is "(unknown)", the one placeholder the
+        // change log already uses - never a leading ", TCPv4".
+        Connection ghost;
+        ghost.processName.clear();
+        ghost.protoLabel = L"UDPv4";
+        ghost.stateLabel = L"\u2014";
+        ghost.pid = 5678;
+        const AccessibleRowText unk = FlatRowAccessibleText(ghost, 3);
+        Check(r, "g21.acc.unknown-name",
+              unk.name == L"(unknown), UDPv4, \u2014",
+              WideToUtf8(unk.name));
+
+        // Grouped rows name the aggregate: the group's display name (which
+        // is already "PID n" when unknown) plus its protocol mix.
+        ProcessGroup g;
+        g.pid = 4321;
+        g.name = L"svchost.exe";
+        g.rowCount = 14;
+        g.hasTcp = true;
+        g.hasUdp = true;
+        const AccessibleRowText grp = GroupRowAccessibleText(g);
+        Check(r, "g21.acc.group-name",
+              grp.name == L"svchost.exe, TCP+UDP",
+              WideToUtf8(grp.name));
+        Check(r, "g21.acc.group-description",
+              grp.description == L"PID 4321, 14 connections",
+              WideToUtf8(grp.description));
+
+        ProcessGroup tcpOnly;
+        tcpOnly.pid = 7;
+        tcpOnly.name = L"PID 7";
+        tcpOnly.rowCount = 1;
+        tcpOnly.hasTcp = true;
+        tcpOnly.hasUdp = false;
+        const AccessibleRowText t1 = GroupRowAccessibleText(tcpOnly);
+        Check(r, "g21.acc.group-tcp-only",
+              t1.name == L"PID 7, TCP" &&
+                  t1.description == L"PID 7, 1 connection",
+              WideToUtf8(t1.name + L"|" + t1.description));
     }
 
     // 27. About summary (7.5). The capability block must reflect the state it

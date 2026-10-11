@@ -278,6 +278,23 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         return L"UI HARNESS ABORTED (empty list)";
     }
 
+    // ---- G21: every row exposes an accessible name|description -----------
+    // What a screen reader hears for row 0, read without COM through the
+    // same builders the MSAA wrapper serves. A missing separator means the
+    // probe degenerated; an empty answer means the row names nothing.
+    Mark("acc-row-text");
+    {
+        const std::string acc0 = Of(w, "accRow", "0");
+        std::snprintf(line, sizeof(line),
+                      "SMOKE G21 acc: row 0 names itself (%s)",
+                      acc0.empty() ? "empty" : acc0.c_str());
+        Check(!acc0.empty() && acc0.find('|') != std::string::npos, line,
+              "row 0 has no accessible name|description");
+        const std::string accBad = Of(w, "accRow", "999999");
+        Check(accBad.empty(), "SMOKE G21 acc: out-of-range row names nothing",
+              accBad.c_str());
+    }
+
     // ---- every column must be reachable from the menu (C3) ---------------
     // Not cosmetic. The visible-column mask has exactly one writer in the GUI
     // (ToggleColumn, reached only by a View > Columns command), so a ColumnId

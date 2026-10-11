@@ -79,6 +79,8 @@ add_executable(wintcp
     wintcp/src/ProcessTree.h
     wintcp/src/ProcessTreeWindow.cpp
     wintcp/src/ProcessTreeWindow.h
+    wintcp/src/RowAccessible.cpp
+    wintcp/src/RowAccessible.h
     wintcp/src/Sha256.cpp
     wintcp/src/Sha256.h
     wintcp/src/ExposureScore.cpp

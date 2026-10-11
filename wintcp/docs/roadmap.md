@@ -1,5 +1,10 @@
 # WinTCP — GUI Roadmap
 
+This list is the specification of the G1-G36 GUI polish work, kept as
+written when the items were filed. **All 36 shipped** - see Closed below
+for the commit that closed each group. The line:column references
+describe the state at filing time and are historical.
+
 ## GUI polish
 
 **Defects**
@@ -182,10 +187,41 @@
 
 ## Open
 
-Nothing is open as a feature. The GUI polish list above (G1-G36) is the
-user-facing work that remains, and none of it is blocked.
+Nothing is open. The GUI polish list above (G1-G36) shipped in three commits
+- `42129c5` (main window), `1d78b9a` (details), `f4e9d86` (secondary
+windows) - and the G21 MSAA wrapper completed it in `c81d6cb`. The GUI
+process-tree view shipped in `675017e`. Every item was verified in code
+and gated: `build.bat` clean, `cli.bat` 268/0, `examples.bat` 116/0,
+`gui.bat` 56/0, unit 1052/0.
 
 ## Closed
+
+- **G1-G36 — GUI polish.** Closed 2026-10-11. Three batch commits plus the
+  G21 completion: the main-window batch (control-bar layout, per-row icons,
+  hover/banding, empty-state banner, tray tooltip, captions, tooltips,
+  reset-layout, confirms, `MB_DEFBUTTON2` everywhere), the details batch
+  (tab measure/paint parity, section hover + chevron, native scrollbar,
+  DPI-correct scroll math, dotted leaders, FontCache faces, keyboard
+  navigation, shared `Theme.h` palette), and the secondary-windows batch
+  (prompt labels with preset lists, chart legends/export/copy/values,
+  blocked-peers report view with sort + confirms, ChangeLog confirms,
+  empty states, Esc semantics). Docs: `docs/gui.md` per behavior change;
+  `wintcp/tests/gui.bat` manual checklist for the UI-only surfaces.
+
+- **G21 — per-row accessible names.** Closed 2026-10-11 (`c81d6cb`). A
+  delegating `IAccessible` (`RowAccessible.{h,cpp}`) serves row
+  name/description from the store and forwards the other 26 methods to
+  comctl32's own object, so roles, states, navigation and hit-testing
+  stay exactly what the list control reports. Wired by a list subclass,
+  because `WM_GETOBJECT` for a child control never reaches the parent.
+  6 `g21.acc.*` unit checks pin the pure text builders; 2 SMOKE checks
+  read them back through the `accRow` probe.
+
+- **The GUI process-tree view.** Closed 2026-10-11 (`675017e`). View >
+  Process tree opens a tree window over the pure `ProcessTree` engine
+  (the `killtree` verb's core), so the process hierarchy is browsable
+  the way Task Manager's Processes tab shows it. New-file registration
+  in all build paths.
 
 - **F5.5 — ETW DNS snooping.** Closed 2026-10-10 by taking the alternative the
   ticket itself recommended, rather than by implementing the ETW route: a
@@ -197,13 +233,7 @@ user-facing work that remains, and none of it is blocked.
   the cache already answers the question the feature was asking. `todo.md`
   holds the finding that made the ETW route unimplementable here, so it stays.
 
-## GUI process-tree
-
-- **The GUI process-tree view.** The engine half (`ProcessTree`) and the
-  `killtree` verb both shipped; what remains is the view — a tree control where
-  a list view is. This tree shows the processes tree like other similar tools such as new Task Manager of Windows 11 (the 'Processes' tab) or third party apps such as the Process monitor by sysinternal
-
-## Recommended order (this is not mandatory and you can decide the order by your knowlede and concerns)
+## Recommended order (complete - kept for history)
 
 1. **Consistency polish: G12+G23, G11+G34, G13, G2, G7, G9, G5, G1, G28, G33.**
 2. **Functional defects: G4 (incl. preset-list loss), G8+G36+G17/G21, G14, G6+G16+G24, G3.**
