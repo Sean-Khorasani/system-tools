@@ -38,6 +38,8 @@ Some conventions you will see in the list:
 
 All heavy work (enumeration, process resolution, reverse DNS) runs on worker threads and is posted to the UI thread when ready. The list itself is a **virtual ListView** (`LVS_OWNERDATA`), so it stays responsive with tens of thousands of rows and preserves selection, focus and scroll position across refreshes.
 
+Every row also carries an **accessible name and description** for screen readers: the name is `chrome.exe, TCPv4, ESTABLISHED` and the description is `PID 1234, 8 connections`, and a grouped row names the aggregate (`svchost.exe, TCP+UDP`, `PID 4321, 14 connections`). Roles, states, navigation and hit-testing remain what the list control itself reports — only the two text properties are added — so assistive technology hears the same truth the pixels show.
+
 ## Refreshing and row highlighting
 
 The list refreshes automatically; **F5** refreshes immediately. The live per-process columns are sampled on the refresh worker on every cycle, whether manual or automatic. CPU % is meaningful from the very first refresh because the worker primes its baseline with a short double sample.

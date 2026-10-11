@@ -30,6 +30,7 @@
 #include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
 #include "BlockedPeersDialog.h"  // 9.2.9: View > Blocked peers...
 #include "EmptyStateActions.h"   // 9.4.2: the empty-state button decision
+#include "RowAccessible.h"       // G21: per-row MSAA names over the list
 #include "Elevate.h"             // 9.4.2: Reelevate for the traffic case
 #include "ExposureScore.h"       // 9.5.5: the exposure badge predicate
 #include "FontCache.h"
@@ -471,6 +472,30 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         ::swprintf_s(buf, L"%lld", (long long)n);
         return buf;
     }
+    if (::wcscmp(op, L"accRow") == 0) {
+        // G21: the accessible name|description the MSAA wrapper reports for
+        // a view row, read without COM. Same builders the wrapper uses
+        // (grouped rows name the aggregate), so the harness asserts on what
+        // a screen reader actually hears. Empty for a bad index.
+        long idx = -1;
+        if (arg != nullptr) idx = ::wcstol(arg, nullptr, 10);
+        if (idx < 0 || static_cast<size_t>(idx) >= store_.View().size())
+            return L"";
+        const size_t viewIdx = static_cast<size_t>(idx);
+        AccessibleRowText text;
+        bool have = false;
+        if (const ProcessGroup* g = store_.ViewGroup(viewIdx)) {
+            text = GroupRowAccessibleText(*g);
+            have = true;
+        } else if (const Connection* c = store_.ViewRow(viewIdx)) {
+            text = FlatRowAccessibleText(*c, store_.CountForPid(c->pid));
+            have = true;
+        }
+        if (!have) return L"";
+        ::swprintf_s(buf, L"%ls|%ls", text.name.c_str(),
+                     text.description.c_str());
+        return buf;
+    }
     if (::wcscmp(op, L"columnsMenuMissing") == 0) {
         // C3 guard: the View > Columns popup must offer a command for EVERY
         // ColumnId, or that column cannot be shown in the GUI at all - there is
@@ -759,6 +784,22 @@ LRESULT CALLBACK MainWindow::WindowProc(HWND hwnd, UINT msg, WPARAM wParam,
     }
     if (self != nullptr) return self->HandleMessage(msg, wParam, lParam);
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK MainWindow::ListSubclassProc(HWND hwnd, UINT msg,
+                                              WPARAM wParam, LPARAM lParam,
+                                              UINT_PTR, DWORD_PTR refData) {
+    auto* self = reinterpret_cast<MainWindow*>(refData);
+    if (msg == WM_GETOBJECT && lParam == OBJID_CLIENT && self != nullptr) {
+        // The wrapper answers row names/descriptions from the store and
+        // delegates everything else to comctl32. A 0 return falls through
+        // to DefSubclassProc, which serves comctl32's own object - answering
+        // 0 unconditionally would both lie ("no object") and bypass it.
+        const LRESULT lr =
+            ServeListAccessibleObject(hwnd, wParam, &self->store_);
+        if (lr != 0) return lr;
+    }
+    return ::DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
 LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1569,6 +1610,14 @@ void MainWindow::CreateControls() {
                    LVS_EX_HEADERDRAGDROP | LVS_EX_LABELTIP | LVS_EX_INFOTIP |
                    LVS_EX_TRACKSELECT);
     ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, 0, 0);
+
+    // G21: per-row accessible names for screen readers. The subclass serves
+    // WM_GETOBJECT on the LIST itself (a query for the main window must keep
+    // answering the main window - serving the list's object there would hide
+    // the control bar from assistive tech). Everything else passes straight
+    // through, the way ChangeLogWindow's list subclass does.
+    ::SetWindowSubclass(hwndList_, &MainWindow::ListSubclassProc, 2,
+                        reinterpret_cast<DWORD_PTR>(this));
 
     // Per-row process icons (roadmap G9). The shell's system
     // small-icon list is attached once; each row then supplies

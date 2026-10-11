@@ -105,6 +105,13 @@ public:
 private:
     static const wchar_t* kClassName;
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    // The list's own proc, installed with SetWindowSubclass: WM_GETOBJECT for
+    // a child control never reaches the parent, so the per-row accessible
+    // object can only be served here. 'refData' is this - the list's
+    // GWLP_USERDATA belongs to the subclass chain.
+    static LRESULT CALLBACK ListSubclassProc(HWND hwnd, UINT msg,
+                                             WPARAM wParam, LPARAM lParam,
+                                             UINT_PTR id, DWORD_PTR refData);
 
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
     void OnCreate();
