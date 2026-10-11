@@ -814,6 +814,18 @@ void ChartsWindow::OnPaint() {
         } else {
             double yMax = d.fixedMax;
             if (yMax <= 0.0) {
+                // G11's "per-series scale" suggestion, assessed and
+                // rejected: the two-line panels exist so a reader can
+                // COMPARE the two series - disk read against disk write,
+                // network send against receive. Scaling each series to
+                // its own ceiling would draw both at full height whenever
+                // one dwarfed the other, which says "both are maxed"
+                // when one is idle. One shared ceiling is what makes
+                // "the blue line is flat while the orange spikes" a
+                // readable fact. The complaint the suggestion came from
+                // - a small series flattened by a big one - is what the
+                // kMinAutoScale floor answers for byte-rate panels, and
+                // what the log-shaped percent panels do not have at all.
                 yMax = MaxOf(*d.a, (d.b != nullptr) ? *d.b : *d.a) * 1.2;
                 if (yMax < kMinAutoScale) yMax = kMinAutoScale;
             }

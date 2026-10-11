@@ -119,6 +119,8 @@ Right-click a row (or double-click to open Details):
 | **Close connection** | Deletes the TCP entry with `SetTcpEntry(DELETE_TCB)`. IPv4 only, and requires administrator rights. Bound to `Del`. |
 | **Open file location** | Opens Explorer on the row's executable, pre-selected — the same `explorer.exe /select,` call the Details window's button makes, so the two cannot disagree. |
 | **Block this connection** | Adds a firewall block rule. IPv4 only, and requires administrator rights. |
+
+Each of the three destructive confirms (**End process**, **Close connection**, **Block this connection**) ends with a **Scriptable:** line naming the CLI verb for the same row — `wintcp.exe kill --pid N --yes`, `wintcp.exe close --select "pid:N remote:A" --yes`, `wintcp.exe block --select "pid:N remote:A" --yes` — verified on the real machine to resolve to exactly the row the window had. A successful block reports on the status bar rather than a modal, so the list keeps updating; a partial failure still takes a modal because it must not be missed.
 | **Export selection.** | Writes the selected rows to a file. See [Export](#export). |
 | **Refresh** | Same as F5. |
 
