@@ -98,48 +98,67 @@ test failed, `0` otherwise — suitable for CI exit-code checks.
 ## Optimized Functions (and their origins)
 
 The header comment for each function names its **original** location in the wintcp
-codebase. These are the integration targets documented in `HOWTO-INTEGRATION.md`:
+codebase, and `HOWTO-INTEGRATION.md` carries the per-candidate procedure for
+wiring one in.
 
-| # | Optimized function | Replaces (original) | Technique |
-|---|---|---|---|
-| 1 | `wintcp::ResolveOffsetOpt` | `GeoIp.cpp:1002` `ResolveOffset` | Bit-test loop, inlined 24/28/32-bit node records |
-| 2 | `wintcp::AddSegmentOverlapOpt` | `TcpReasm.cpp:91` `Direction::Add` | Scalar two-pass scan, overflow-safe |
-| 3 | `wintcp::HasLowerSubstringOpt` | `Utils.h:165` `HasLowerSubstring` | SSE2 first-char scan, memcmp verify |
-| 4 | `wintcp::ParseTcpHeaderOpt` | `Pcapng.cpp:190` `ParseIpTcp` | SIMD header loads, BSWAP |
-| 5 | `wintcp::FormatBytesOpt` | `Utils.cpp:192` `FormatBytes` | Integer arithmetic for bytes, `swprintf_s` fallback |
-| 6 | `wintcp::KeyOfOpt` | `ConnectionStore.cpp:358` `KeyOf` | Direct byte writes, single store |
-| 7 | `wintcp::WideToUtf8Opt` | `Utils.cpp:94` `WideToUtf8` | ASCII SIMD fast path, single-pass UTF-8 |
-| 8 | `wintcp::FormatStreamHexOpt` | `StreamCapture.cpp:578` `FormatStreamHex` | Hex LUT + direct stores (11-30x) |
-| 9 | `wintcp::ToLowerWOpt` | `Utils.cpp:105` `ToLowerW` | SSE2 ASCII fold, towlower fallback (1.7-19x) |
-| 10 | `wintcp::ReadU32BEOpt`/`ReadU64BEOpt`/`ReadBytesOpt` | `GeoIp.cpp:124-139` | memcpy + BSWAP, size switch (tie-1.6x) |
-| 11 | `wintcp::TlsBe16Opt`/`TlsBe24Opt`/`TlsBe32Opt` | `TlsDecode.cpp:23-36` | memcpy + BSWAP; Be24 stays shift/OR (tie) |
-| 12 | `wintcp::ClassifyTlsExtensionOpt`/`StripSniTailOpt` | `TlsDecode.cpp:227-266` | 17-entry LUT; SSE2 tail scan (1.3x/17x) |
-| 13 | `wintcp::Rd16Opt`/`Rd32Opt` | `Pcapng.cpp:90-105` | memcpy + conditional BSWAP (tie) |
-| 14 | `wintcp::JoinSamplesOpt` | `ConnectionStore.cpp:1888` `ApplySocketBytes` | Hash index + FIFO queues (1.5-9x; linear below ~64 rows) |
-| 15 | `wintcp::FindSubstringLongOpt` | `ConnectionStore.cpp:87` `Has` | BMH, route needles >= 24 chars here (1.6-1.7x) |
-| 16 | `wintcp::BuildLowerAllOpt` | `ConnectionStore.cpp:93` `RebuildLowerAll` | reserve + append (4.7x) |
-| 17 | `wintcp::CompareWideOpt` | `CompareRows` `wstring::compare` | SSE2 lane diff (tie-1.1x) |
-| 18 | `wintcp::HashConnKeyOpt` / `EqualConnKeyOpt` | `ConnectionStore.h:255` key hash/eq | FNV-1a lanes (2.9-6.2x hash; eq tie) |
-| 19 | `wintcp::ComputeBpsBatchOpt` | `ConnectionStore.cpp:686` `ComputeBps` | one reciprocal per batch (1.7x) |
-| 20 | `wintcp::SumPidTrafficOpt` | `ConnectionStore.cpp:1543` group sums | sort + linear runs (3.8-4.3x) |
-| 21 | `wintcp::FormatBpsCellOpt` | `ConnectionStore.cpp:554` `FormatBpsCell` | via FormatBytesOpt + splice (1.2x) |
-| 22 | `wintcp::WidenUtf8Opt` | `GeoIp.cpp:541` `AppendUtf8` | SSE2 ASCII bulk (tie-1.2x; alloc floor) |
-| 23 | `wintcp::IsGlobalUnicastV4Opt` / `V6Opt` | `GeoIp.cpp:1243` | octet table + u64 tails (1.2x) |
-| 24 | `wintcp::PairSnapshotOpt` | `ConnectionStore.cpp:1304` `PrevKeyIndex` | same algo, FNV hash (1.1-1.2x; sort lost 2.4x) |
-| 25 | `wintcp::FindCountedKeyOpt` | `GeoIp.cpp:519` `MapFind` step | u64 prefilter (tie at noise floor) |
-| 26 | `wintcp::FlowKeyEqualOpt` / `CmpFlowAddrOpt` | `TcpReasm.cpp:52,224` | SSE2 key compare (1.1-1.3x) |
-| 27 | `wintcp::FilterHandlesOpt` | `SocketTraffic.cpp:973` phase 1 | sorted+binsearch (0.5x - DO NOT integrate; hash wins, phase is 0.4 ms) |
-| 28 | `wintcp::ClassifyEventOpt` / `ParseEventPayloadOpt` | `EtwTraffic.cpp:260` | u64 GUID discrim. + opcode table (tie-1.1x) |
-| 29 | `wintcp::JsonEscapeOpt` | `Commands.cpp:62` | SSE2 special scan + span memcpy |
-| 30 | `wintcp::CsvEscapeOpt` | `Utils.cpp:185`, `ChartExport.cpp:228` | SSE2 quote scan |
-| 31 | `wintcp::FormatPortOpt` / `FormatU64DecOpt` / `FormatDurationOpt` | `ConnectionStore.cpp:1015`, `ChartExport.cpp:171` | digit-table emitters |
-| 32 | `wintcp::FormatIpv4Opt` / `FormatIpv6Opt` | `TcpTable.cpp:42`, `SocketTraffic.cpp:210` | digit tables, nibble shuffle + RFC 5952 `::` |
-| 33 | `wintcp::DisplayWidthOpt` / `TruncateToWidthOpt` | `Commands.cpp:324-332`, `:336-350` | SSE2 ASCII bulk + fused measure/cut (2.2-27x). `CpWidthOpt` stays the original chain: a 12 KB LUT measured 0.62x |
-| 34 | `wintcp::PayloadSizeOpt` / `ReadPointerOpt` | `GeoIp.cpp:422-442`, `:492-511` | hot path stays branch-cheap; 4-byte BSWAP fast path for the pointer (1.0-1.1x) |
-| 35 | `wintcp::SkipVlanOpt` / `FlowProbeOpt` | `Pcapng.cpp:119-129`, `:354-361` | one 2-byte load per tag (1.15-1.25x); SSE2 stride-2 flow scan (1.4-1.75x on the miss path, 0.89x on the hit path) |
-| 36 | `wintcp::RenderSegmentsOpt` | `TcpReasm.cpp:162-194` `Render` | **DO NOT integrate - measured tie, four rewrites all lost** (see below) |
-| 37 | `wintcp::DistinctPidsOpt` / `GroupByPidOpt` | `Snapshot.cpp:37-45`, `ConnectionStore.cpp:1599-1617` | flat open-addressing table, no node allocation (3.4-15x dedup, 1.0-1.6x grouping) |
-| 27b | `wintcp::ResolveOffsetShiftOpt` | `GeoIp.cpp:1006-1058` | MSB-first shift register + straight-line walkers. **DO NOT integrate - measured 0.69-0.94x** |
+Two cautions about the table below, both learned the hard way:
+
+1. **"Replaces (original)" is the ORIGIN, not the status.** A row names where the
+   function would go, not where it has gone. This table was read as a done list
+   for months, which is why the Status column now exists and must be filled in
+   for every row. Trust the wire count, not the row number.
+2. **The Status column is maintained by hand and it decays.** Re-derive it from
+   the product sources before relying on it (see the audit command in
+   HOWTO-INTEGRATION.md), exactly as the gate counts are re-measured rather than
+   quoted.
+
+| # | Optimized function | Replaces (original) | Status | Technique |
+|---|---|---|---|---|
+| 1 | `wintcp::ResolveOffsetOpt` | `GeoIp.cpp` `ResolveOffset` | measured, not wired | Bit-test loop, inlined 24/28/32-bit node records |
+| 2 | `wintcp::AddSegmentOverlapOpt` | `TcpReasm.cpp` `Direction::Add` | measured 0.74x-1.01x, do not wire | Scalar two-pass scan, overflow-safe |
+| 3 | `wintcp::HasLowerSubstringOpt` | `Utils.h` `HasLowerSubstring` | measured, not wired - needs a needle-length threshold (2.56x short, 0.71x at 64k) | SSE2 first-char scan, memcmp verify |
+| 4 | `wintcp::ParseTcpHeaderOpt` | `Pcapng.cpp` `ParseIpTcp` | measured 0.52x/0.30x, do not wire | SIMD header loads, BSWAP |
+| 5 | `wintcp::FormatBytesOpt` | `Utils.cpp` `FormatBytes` | measured winner, READY to wire | Integer arithmetic for bytes, `swprintf_s` fallback |
+| 6 | `wintcp::KeyOfOpt` | `ConnectionStore.cpp` `KeyOf` | measured 0.77x-0.81x, do not wire | Direct byte writes, single store |
+| 7 | `wintcp::WideToUtf8Opt` | `Utils.cpp` `WideToUtf8` | measured, not wired | ASCII SIMD fast path, single-pass UTF-8 |
+| 8 | `wintcp::FormatStreamHexOpt` | `StreamCapture.cpp` `FormatStreamHex` | measured 11x-30x, READY to wire | Hex LUT + direct stores |
+| 9 | `wintcp::ToLowerWOpt` | `Utils.cpp:105` `ToLowerW` | **WIRED** | SSE2 ASCII fold, towlower fallback (1.7-19x) |
+| 10 | `wintcp::ReadU32BEOpt`/`ReadU64BEOpt`/`ReadBytesOpt` | `GeoIp.cpp` read helpers | tie-1.6x, not wired | memcpy + BSWAP, size switch |
+| 11 | `wintcp::TlsBe16Opt`/`TlsBe24Opt`/`TlsBe32Opt` | `TlsDecode.cpp` BE readers | tie, not wired | memcpy + BSWAP; Be24 stays shift/OR |
+| 12 | `wintcp::ClassifyTlsExtensionOpt`/`StripSniTailOpt` | `TlsDecode.cpp` | **WIRED** | 17-entry LUT; SSE2 tail scan (1.3x/17x) |
+| 13 | `wintcp::Rd16Opt`/`Rd32Opt` | `Pcapng.cpp` readers | tie, not wired | memcpy + conditional BSWAP |
+| 14 | `wintcp::JoinSamplesOpt` | `ConnectionStore.cpp` `ApplySocketBytes` | measured winner, READY but needs a size threshold (8.23x at 2k/2k, 0.07x on `join_small` = 14x SLOWER below ~64 rows) | Hash index + FIFO queues |
+| 15 | `wintcp::FindSubstringLongOpt` | `ConnectionStore.cpp` `Has` | measured, not wired - needs a needle-length threshold (1.7x at 32 chars, 0.43x at 8) | BMH, route needles >= 24 chars here |
+| 16 | `wintcp::BuildLowerAllOpt` | `ConnectionStore.cpp:93` `RebuildLowerAll` | **WIRED** | reserve + append (4.7x) |
+| 17 | `wintcp::CompareWideOpt` | `CompareRows` `wstring::compare` | measured 0.94x-0.99x, do not wire | SSE2 lane diff |
+| 18 | `wintcp::HashConnKeyOpt` / `EqualConnKeyOpt` | `ConnectionStore.h` key hash/eq | **BLOCKED - DO NOT WIRE.** Changing the hash changes `unordered_map` bucket order and therefore row order. Saved by policy, not by measurement (2.9x-6.2x is real and irrelevant) | FNV-1a lanes |
+| 19 | `wintcp::ComputeBpsBatchOpt` | `ConnectionStore.cpp` `ComputeBps` | measured 1.7x, not wired - no call site shares one elapsed across a batch | one reciprocal per batch |
+| 20 | `wintcp::SumPidTrafficOpt` | `ConnectionStore.cpp` group sums | **WIRED** (2026-10-10) | sort + linear runs (3.8-4.3x) |
+| 21 | `wintcp::FormatBpsCellOpt` | `ConnectionStore.cpp` `FormatBpsCell` | measured 1.2x, READY to wire via `FormatBytesOpt` | via FormatBytesOpt + splice |
+| 22 | `wintcp::WidenUtf8Opt` | `GeoIp.cpp` `AppendUtf8` | measured tie-1.2x, READY to wire | SSE2 ASCII bulk |
+| 23 | `wintcp::IsGlobalUnicastV4Opt` / `V6Opt` | `GeoIp.cpp:1243` | **WIRED** (2026-10-10) | octet table + u64 tails (1.2x) |
+| 24 | `wintcp::PairSnapshotOpt` | `ConnectionStore.cpp` `PrevKeyIndex` | measured 0.88x-1.03x, do not wire | same algo, FNV hash; sort lost 2.4x |
+| 25 | `wintcp::FindCountedKeyOpt` | `GeoIp.cpp` `MapFind` step | measured 0.93x-0.96x, do not wire | u64 prefilter |
+| 26 | `wintcp::FlowKeyEqualOpt` / `CmpFlowAddrOpt` | `TcpReasm.cpp` | measured 1.1x-1.3x, not wired | SSE2 key compare |
+| 27 | `wintcp::FilterHandlesOpt` | `SocketTraffic.cpp` phase 1 | **REJECTED 0.53x - DO NOT WIRE.** The hash wins; this phase is 0.4 ms | sorted+binsearch |
+| 28 | `wintcp::ClassifyEventOpt` / `ParseEventPayloadOpt` | `EtwTraffic.cpp` | measured 0.90x, do not wire | u64 GUID discrim. + opcode table |
+| 29 | `wintcp::JsonEscapeOpt` | `Commands.cpp` `JsonEscapeA` | **WIRED** | SSE2 special scan + span memcpy |
+| 30 | `wintcp::CsvEscapeOpt` | `Utils.cpp` `CsvEscapeUtf8` | **WIRED** (2026-10-10) | SSE2 quote scan. Held the CSV span-copy defect once - the 16-byte input ceiling in the tests is why it hid |
+| 31 | `wintcp::FormatPortOpt` / `FormatU64DecOpt` / `FormatDurationOpt` | `Utils.cpp` `FormatPort`, `ConnectionStore.cpp` `FormatDuration` | `FormatPortOpt` and `FormatDurationOpt` **WIRED** (2026-10-10); `FormatU64DecOpt` measured 5.35x, READY to wire | digit-table emitters |
+| 32 | `wintcp::FormatIpv4Opt` / `FormatIpv6Opt` | `TcpTable.cpp` `PrintIpv4`/`PrintIpv6` | **WIRED** | digit tables, nibble shuffle + RFC 5952 `::` |
+| 33 | `wintcp::DisplayWidthOpt` / `TruncateToWidthOpt` | `Commands.cpp` | **WIRED** | SSE2 ASCII bulk + fused measure/cut (2.2-27x) |
+| 33b | `wintcp::CpWidthOpt` | original `NextCp` chain | **REJECTED 0.62x-0.78x** - the 12 KB LUT lost | 12 KB table |
+| 34 | `wintcp::PayloadSizeOpt` / `ReadPointerOpt` | `GeoIp.cpp` | measured 0.96x / 0.99x, do not wire | hot path stays branch-cheap |
+| 35 | `wintcp::SkipVlanOpt` / `FlowProbeOpt` | `Pcapng.cpp` | **WIRED** | one 2-byte load per tag (1.15-1.25x); SSE2 stride-2 flow scan |
+| 36 | `wintcp::RenderSegmentsOpt` | `TcpReasm.cpp` `Render` | **DO NOT integrate - measured tie, four rewrites all lost** (see below) | |
+| 37 | `wintcp::DistinctPidsOpt` / `GroupByPidOpt` | `Snapshot.cpp`, `ConnectionStore.cpp` | `DistinctPidsOpt` **WIRED**; `GroupByPidOpt` BLOCKED (needs the `pidRows_` type and 3 read sites changed) | flat open-addressing table (3.4-15x dedup) |
+| 27b | `wintcp::ResolveOffsetShiftOpt` | `GeoIp.cpp` | **DO NOT integrate - measured 0.69x-0.94x** | MSB-first shift register |
+
+**Wire count, last re-derived 2026-10-10:** 18 of the 57 `*Opt` declarations in
+`Opt.h` are called from product sources. Everything not marked **WIRED** above is
+uncalled: either measured and rejected, measured and blocked, or a measured
+winner still waiting to be wired. An unmarked row is not evidence either way -
+go and count the calls.
 
 ## Integration status (2026-10-09)
 
@@ -147,9 +166,13 @@ codebase. These are the integration targets documented in `HOWTO-INTEGRATION.md`
 in all three build paths, and the bench compiles that one copy. So a number this
 page quotes is the number the shipped binary gets.
 
-Integrated and gated green (`build.bat` from clean, `cli.bat` 268/0,
-`examples.bat` 97/0, `gui.bat` 54/0, `wintcp-tests.exe unit` 810/0,
-`bench` 420/420 both variants):
+Integrated and gated green. Gate numbers from the **2026-10-10 run** - they
+widen as the suites grow, so re-measure rather than quote (the last known
+`examples.bat` figure was 97 commands and is now 116, and `unit` was 810 and is
+now 1004):
+
+`build.bat` from clean, `cli.bat` 268/0, `examples.bat` 116/0, `gui.bat` 54/0,
+`wintcp-tests.exe unit` 1004/0, `bench` 431/431 both variants:
 
 | Call site replaced | By | Measured |
 |---|---|---|
@@ -162,6 +185,17 @@ Integrated and gated green (`build.bat` from clean, `cli.bat` 268/0,
 | `Commands.cpp:63` `JsonEscapeA` | `JsonEscapeOpt` | 1.0x - 1.9x |
 | `Utils.cpp:195` `CsvEscapeUtf8` | `CsvEscapeOpt` | see report |
 | `TcpTable.cpp:42` `PrintIpv4` / `:55` `PrintIpv6` | `FormatIpv4Opt` / `FormatIpv6Opt` | 7.9x / 13.7-21.6x |
+| `Utils.cpp` `FormatPort` | `FormatPortOpt` | 6.30x (443) / 4.09x (65535) |
+| `ConnectionStore.cpp` `FormatDuration` | `FormatDurationOpt` | 7.75x - the `%02llu` padding is the easy step to lose |
+| `ConnectionStore.cpp` `ComputeGroupRates` group sums | `SumPidTrafficOpt` | 3.63x (500 rows) / 4.24x (5k rows) |
+| `GeoIp.cpp` `IsGlobalUnicastV4` / `IsGlobalUnicastV6` | `IsGlobalUnicastV4Opt` / `IsGlobalUnicastV6Opt` | 1.24x |
+
+The last four landed in commit `c2cb108`. The V4 octet table was re-derived
+from the original's range tests before wiring, because a table can lie in one
+place: a first octet whose original test fell through to the multicast check.
+For 172 the later tests can never fire (the address is masked to
+`0xB0000000`), so the table and the original agree - but that is the kind of
+detail to re-check rather than assume.
 
 **Signature change that came with it:** `BuildLowerAllOpt` now takes
 `const std::wstring* const*` (an array of pointers) instead of
@@ -185,10 +219,19 @@ reading it first:
 - **`ComputeBpsBatchOpt`** - needs a batch shape (one reciprocal per
   uniform elapsed tick) that the two per-row call sites do not have; each row
   carries its own `elapsed`.
-- **`SumPidTrafficOpt`** into `ComputeGroupRates` - 4.1x - 4.3x, but the
-  flat-row form needs the `std::map<DWORD, PidTraffic>` accumulator and the
-  `anyCounted` map replaced together with the two read sites.
+- **`ComputeBpsBatchOpt`** - needs a batch shape (one reciprocal per
+  uniform elapsed tick) that the two per-row call sites do not have; each row
+  carries its own `elapsed`.
 - **Everything in the rejected table below.**
+- **`SumPidTrafficOpt` into `ComputeGroupRates`** - WAS BLOCKED HERE, now
+  wired in `c2cb108` (2026-10-10). The block was real: it needed the
+  `std::map<DWORD, PidTraffic>` accumulator and the `anyCounted` map replaced
+  together with the two read sites. The wiring flattens rows into
+  `PidTrafficRow[]`, calls Opt once, then reads the sums back by PID. The
+  invariant that kept the effort honest: a PID whose rows were all ETW-fed
+  must come back with `hasSum == false` rather than a zero sum, because
+  "unknown" and "measured zero" are different answers and the em-dash is what
+  the reader should see.
 
 ### Measured and rejected (kept so nobody re-derives them)
 

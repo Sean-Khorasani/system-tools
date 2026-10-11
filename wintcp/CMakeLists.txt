@@ -279,6 +279,7 @@ add_executable(wintcp-tests
     wintcp/tests/TestMain.cpp
     wintcp/tests/Bench.cpp
     wintcp/tests/UiHarness.cpp
+    wintcp/tests/BenchSync.cpp
     wintcp/tests/Bench.h
     wintcp/tests/UiHarness.h
     ${WINTCP_CORE_SOURCES}

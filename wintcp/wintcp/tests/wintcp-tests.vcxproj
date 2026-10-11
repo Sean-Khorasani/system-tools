@@ -153,6 +153,8 @@
     <ClCompile Include="TestMain.cpp" />
     <ClCompile Include="Bench.cpp" />
     <ClCompile Include="UiHarness.cpp" />
+    <ClCompile Include="BenchSync.cpp" />
+    <ClInclude Include="BenchCheck.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Bench.h" />
