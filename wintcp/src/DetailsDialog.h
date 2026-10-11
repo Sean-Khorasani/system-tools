@@ -221,6 +221,12 @@ private:
     int hotSection_ = -1;
     int hotTab_ = -1;
     std::vector<unsigned char> collapsed_;
+    // The tab strip's geometry in physical pixels. The N tabs share ONE row:
+    // each tab Line carries its slot's x origin (indent) and measured width,
+    // but only the first tab's height is real layout - the strip is one
+    // kTabH tall, not N. RebuildLayout derives these with the totals below.
+    int tabBarY_ = 0;
+    int tabBarH_ = 0;
 
     static const wchar_t* kClassName;
 };

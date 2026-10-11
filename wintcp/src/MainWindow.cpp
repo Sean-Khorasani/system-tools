@@ -4239,24 +4239,14 @@ void MainWindow::OpenSelectedFileLocation() {
                       L"Open file location", MB_OK | MB_ICONINFORMATION);
         return;
     }
-    // "explore" selects the file in its folder, which is the useful meaning
-    // here; "open" would launch the executable.
-    const std::wstring verb = L"explore";
-    // shell32.dll is delay-loaded; without this gate a machine without it
-    // raises here instead of reporting the failure the message box below
-    // already knows how to phrase.
-    if (!DllAvailable("shell32.dll")) {
-        ::MessageBoxW(hwnd_, L"Explorer could not open that location.",
-                      L"Open file location", MB_OK | MB_ICONWARNING);
-        return;
-    }
-    const HINSTANCE rc = ::ShellExecuteW(hwnd_, verb.c_str(), c.processPath.c_str(),
-                                          nullptr, nullptr, SW_SHOWNORMAL);
-    // ShellExecuteW returns a value > 32 on success; anything else is an
-    // error code, and <= 32 is the documented failure range.
-    if (reinterpret_cast<INT_PTR>(rc) <= 32) {
-        ::MessageBoxW(hwnd_, L"Explorer could not open that location.",
-                      L"Open file location", MB_OK | MB_ICONWARNING);
+    // One implementation with the Details button (Utils::ShowFileInExplorer):
+    // "explorer.exe /select,". The old "explore" verb is a folder verb and
+    // fails on file paths, which is why this menu item failed while the
+    // button worked.
+    std::wstring error;
+    if (!ShowFileInExplorer(c.processPath, &error)) {
+        ::MessageBoxW(hwnd_, error.c_str(), L"Open file location",
+                      MB_OK | MB_ICONWARNING);
     }
 }
 

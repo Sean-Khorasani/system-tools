@@ -558,10 +558,11 @@ void DetailsDialog::RebuildLayout() {
         l.height = kTabH;
         l.section = static_cast<int>(t);
         l.pinned = true;
-        // Layout: position is resolved in OnPaint from tabX/tabY, stored via
-        // the running cursor in this loop - but Line stores only logical
-        // metrics. Keep the x cursor on the struct through 'indent' (reused
-        // here as the slot's x origin so OnMouseDown can hit it).
+        // Layout: the strip is one row shared by all tabs. The running
+        // cursor lays the slots out left to right; each slot's x origin is
+        // kept on the struct through 'indent' (reused here as the origin so
+        // paint, click and hover share one value), and the strip's y comes
+        // from tabBarY_/tabBarH_ below - never from stacking the lines.
         l.indent = tabX;
         pushHeader(l);
         // Measure the label so the slot width tracks its content, with a
@@ -583,6 +584,22 @@ void DetailsDialog::RebuildLayout() {
         else ::ReleaseDC(nullptr, hdc);
     }
     (void)tabSlotH;
+
+    // The tabs share ONE row. The loop above pushed one line per tab, each of
+    // height kTabH, but the slots paint side-by-side from their running-x
+    // origins - stacking them vertically is what read as "cascaded", with
+    // each tab lower and further right than the last. Only the first tab's
+    // height is real layout, so the other N-1 are subtracted back out of
+    // both totals: the body must start under the strip, not under N phantom
+    // rows, and the scroll range must not count rows that are never drawn.
+    const int tabCount = static_cast<int>(tabs.size());
+    const int extraTabs = (tabCount > 1) ? tabCount - 1 : 0;
+    if (extraTabs > 0) {
+        totalContentHeight_ -= extraTabs * S(kTabH);
+        headerHeight_ -= extraTabs * S(kTabH);
+    }
+    tabBarH_ = tabs.empty() ? 0 : S(kTabH);
+    tabBarY_ = m + headerHeight_ - tabBarH_;
 
     // The body scrolls. Only the active tab's sections render (plus the
     // Sockets-tab connection list), so switching tabs collapses the body to
@@ -919,10 +936,30 @@ void DetailsDialog::OnPaint() {
     // Painted without the scroll offset, so the process identity and the tab
     // strip stay in view as the body scrolls beneath them. The header spans
     // the full width: the scrollbar owns only the body's right edge.
+    //
+    // The tabs are ONE strip, not N rows: every Tab line paints at the
+    // strip's own y from its measured x origin, and the cursor advances past
+    // the strip once. Advancing once per tab stacked them diagonally - each
+    // tab lower and further right - which was the "cascaded" report.
     int y = m;
     const int headerRight = cx - m;
+    bool tabStripPainted = false;
     for (const Line& l : lines_) {
         if (!l.pinned) break;
+        if (l.kind == Line::Tab) {
+            if (!tabStripPainted) {
+                tabStripPainted = true;
+                if (tabBarY_ + tabBarH_ > 0 && tabBarY_ < cy) {
+                    for (const Line& t : lines_) {
+                        if (!t.pinned || t.kind != Line::Tab) continue;
+                        PaintLine(mem, t, tabBarY_, S(t.height), cx, m,
+                                  ruleX, false, headerRight);
+                    }
+                }
+                y += tabBarH_;
+            }
+            continue;
+        }
         const int lh = S(l.height);
         if (y + lh > 0 && y < cy)
             PaintLine(mem, l, y, lh, cx, m, ruleX, false, headerRight);
@@ -988,17 +1025,18 @@ void DetailsDialog::OnMouseDown(int x, int y) {
     // behaves like a static read-out.
     const int m = S(kMargin);
 
-    // --- tab bar: pinned at the top, before the body's scroll offset --------
-    // Reconstruct each tab slot's rect from the tab Lines stored by
-    // RebuildLayout (origin in 'indent', width measured from the label), so
-    // the hit test and the paint stay in lockstep.
-    int tabY = m;
-    for (const Line& l : lines_) {
-        if (!l.pinned) break;
-        const int lh = S(l.height);
-        if (l.kind == Line::Tab && y >= tabY && y < tabY + lh) {
-            const int slotW = l.width;
-            if (x >= l.indent && x < l.indent + slotW) {
+    // --- tab bar: one strip, pinned at the top, before the scroll offset ---
+    // Every tab slot's rect comes from the tab Lines RebuildLayout stored
+    // (origin in 'indent', width measured from the label), tested against
+    // the strip's single row - so the hit test and the paint stay in
+    // lockstep. The old per-line stacking only matched the first tab's row
+    // and cascaded the rest, which is why all but one tab looked - and
+    // were - unreachable in place.
+    if (tabBarH_ > 0 && y >= tabBarY_ && y < tabBarY_ + tabBarH_) {
+        for (const Line& l : lines_) {
+            if (!l.pinned) break;
+            if (l.kind != Line::Tab) continue;
+            if (x >= l.indent && x < l.indent + l.width) {
                 const DetailTab t = static_cast<DetailTab>(l.section);
                 if (t != model_.activeTab) {
                     model_.activeTab = t;
@@ -1008,16 +1046,31 @@ void DetailsDialog::OnMouseDown(int x, int y) {
                 return;
             }
         }
-        tabY += lh;
+        // In the strip but on no slot: the strip owns its row, so the click
+        // ends here instead of falling through to a section underneath.
+        return;
     }
 
     // --- body: the same missing bound as the paint loop, for the same reason -
     // a click in the button row used to match a row behind it and toggle that
     // section while the user was aiming at Close.
     if (y >= m + headerHeight_ + viewHeight_) return;
+    // Mirror the paint clip on the other side too: when scrolled, body lines
+    // slide up under the pinned header, and without this a click on the
+    // title or tab strip that missed every slot would toggle a section
+    // hiding underneath it.
+    if (y < m + headerHeight_) return;
     int ly = m + headerHeight_ - scrollPos_;
     for (const Line& l : lines_) {
-        if (l.pinned) { ly += S(l.height); continue; }   // header, already covered
+        // Pinned lines are skipped WITHOUT advancing: the paint loop draws
+        // the body from headerBottom - scrollPos_ with the header already
+        // accounted for, and this cursor must start from the same origin.
+        // Advancing past the header here (as the code did since the 9.4.1
+        // baseline) shifted every hit test down by a full header height, so
+        // clicks and hover agreed with each other but not with what was
+        // painted - section headers only toggled when clicked a header-height
+        // below themselves.
+        if (l.pinned) continue;   // header, already covered
         const int lh = S(l.height);
         if (y >= ly && y < ly + lh) {
             if (l.kind == Line::SectionHeader && l.section >= 0 &&
@@ -1061,10 +1114,15 @@ void DetailsDialog::OnCommand(WORD id) {
             break;
         case IDC_DLG_OPEN: {
             if (filePath_.empty()) break;
-            // Show the file in Explorer, pre-selected.
-            const std::wstring arg = L"/select,\"" + filePath_ + L"\"";
-            ::ShellExecuteW(hwnd_, L"open", L"explorer.exe", arg.c_str(),
-                            nullptr, SW_SHOWNORMAL);
+            // Same implementation as the context menu
+            // (Utils::ShowFileInExplorer): "explorer.exe /select,". The
+            // failure is reported rather than silent - a missing file
+            // otherwise looks exactly like a working button.
+            std::wstring error;
+            if (!ShowFileInExplorer(filePath_, &error)) {
+                ::MessageBoxW(hwnd_, error.c_str(), L"Open file location",
+                              MB_OK | MB_ICONWARNING);
+            }
             break;
         }
         case IDC_DLG_CLOSE:
@@ -1222,18 +1280,20 @@ LRESULT DetailsDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             const int my = GET_Y_LPARAM(lParam);
             const int m = S(kMargin);
 
-            // Tab bar hover (pinned, before the scroll offset).
+            // Tab bar hover: the strip's single row, every slot tested.
+            // The old per-line stacking broke out after the first tab, so
+            // only tab one ever brightened - the rest of the strip was dead
+            // to the pointer.
             int hotTab = -1;
-            int tabY = m;
-            for (const Line& l : lines_) {
-                if (!l.pinned) break;
-                const int lh = S(l.height);
-                if (l.kind == Line::Tab && my >= tabY && my < tabY + lh) {
-                    if (mx >= l.indent && mx < l.indent + l.width)
+            if (tabBarH_ > 0 && my >= tabBarY_ && my < tabBarY_ + tabBarH_) {
+                for (const Line& l : lines_) {
+                    if (!l.pinned) break;
+                    if (l.kind != Line::Tab) continue;
+                    if (mx >= l.indent && mx < l.indent + l.width) {
                         hotTab = l.section;
-                    break;
+                        break;
+                    }
                 }
-                tabY += lh;
             }
             if (hotTab != hotTab_) {
                 hotTab_ = hotTab;
@@ -1248,7 +1308,11 @@ LRESULT DetailsDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (my >= headerBottom && my < headerBottom + viewHeight_) {
                 int ly = headerBottom - scrollPos_;
                 for (const Line& l : lines_) {
-                    if (l.pinned) { ly += S(l.height); continue; }
+                    // Skipped without advancing, like the paint loop and the
+                    // click path: advancing here shifted hover a full header
+                    // height below the cursor (the 9.4.1 baseline's twin of
+                    // the click shift fixed above).
+                    if (l.pinned) continue;
                     const int lh = S(l.height);
                     if (my >= ly && my < ly + lh) {
                         if (l.kind == Line::SectionHeader && l.section >= 0)

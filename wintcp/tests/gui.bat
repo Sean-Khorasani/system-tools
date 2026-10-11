@@ -154,8 +154,9 @@ REM      window, scales with DPI, and refreshes while a watch is running.
 REM      Section headers carry a chevron and brighten on hover; the body has a
 REM      native scrollbar (drag the thumb, page with the arrows) and scrolls
 REM      with Up/Down/PageUp/PageDown/Home/End; tabs switch with Ctrl+Tab and
-REM      show a hand cursor. Tab slots are measured and painted in the same
-REM      (bold) face, so no tab sits in an oversized slot.
+REM      show a hand cursor. The tabs share one strip: every slot sits on the
+REM      same row in the same bold face - no cascading - and clicking a
+REM      section header toggles exactly the header under the cursor.
 REM   7b. Process tree (View - Process tree...): one node per process,
 REM      "name (PID n, k connections)", children under parents, roots
 REM      expanded one level. Refresh re-reads the main table; Esc hides.

@@ -115,7 +115,7 @@ Right-click a row (or double-click to open Details):
 | **Copy selected / Copy all** | Copies rows to the clipboard. |
 | **End process** | Ends the owning process after verifying that the PID still refers to the same process (PID-reuse check). Bound to `Ctrl`+`Del` — a stray keypress must not end a process. The scriptable path is `wintcp.exe kill <pid> --yes`. |
 | **Close connection** | Deletes the TCP entry with `SetTcpEntry(DELETE_TCB)`. IPv4 only, and requires administrator rights. Bound to `Del`. |
-| **Open file location** | Opens Explorer on the row's executable. |
+| **Open file location** | Opens Explorer on the row's executable, pre-selected — the same `explorer.exe /select,` call the Details window's button makes, so the two cannot disagree. |
 | **Block this connection** | Adds a firewall block rule. IPv4 only, and requires administrator rights. |
 | **Export selection.** | Writes the selected rows to a file. See [Export](#export). |
 | **Refresh** | Same as F5. |
@@ -161,6 +161,7 @@ Fields are laid out as a **two-column table**, one row per field:
 - Values are drawn in a fixed-pitch face only where alignment matters (byte counts, timestamps, addresses); everything else uses the UI font, including the labels.
 - Every section header carries an **accent bar** down its left edge, so the sections read as separated at a glance without hovering anything. Hovering a header highlights it, which is the cue that it can be collapsed.
 - Sections are collapsible by clicking their header. A `[-]`/`[+]` chevron marks every collapsible header, and hovering one brightens its band. The state is per-window and is never persisted.
+- The tabs share **one strip**: every slot is measured and painted in the same bold face on a single row, so no tab sits lower or further right than the last (the "cascaded" layout stacked one row per tab). Click, hover and paint all use the strip's own geometry, and section clicks and hover agree with what is painted rather than sitting a header-height below it.
 - Long values are elided rather than wrapped; a visibly shortened value beats a silent cut. Copy the value to the clipboard to get all of it.
 - The body scrolls on a **native scrollbar** (arrows, paging, thumb-drag, Home/End all work), and the keyboard scrolls too: `Up`/`Down` step a line, `PageUp`/`PageDown` a page, `Home`/`End` jump. Tabs switch with `Ctrl`+`Tab` / `Ctrl`+`Shift`+`Tab` (or the `Left`/`Right` arrows when the window itself has focus); section headers and tabs show a hand cursor. The window's accessible name is the plain-text model, so screen readers announce the same text **Copy** puts on the clipboard.
 

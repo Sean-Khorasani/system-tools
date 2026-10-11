@@ -12,6 +12,7 @@
 // is already linked (delay-loaded, and gated below at runtime).
 #include <initguid.h>
 #include <oleacc.h>    // IAccPropServices / PROPID_ACC_NAME (G21 annotation)
+#include <shellapi.h>  // ShellExecuteW (ShowFileInExplorer)
 
 #include <cstdio>
 #include <cwchar>
@@ -355,6 +356,31 @@ void SetAccessibleName(HWND hwnd, const std::wstring& name) {
         svc->Release();
     }
     if (inited) ::CoUninitialize();
+}
+
+bool ShowFileInExplorer(const std::wstring& path, std::wstring* error) {
+    const auto fail = [error](const wchar_t* what) {
+        if (error != nullptr) *error = what;
+        return false;
+    };
+    if (path.empty()) return fail(L"there is no file path for this row.");
+    // shell32.dll is delay-loaded; without this gate a machine without it
+    // raises instead of reporting.
+    if (!DllAvailable("shell32.dll"))
+        return fail(L"Explorer could not open that location.");
+    // "explorer.exe /select," - not the "explore" verb. The verb is
+    // registered against folders; run against a FILE path the shell finds
+    // no association and answers SE_ERR_NOASSOC, which is the failure the
+    // context menu used to report while the Details button worked.
+    const std::wstring arg = L"/select,\"" + path + L"\"";
+    const HINSTANCE rc = ::ShellExecuteW(
+        nullptr, L"open", L"explorer.exe", arg.c_str(), nullptr,
+        SW_SHOWNORMAL);
+    // ShellExecuteW returns a value > 32 on success; anything else is the
+    // failure the caller reports instead of staying silent.
+    if (reinterpret_cast<INT_PTR>(rc) <= 32)
+        return fail(L"Explorer could not open that location.");
+    return true;
 }
 
 UINT QueryDpiForWindow(HWND hwnd) {
