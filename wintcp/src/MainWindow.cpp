@@ -4237,20 +4237,23 @@ void MainWindow::KillSelectedProcess() {
                      L"  Path:  %ls\n  Start: %ls\n\n"
                      L"WinTCP will ask the process to close normally first, "
                      L"and only end it forcibly if it does not exit within a "
-                     L"few seconds.\n\nUnsaved data may still be lost.",
+                     L"few seconds.\n\nUnsaved data may still be lost."
+                     L"\n\nScriptable: wintcp.exe kill --pid %lu --yes",
                      c.processName.c_str(),
                      static_cast<unsigned long>(c.pid), path.c_str(),
-                     started.c_str());
+                     started.c_str(), static_cast<unsigned long>(c.pid));
     } else {
         ::swprintf_s(prompt,
                      L"End this process?\n\n  Name:  %ls\n  PID:   %lu\n"
                      L"  Path:  %ls\n  Start: %ls\n  Cmd:   %ls\n\n"
                      L"WinTCP will ask the process to close normally first, "
                      L"and only end it forcibly if it does not exit within a "
-                     L"few seconds.\n\nUnsaved data may still be lost.",
+                     L"few seconds.\n\nUnsaved data may still be lost."
+                     L"\n\nScriptable: wintcp.exe kill --pid %lu --yes",
                      c.processName.c_str(),
                      static_cast<unsigned long>(c.pid), path.c_str(),
-                     started.c_str(), cmdLine.c_str());
+                     started.c_str(), cmdLine.c_str(),
+                     static_cast<unsigned long>(c.pid));
     }
     if (::MessageBoxW(hwnd_, prompt, L"WinTCP - End process",
                       MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
@@ -4371,15 +4374,21 @@ void MainWindow::BlockSelectedConnection() {
                      L"peer cannot be reached again.\n\nThe currently open "
                      L"connection will NOT be dropped: Windows provides no "
                      L"supported way to close a single live IPv6 connection. "
-                     L"It will end on its own when the application closes it.",
-                     req.label.c_str());
+                     L"It will end on its own when the application closes it."
+                     L"\n\nScriptable: wintcp.exe block --select "
+                     L"\"pid:%lu remote:%ls\" --yes",
+                     req.label.c_str(), static_cast<unsigned long>(c.pid),
+                     c.remoteAddress.c_str());
     } else {
         ::swprintf_s(prompt,
                      L"Block %ls?\n\nThe connection will be closed now, and "
                      L"Windows Firewall rules will be added so this peer cannot "
                      L"be reached again.\n\nTo undo, use Remove All WinTCP "
-                     L"Blocks from the tray menu.",
-                     req.label.c_str());
+                     L"Blocks from the tray menu."
+                     L"\n\nScriptable: wintcp.exe block --select "
+                     L"\"pid:%lu remote:%ls\" --yes",
+                     req.label.c_str(), static_cast<unsigned long>(c.pid),
+                     c.remoteAddress.c_str());
     }
     if (::MessageBoxW(hwnd_, prompt, L"WinTCP - Block connection",
                       MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
@@ -4396,6 +4405,9 @@ void MainWindow::BlockSelectedConnection() {
         // flow - the user can keep watching the table. A
         // partial failure is still a failure and stays a
         // modal: it must not be missed.
+        // The confirm above cites the CLI verb, verified on the
+        // real machine: `block --select "pid:<pid> remote:<addr>"
+        // --dry-run` resolved to the same row the GUI had.
         UpdateStatusBar(L"Blocked " + req.label);
     } else {
         // Partial success is reported as partial. Saying "done" when only
@@ -4420,9 +4432,12 @@ void MainWindow::CloseSelectedConnection() {
 
     wchar_t prompt[768] = {0};
     ::swprintf_s(prompt,
-                 L"Close this TCP connection?\n\n  %ls  ->  %ls\n  [%ls]  PID %lu",
+                 L"Close this TCP connection?\n\n  %ls  ->  %ls\n  [%ls]  PID %lu"
+                 L"\n\nScriptable: wintcp.exe close --select "
+                 L"\"pid:%lu remote:%ls\" --yes",
                  c.localEndpoint.c_str(), c.remoteEndpoint.c_str(),
-                 c.stateLabel.c_str(), static_cast<unsigned long>(c.pid));
+                 c.stateLabel.c_str(), static_cast<unsigned long>(c.pid),
+                 static_cast<unsigned long>(c.pid), c.remoteAddress.c_str());
     if (::MessageBoxW(hwnd_, prompt, L"WinTCP - Close connection",
                       MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
         return;
