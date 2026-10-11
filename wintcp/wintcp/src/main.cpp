@@ -153,11 +153,25 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
         return 1;
     }
 
-    // Register the ListView / status bar / other common-control classes and
-    // enable visual styles (ComCtl32 v6, via the embedded manifest).
+    // Register the ListView / tree view / status bar / other common-control
+    // classes and enable visual styles (ComCtl32 v6, via the embedded
+    // manifest).
+    //
+    // ICC_TREEVIEW_CLASSES is the documented flag for registering
+    // WC_TREEVIEWW ("SysTreeView32"), so a tree-view user needs it here.
+    // Do not go looking for the process-tree bug here: a clean-room probe
+    // (a fresh process, InitCommonControlsEx with the OLD flags, then
+    // CreateWindowExW(WC_TREEVIEWW)) showed the class being created
+    // anyway - comctl32 v5 registers its classes at DLL load, so the flag
+    // is not what gates the class on this machine. The real defect that
+    // looked like "the tree does not appear" was the tree being a detached
+    // window rather than a mode of the main window, and the flag is here
+    // because the documentation says it belongs, not because it fixed
+    // anything.
     INITCOMMONCONTROLSEX icc = {};
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES |
+                ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
     ::InitCommonControlsEx(&icc);
 
     if (!wintcp::MainWindow::RegisterClass(hInstance)) {

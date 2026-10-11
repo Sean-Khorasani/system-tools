@@ -77,8 +77,8 @@ add_executable(wintcp
     wintcp/src/EmptyStateActions.h
     wintcp/src/ProcessTree.cpp
     wintcp/src/ProcessTree.h
-    wintcp/src/ProcessTreeWindow.cpp
-    wintcp/src/ProcessTreeWindow.h
+    wintcp/src/ProcessTreeView.cpp
+    wintcp/src/ProcessTreeView.h
     wintcp/src/RowAccessible.cpp
     wintcp/src/RowAccessible.h
     wintcp/src/Sha256.cpp

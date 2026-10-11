@@ -21,6 +21,9 @@
 #define IDC_STATIC_FILTER       1109
 #define IDC_STATIC_PROTO        1110
 #define IDC_STATIC_STATE        1111
+// Roadmap: the tree control that replaces the list in process-tree mode.
+// Same client area, one visible at a time.
+#define IDC_PROCESS_TREE        1112
 
 #define IDM_FILE_REFRESH        40001
 #define IDM_FILE_EXPORT         40002

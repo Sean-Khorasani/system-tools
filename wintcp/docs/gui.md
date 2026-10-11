@@ -107,6 +107,12 @@ A refresh that has been requested but not yet answered reads `Refreshing...` in 
 
 Presets saved with `wintcp.exe preset save` appear in the **File** menu, so a view built on the command line is available in the window. **Load preset...** and **Delete preset...** show the numbered preset list inside the prompt itself, so the number you type refers to something on screen.
 
+### Process-tree view mode
+
+**View → Process tree** swaps the connection list for a **tree of the processes that own those connections**, the way Task Manager's Processes tab shows them: one node per process, labelled `name (PID n, k connections)`, under its parent when the parent is also in the snapshot and as a root when it is not. The command is a checked **mode** (its tick on the menu, and `[Tree]` in the caption), not a window of its own — the tree occupies exactly the rectangle the list uses, and switching back restores the selection and scroll position you had. The filter box does not narrow the tree: a tree built from a filtered view is a broken tree, because the parents are missing.
+
+Every row command works on the tree unchanged. The node you are on is mapped to that process's first row, so **Details** (double-click, or `Enter`), **Copy**, **Export**, **Block**, **Close**, **End process** and **Open file location** act on the process you can see, and the status bar shows `N processes, M connections` where the selection count would be. Roots are expanded one level on open, and the first node is selected, so the arrow keys work the moment the mode is switched on.
+
 ## Actions
 
 Right-click a row (or double-click to open Details):

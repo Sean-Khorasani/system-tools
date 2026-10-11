@@ -212,7 +212,7 @@
     <ClCompile Include="..\src\IniFile.cpp" />
     <ClCompile Include="..\src\EmptyStateActions.cpp" />
     <ClCompile Include="..\src\ProcessTree.cpp" />
-    <ClCompile Include="..\src\ProcessTreeWindow.cpp" />
+    <ClCompile Include="..\src\ProcessTreeView.cpp" />
     <ClCompile Include="..\src\RowAccessible.cpp" />
     <ClCompile Include="..\src\Sha256.cpp" />
     <ClCompile Include="..\src\ExposureScore.cpp" />

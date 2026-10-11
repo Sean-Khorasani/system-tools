@@ -73,7 +73,8 @@ struct TreeNode {
 
 struct ProcessTree {
     std::vector<TreeNode> nodes;       // roots are nodes()[0..rootCount)
-    size_t rootCount = 0;
+    size_t rootCount = 0;              // == the number of roots, and roots are
+                                       // nodes()[0..rootCount) IN NODE ORDER
     bool depthExceeded = false;        // the ceiling was hit, some nodes omitted
 };
 

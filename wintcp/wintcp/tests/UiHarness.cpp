@@ -295,6 +295,55 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
               accBad.c_str());
     }
 
+    // ---- Roadmap: the process-tree view mode -----------------------------
+    // The item the user reported as missing: "I can't see any process tree".
+    // The roadmap asked for a tree WHERE THE LIST VIEW IS, and this drives
+    // the real menu command rather than calling the window's method, so a
+    // menu id that lost its registration fails here rather than in front of
+    // a user. The item count is read from the CONTROL, not from the store,
+    // so an empty tree on a populated machine is a failure and not a pass.
+    Mark("tree-mode");
+    {
+        const bool off = Is(w, "treeMode", 0);
+        Check(off, "SMOKE tree mode starts off", Of(w, "treeMode").c_str());
+
+        Cmd(hwnd, IDM_VIEW_PROCESSTREE);
+        Pump(1500);
+        const bool on = Is(w, "treeMode", 1);
+        Check(on, "SMOKE tree mode: View > Process tree turns it on",
+              Of(w, "treeMode").c_str());
+
+        const long items = Num(w, "treeItems");
+        std::snprintf(line, sizeof(line),
+                      "SMOKE tree mode: the tree control has items (%ld)",
+                      items);
+        Check(on && items > 0, line,
+              "the mode is on but the tree is empty - WC_TREEVIEWW needs "
+              "comctl32 with ICC_TREEVIEW_CLASSES, and ProcessTreeFill "
+              "needs the store's rows");
+
+        // A node maps to a list selection, which is what makes every row
+        // command (Details, Copy, Block, End process) work unchanged in the
+        // mode. Without the mapping the menu is grey and the tree is a
+        // picture.
+        const std::string pid = Of(w, "treeSelection");
+        std::snprintf(line, sizeof(line),
+                      "SMOKE tree mode: the caret node maps to a list "
+                      "selection (pid %s)", pid.empty() ? "none" : pid.c_str());
+        Check(!pid.empty() && Num(w, "listSelectionCount") == 1, line,
+              "no list selection behind the tree's node");
+
+        // And back again: the mode is a toggle, not a one-way trip.
+        Cmd(hwnd, IDM_VIEW_PROCESSTREE);
+        Pump(1500);
+        Check(Is(w, "treeMode", 0),
+              "SMOKE tree mode: the same command turns it back off",
+              Of(w, "treeMode").c_str());
+        Check(Is(w, "rowCount", rows),
+              "SMOKE tree mode: the list's rows survive the round trip",
+              Of(w, "rowCount").c_str());
+    }
+
     // ---- every column must be reachable from the menu (C3) ---------------
     // Not cosmetic. The visible-column mask has exactly one writer in the GUI
     // (ToggleColumn, reached only by a View > Columns command), so a ColumnId

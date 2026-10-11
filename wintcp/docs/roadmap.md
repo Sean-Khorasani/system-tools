@@ -217,11 +217,27 @@ and gated: `build.bat` clean, `cli.bat` 268/0, `examples.bat` 116/0,
   6 `g21.acc.*` unit checks pin the pure text builders; 2 SMOKE checks
   read them back through the `accRow` probe.
 
-- **The GUI process-tree view.** Closed 2026-10-11 (`675017e`). View >
-  Process tree opens a tree window over the pure `ProcessTree` engine
-  (the `killtree` verb's core), so the process hierarchy is browsable
-  the way Task Manager's Processes tab shows it. New-file registration
-  in all build paths.
+- **The GUI process-tree view.** Closed 2026-10-11 (`675017e`, redone the same day
+  after a user report). The FIRST attempt shipped a detached window, which is
+  not what the ticket asked for: "a tree control where a LIST VIEW is" means a
+  mode of the main window, like Task Manager's Processes tab. The report
+  ("I can't see any processes tree") was correct, so the mode shipped: one
+  node per process labelled `name (PID n, k connections)` under its parent
+  where the parent is in the snapshot and as a root otherwise, filling the
+  list's exact rectangle, toggled from View > Process tree with a check mark
+  and `[Tree]` in the caption, restoring the list's selection and scroll on
+  the way back. Every row command works unchanged because the node maps to
+  that process's first row. `ProcessTreeView.{h,cpp}` holds the one
+  implementation of rows->tree-items; the detached window is deleted rather
+  than kept as a second surface. Three defects fixed on the way, each
+  caught by a check rather than by reading: the builder documented
+  nodes()[0..rootCount) as the roots but never ordered them (a forest whose
+  roots sit late in row order drew child subtrees at top level and missed
+  real roots); the plan's targets held NODE indices while its contract and
+  both callers read ROW indices; and the walk's guard counted loop
+  iterations, so a wide-but-shallow tree could truncate silently. Six
+  harness checks drive the real menu command and read the tree and the
+  selection back.
 
 - **F5.5 — ETW DNS snooping.** Closed 2026-10-10 by taking the alternative the
   ticket itself recommended, rather than by implementing the ETW route: a
