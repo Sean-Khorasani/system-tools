@@ -99,7 +99,7 @@ REM wintcp.exe, reachable as the `selftest` and `bench` verbs and the
 REM --uiharness switch. They are moved out here, commands and switches
 REM included, so the product carries no test code.
 REM
-REM It links the SAME product sources - all 41 of them, minus main.cpp because
+REM It links the SAME product sources - all 52 of them, minus main.cpp because
 REM that file owns wmain and this link has its own (TestMain.cpp). A test that
 REM exercised a copy of the logic would prove nothing, so the split is by entry
 REM point and link line, never by a second copy of the code.

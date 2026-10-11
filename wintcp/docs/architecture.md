@@ -185,7 +185,7 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
     wintcp.vcxproj (+.filters)
     res/                    app.ico, wintcp.manifest
     tests/                  everything that is not the product
-    src/                    41 .cpp + 46 .h - the product, and nothing else
+    src/                    53 .cpp + 59 .h - the product, and nothing else
 ```
 
 ### `wintcp\src` by responsibility
