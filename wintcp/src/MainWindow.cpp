@@ -33,6 +33,7 @@
 #include "Elevate.h"             // 9.4.2: Reelevate for the traffic case
 #include "ExposureScore.h"       // 9.5.5: the exposure badge predicate
 #include "FontCache.h"
+#include "Theme.h"       // G12/G23: shared palette + HighContrastActive()
 #include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
 #include "resource.h"
 
@@ -764,6 +765,19 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: OnCreate(); return 0;
         case WM_SIZE: OnSize(LOWORD(lParam), HIWORD(lParam)); return 0;
+        case WM_GETMINMAXINFO: {
+            // G24: the control bar needs ~760 px before the right-anchored
+            // Protocol/State combos and the stretching search box stop
+            // overlapping (G6), and ~420 px before the list reads as a
+            // list. A floor keeps the responsive layout intact instead of
+            // letting the window collapse onto itself.
+            auto* mm = reinterpret_cast<LPMINMAXINFO>(lParam);
+            if (mm != nullptr) {
+                mm->ptMinTrackSize.x = S(760);
+                mm->ptMinTrackSize.y = S(420);
+            }
+            return 0;
+        }
         case WM_COMMAND: {
             OnCommand(LOWORD(wParam), HIWORD(wParam),
                       reinterpret_cast<HWND>(lParam));
@@ -889,6 +903,24 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (trayEnabled_ && trayIconShown_) {
                     ::ShowWindow(hwnd_, SW_HIDE);
+                    // G26: the first hide explains where the window went and
+                    // how to get it back. A window that vanishes with no
+                    // explanation reads as a crash; one balloon per process
+                    // names the restore gesture (single-click, matching the
+                    // WM_APP_TRAY handler) without nagging on every minimize.
+                    if (!trayHideBalloonShown_ &&
+                        DllAvailable("shell32.dll")) {
+                        trayHideBalloonShown_ = true;
+                        trayNid_.uFlags = NIF_INFO;
+                        ::wcscpy_s(trayNid_.szInfo,
+                                   L"WinTCP is still running in the tray. "
+                                   L"Single-click the icon to restore it; "
+                                   L"right-click it for options.");
+                        ::wcscpy_s(trayNid_.szInfoTitle, L"WinTCP");
+                        trayNid_.dwInfoFlags = NIIF_INFO;
+                        trayNid_.uTimeout = 5000;
+                        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+                    }
                     return 0;
                 }
             }
@@ -1086,6 +1118,7 @@ void MainWindow::OnDestroy() {
     etw_.Stop();                         // stop the kernel logger
     charts_.Close();                     // stop the 1 s sampler
     changeLog_.Close();                  // 5.4: destroy before the owner goes
+    tree_.Close();                       // process-tree view: same terms
     {
         std::lock_guard<std::mutex> lk(Sink()->m);
         Sink()->shuttingDown = true;
@@ -1335,6 +1368,10 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     // an error result (R2's containment posts those). The display age below
     // stays success-only; the watchdog reads this one.
     lastResultTick_ = ::GetTickCount64();
+    // G25: the in-flight request this result answers has landed, on every
+    // path below (error, frozen, success) - cleared before any UpdateStatusBar
+    // so the "Refreshing..." note never outlives the answer.
+    refreshInFlight_ = false;
     if (!result->error.empty()) {
         lastError_ = result->error;
         if (reportErrorsNextResult_) {
@@ -1433,7 +1470,12 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
 
 void MainWindow::Refresh(bool reportErrors) {
     reportErrorsNextResult_ = reportErrors;
+    // G25: the request is in flight from here until OnRefreshResult runs,
+    // so the status bar can say "Refreshing..." instead of looking idle
+    // while a slow enum or a DNS stall holds the worker.
+    refreshInFlight_ = true;
     engine_.Request();
+    UpdateStatusBar(lastError_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,6 +1517,22 @@ void MainWindow::CreateControls() {
                                              reinterpret_cast<HMENU>(IDC_STATIC_FILTER),
                                              hInstance_, nullptr);
     (void)hwndFilterLabel;
+    // The protocol and state filter combos are labelled like the
+    // filter box, so a reader does not have to infer what each
+    // drop-down narrows. Like the Filter: caption they are fetched
+    // by id at layout time rather than kept as members.
+    HWND hwndProtoLabel = ::CreateWindowExW(0, WC_STATICW, L"Protocol:",
+                                             WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                             0, 0, 0, 0, hwnd_,
+                                             reinterpret_cast<HMENU>(IDC_STATIC_PROTO),
+                                             hInstance_, nullptr);
+    HWND hwndStateLabel = ::CreateWindowExW(0, WC_STATICW, L"State:",
+                                             WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                             0, 0, 0, 0, hwnd_,
+                                             reinterpret_cast<HMENU>(IDC_STATIC_STATE),
+                                             hInstance_, nullptr);
+    (void)hwndProtoLabel;
+    (void)hwndStateLabel;
     hwndSearchEdit_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, L"",
                                         editStyle, 0, 0, 0, 0, hwnd_,
                                         reinterpret_cast<HMENU>(IDC_EDIT_SEARCH),
@@ -1494,17 +1552,43 @@ void MainWindow::CreateControls() {
 
     // Virtual list view: rows are supplied by LVN_GETDISPINFO from the
     // store, so refreshes never destroy/recreate items.
+    //
+    // LVS_SHAREIMAGELISTS is load-bearing with the G9 system icon list:
+    // without it the list view DESTROYS the image list assigned via
+    // LVM_SETIMAGELIST when it is itself destroyed - and that list is the
+    // shell's shared system list, not ours to destroy.
     const DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT |
                             LVS_OWNERDATA | LVS_SHOWSELALWAYS | WS_CLIPCHILDREN |
-                            WS_VSCROLL | WS_HSCROLL;
+                            WS_VSCROLL | WS_HSCROLL | LVS_SHAREIMAGELISTS;
     hwndList_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", listStyle,
                                   0, 0, 0, 0, hwnd_,
                                   reinterpret_cast<HMENU>(IDC_LIST), hInstance_,
                                   nullptr);
     ::SendMessageW(hwndList_, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
                    LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
-                   LVS_EX_HEADERDRAGDROP | LVS_EX_LABELTIP | LVS_EX_INFOTIP);
+                   LVS_EX_HEADERDRAGDROP | LVS_EX_LABELTIP | LVS_EX_INFOTIP |
+                   LVS_EX_TRACKSELECT);
     ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, 0, 0);
+
+    // Per-row process icons (roadmap G9). The shell's system
+    // small-icon list is attached once; each row then supplies
+    // its icon's index in that list from LVN_GETDISPINFO, so a
+    // connection shows the icon of the program that owns the
+    // socket, the way Task Manager and Process Explorer do.
+    // shell32.dll is delay-loaded, so it is checked before the
+    // first shell call; a machine without it shows no icons -
+    // the list is unchanged, not broken.
+    if (iconImageList_ == nullptr && DllAvailable("shell32.dll")) {
+        SHFILEINFOW sfi = {};
+        iconImageList_ = reinterpret_cast<HIMAGELIST>(
+            ::SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi),
+                             SHGFI_SYSICONINDEX | SHGFI_SMALLICON));
+        if (iconImageList_ != nullptr)
+            ::SendMessageW(hwndList_, LVM_SETIMAGELIST,
+                                 LVSIL_SMALL,
+                                 reinterpret_cast<LPARAM>(
+                                     iconImageList_));
+    }
 
     hwndStatus_ = ::CreateWindowExW(0, STATUSCLASSNAMEW, nullptr,
                                     WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
@@ -1523,13 +1607,13 @@ void MainWindow::CreateControls() {
     SetChildFont(hwndList_, font);
     SetChildFont(hwndStatus_, font);
     SetChildFont(hwndFilterLabel, font);
+    SetChildFont(hwndProtoLabel, font);
+    SetChildFont(hwndStateLabel, font);
 
     // 7.3 tab order. Controls were created in a different order from the one a
     // user would expect to walk them in, and without an explicit order Tab
     // follows creation order - so Tab out of the filter box jumped to the
-    // Refresh button. The sequence below matches the visual layout: the
-    // filter controls left to right, then the list, which is where the
-    // user's attention belongs after narrowing the view.
+    // Refresh button.
     //
     // Set by rewriting the GW_HWNDNEXT chain, which is exactly what Tab walks.
     // The old BuildTabOrder macro is absent from every current Windows SDK
@@ -1541,9 +1625,16 @@ void MainWindow::CreateControls() {
     // moves a child to sit immediately after its parent, so walking backwards
     // guarantees every child is still where it is needed to be linked next.
     // Walking forwards would work only by accident of the original order.
+    //
+    // The order matches the visual rows: the auto-refresh checkbox and
+    // interval combo (row 1), then the search box and the protocol and
+    // state combos (row 2), then the list, with the action buttons last
+    // - the list is where the user's attention belongs after narrowing
+    // the view, and Refresh/Export are acted on least often.
     const HWND order[] = {
-        hwndAutoChk_, hwndIntervalCbo_, hwndProtoCbo_, hwndStateCbo_,
-        hwndSearchEdit_, hwndList_, hwndRefreshBtn_, hwndExportBtn_,
+        hwndAutoChk_, hwndIntervalCbo_, hwndSearchEdit_,
+        hwndProtoCbo_, hwndStateCbo_,
+        hwndList_, hwndRefreshBtn_, hwndExportBtn_,
     };
     const int n = static_cast<int>(sizeof(order) / sizeof(order[0]));
     for (int i = n - 1; i > 0; --i) {
@@ -1552,6 +1643,7 @@ void MainWindow::CreateControls() {
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
                            SWP_NOACTIVATE);
     }
+    InitTooltips();
 }
 
 // Index of the default cadence in the interval combo: the "2 seconds" row. A
@@ -1638,6 +1730,30 @@ void MainWindow::RebuildColumns() {
         if (idx >= 0) visToCol_.push_back(c);
     }
     UpdateSortIndicator();
+    SyncGroupHeader();
+}
+
+void MainWindow::SyncGroupHeader() {
+    // G27: in grouped mode the rows are per-process aggregates, and the
+    // header of the column that carries the aggregation says so with the
+    // live group count. A flat view keeps the plain title, so the label
+    // is state rather than decoration.
+    if (hwndList_ == nullptr) return;
+    HWND hdr = ListView_GetHeader(hwndList_);
+    if (hdr == nullptr) return;
+    const int vi = ColToVisible(COL_PROCESS);
+    if (vi < 0) return;
+    std::wstring title = kColumns[COL_PROCESS].title;
+    if (groupByProcess_) {
+        title += L" (";
+        title += std::to_wstring(store_.View().size());
+        title += L" groups)";
+    }
+    HDITEMW hdi = {};
+    hdi.mask = HDI_TEXT;
+    hdi.pszText = const_cast<LPWSTR>(title.c_str());
+    ::SendMessageW(hdr, HDM_SETITEMW, static_cast<WPARAM>(vi),
+                   reinterpret_cast<LPARAM>(&hdi));
 }
 
 int MainWindow::VisibleToCol(int visibleIndex) const {
@@ -1650,6 +1766,24 @@ int MainWindow::ColToVisible(int columnId) const {
     for (size_t i = 0; i < visToCol_.size(); ++i)
         if (visToCol_[i] == columnId) return static_cast<int>(i);
     return -1;
+}
+
+int MainWindow::ProcessIconIndex(const std::wstring& path) const {
+    // The shell's system image list is the source of every
+    // index, so the index this returns is only meaningful with
+    // that list attached to the list control. Without it (no
+    // shell, or the shell list not yet resolved) there is no
+    // list to index into, so -1 ("no icon") is the honest
+    // answer rather than a number that would draw nothing.
+    if (iconImageList_ == nullptr || path.empty()) return -1;
+    SHFILEINFOW sfi = {};
+    ::SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi),
+                         SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+    // SHGetFileInfo leaves iIcon at -1 when it has no icon for
+    // the path (a process that has already exited, say), which is
+    // the list control's own "no icon" value, so it passes
+    // straight through.
+    return sfi.iIcon;
 }
 
 void MainWindow::UpdateSortIndicator() {
@@ -2110,10 +2244,12 @@ void MainWindow::RecreateFont() {
     FontCache::Get().OnDpiChanged();
     font_ = FontCache::Get().Get(kBodyPtSize, FW_NORMAL, dpi_);
     ApplyFontToChildren();
-    // The details window is a separate top-level window holding a copy of
-    // this handle; it must receive the replacement too (its header font is
-    // derived from it), otherwise a monitor DPI change leaves it dangling.
+    // The details window borrows this handle for its buttons and re-resolves
+    // its cache-owned faces at its own DPI; it must hear about the
+    // replacement too, otherwise a monitor DPI change leaves it behind.
     details_.ApplyFont(font_);
+    // The process-tree view borrows the same handle for its own children.
+    tree_.ApplyFont(font_);
 }
 
 void MainWindow::ApplyFontToChildren() {
@@ -2137,6 +2273,12 @@ void MainWindow::LayoutControls(int cx, int cy) {
     const int kTopH = S(66);
     const int kStatusH = S(24);
 
+    // Row 1 - actions. Refresh, Export and the auto-refresh
+    // checkbox are fixed at the left, with the interval combo
+    // after them at a fixed width. The protocol and state
+    // filters moved down to row 2 with the search box, so this
+    // row no longer carries the fixed x positions that used to
+    // push the State combo past the client edge below ~760 px.
     if (hwndRefreshBtn_ != nullptr)
         ::MoveWindow(hwndRefreshBtn_, kMargin, kRow1Y, S(90), kRow1H, TRUE);
     if (hwndExportBtn_ != nullptr)
@@ -2145,16 +2287,42 @@ void MainWindow::LayoutControls(int cx, int cy) {
         ::MoveWindow(hwndAutoChk_, kMargin + S(202), kRow1Y, S(104), kRow1H, TRUE);
     if (hwndIntervalCbo_ != nullptr)
         ::MoveWindow(hwndIntervalCbo_, kMargin + S(310), kRow1Y, S(100), S(200), TRUE);
-    if (hwndProtoCbo_ != nullptr)
-        ::MoveWindow(hwndProtoCbo_, kMargin + S(416), kRow1Y, S(190), S(220), TRUE);
-    if (hwndStateCbo_ != nullptr)
-        ::MoveWindow(hwndStateCbo_, kMargin + S(612), kRow1Y, S(140), S(240), TRUE);
+
+    // Row 2 - the view filters. The search box stretches to fill
+    // the space before the right-anchored Protocol and State
+    // combos, so those two track the right edge and never run
+    // off a narrow window. Each is labelled like the Filter: box,
+    // so a reader does not have to infer what a drop-down narrows.
+    const int gap = S(6);
+    const int stateW = S(110), stateLabelW = S(34);
+    const int protoW = S(120), protoLabelW = S(52);
+    const int stateComboX = cx - kMargin - stateW;
+    const int stateLabelX = stateComboX - stateLabelW - gap;
+    const int protoComboX = stateLabelX - gap - protoW;
+    const int protoLabelX = protoComboX - protoLabelW - gap;
 
     HWND hwndLabel = ::GetDlgItem(hwnd_, IDC_STATIC_FILTER);
     if (hwndLabel != nullptr)
         ::MoveWindow(hwndLabel, kMargin, kRow2Y + S(3), S(40), kRow2H, TRUE);
-    if (hwndSearchEdit_ != nullptr)
-        ::MoveWindow(hwndSearchEdit_, kMargin + S(44), kRow2Y, S(420), kRow2H, TRUE);
+    if (hwndSearchEdit_ != nullptr) {
+        const int searchX = kMargin + S(44);
+        int searchW = protoLabelX - gap - searchX;
+        const int searchMin = S(60);
+        if (searchW < searchMin) searchW = searchMin;
+        ::MoveWindow(hwndSearchEdit_, searchX, kRow2Y, searchW, kRow2H, TRUE);
+    }
+    HWND hwndProtoLabel = ::GetDlgItem(hwnd_, IDC_STATIC_PROTO);
+    if (hwndProtoLabel != nullptr)
+        ::MoveWindow(hwndProtoLabel, protoLabelX, kRow2Y + S(3),
+                         protoLabelW, kRow2H, TRUE);
+    if (hwndProtoCbo_ != nullptr)
+        ::MoveWindow(hwndProtoCbo_, protoComboX, kRow2Y, protoW, S(220), TRUE);
+    HWND hwndStateLabel = ::GetDlgItem(hwnd_, IDC_STATIC_STATE);
+    if (hwndStateLabel != nullptr)
+        ::MoveWindow(hwndStateLabel, stateLabelX, kRow2Y + S(3),
+                         stateLabelW, kRow2H, TRUE);
+    if (hwndStateCbo_ != nullptr)
+        ::MoveWindow(hwndStateCbo_, stateComboX, kRow2Y, stateW, S(240), TRUE);
 
     if (hwndStatus_ != nullptr)
         ::MoveWindow(hwndStatus_, 0, cy - kStatusH, cx, kStatusH, TRUE);
@@ -2240,6 +2408,7 @@ void MainWindow::ApplyView() {
     int topIdx = 0;
     CaptureSelection(ids, &focusedId, &topIdx);
     ApplyViewWith(ids, focusedId, topIdx);
+    UpdateCaption();
 }
 
 void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
@@ -2282,6 +2451,7 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
                    LVSICF_NOINVALIDATEALL);
     RestoreSelection(ids, focusedId, topIdx);
     ::InvalidateRect(hwndList_, nullptr, TRUE);
+    SyncGroupHeader();   // G27: the group count moves every refresh
     UpdateStatusBar(lastError_);
 }
 
@@ -2425,6 +2595,136 @@ void MainWindow::UpdateExposure() {
     exposureLine_ = sum.line;
 }
 
+void MainWindow::UpdateCaption() {
+    // G27: the caption carries the view state - grouped,
+    // frozen, filtered - so the window is identifiable at
+    // a glance and in Alt-Tab, not only from inside the
+    // client area.
+    std::wstring title = L"WinTCP - TCP/UDP Connections";
+    if (groupByProcess_) title += L" [Grouped]";
+    if (frozen_) title += L" [Frozen]";
+    if (!CurrentSearchText().empty()) title += L" [Filtered]";
+    ::SetWindowTextW(hwnd_, title.c_str());
+}
+
+void MainWindow::UpdateTrayTip() {
+    // G26: the tray tip names what the window holds, so the icon is
+    // identifiable without restoring it. Static text ("WinTCP - TCP/UDP
+    // Connections") said nothing about rows, frozen/grouped modes or
+    // alerts - the three states a user minimizes over and forgets.
+    if (!trayIconShown_ || hwnd_ == nullptr) return;
+    if (!DllAvailable("shell32.dll")) return;
+    const RowStats& st = store_.Stats();
+    wchar_t tip[128] = {0};
+    ::swprintf_s(tip, L"WinTCP - %zu shown / %zu", store_.View().size(),
+                 st.total);
+    std::wstring extra;
+    if (groupByProcess_) extra += L", grouped";
+    if (frozen_) extra += L", frozen";
+    if (!alertHint_.empty()) extra += L", alert";
+    if (!extra.empty()) {
+        // Truncation-safe: swprintf_s truncates rather than overruns, and
+        // szTip is 128 wchar_t, so the worst case is a shortened suffix.
+        ::wcscat_s(tip, extra.c_str());
+    }
+    trayNid_.uFlags = NIF_TIP;
+    ::wcscpy_s(trayNid_.szTip, tip);
+    ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+}
+
+void MainWindow::InitTooltips() {
+    // G31: the control bar had no tooltips and no accessible names - only
+    // the filter edit's cue banner said anything. One tooltip control
+    // serves the whole bar; each tool is a (control, text) pair added
+    // once, because the bar's children live as long as the window.
+    if (hwndTip_ != nullptr || hwnd_ == nullptr) return;
+    hwndTip_ = ::CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr,
+                                 WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                                 CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                                 CW_USEDEFAULT, hwnd_, nullptr, hInstance_,
+                                 nullptr);
+    if (hwndTip_ == nullptr) return;
+    const struct {
+        HWND* ctl;
+        const wchar_t* text;
+    } tools[] = {
+        {&hwndRefreshBtn_, L"Refresh now (F5)"},
+        {&hwndExportBtn_, L"Export the table to CSV/TSV/JSON (Ctrl+E)"},
+        {&hwndAutoChk_, L"Refresh automatically on a timer"},
+        {&hwndIntervalCbo_, L"Auto-refresh interval"},
+        {&hwndProtoCbo_, L"Show only this protocol family"},
+        {&hwndStateCbo_, L"Show only connections in this state"},
+        {&hwndSearchEdit_,
+         L"Filter the table: text, port:443, pid:1234 (Ctrl+F to focus)"},
+    };
+    for (const auto& t : tools) {
+        if (t.ctl == nullptr || *t.ctl == nullptr) continue;
+        TOOLINFOW ti = {};
+        ti.cbSize = sizeof(ti);
+        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        ti.hwnd = hwnd_;
+        ti.uId = reinterpret_cast<UINT_PTR>(*t.ctl);
+        ti.lpszText = const_cast<LPWSTR>(t.text);
+        ::SendMessageW(hwndTip_, TTM_ADDTOOLW, 0,
+                       reinterpret_cast<LPARAM>(&ti));
+    }
+    // A narrow bar clips its longest label first; a generous width keeps
+    // the protocol/state explanations on one line.
+    ::SendMessageW(hwndTip_, TTM_SETMAXTIPWIDTH, 0, 400);
+}
+
+void MainWindow::UpdateStatusTips() {
+    // G31: only pane 5 ever had a tooltip. Every pane now explains
+    // itself; panes whose text already says everything get a short
+    // label rather than an echo, so the tip adds rather than repeats.
+    if (hwndStatus_ == nullptr) return;
+    ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 0,
+                   reinterpret_cast<LPARAM>(L"Rows shown / total, by family"));
+    ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 1,
+                   reinterpret_cast<LPARAM>(L"Connections by TCP state"));
+    ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 2,
+                   reinterpret_cast<LPARAM>(
+                       L"Last completed refresh (F5 refreshes now)"));
+    ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 3,
+                   reinterpret_cast<LPARAM>(L"Selected rows"));
+    ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 4,
+                   reinterpret_cast<LPARAM>(
+                       L"View age; countdown to the next auto-refresh"));
+}
+
+void MainWindow::ResetLayout() {
+    // G28: the persisted layout (mask/order/widths/sort/filter) has no
+    // recovery path short of the registry. Reset restores every default
+    // the startup path uses, then persists through the same single write
+    // path so the fix survives a restart.
+    visibleCols_ = kDefaultVisibleCols;
+    for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
+    for (int i = 0; i < COL_COUNT; ++i) colOrder_[i] = kDisplayOrder[i];
+    store_.SetSort(COL_PID, true);
+    if (hwndSearchEdit_ != nullptr) ::SetWindowTextW(hwndSearchEdit_, L"");
+    filterDebounceText_.clear();
+    if (hwndProtoCbo_ != nullptr)
+        ::SendMessageW(hwndProtoCbo_, CB_SETCURSEL, 0, 0);
+    if (hwndStateCbo_ != nullptr)
+        ::SendMessageW(hwndStateCbo_, CB_SETCURSEL, 0, 0);
+    SyncColumnMenuChecks();
+    RebuildColumns();
+    ApplyView();
+    UpdateCaption();
+    settings_.colVisible = visibleCols_;
+    for (int i = 0; i < COL_COUNT; ++i)
+        settings_.colWidths[i] = colWidths_[i];
+    settings_.colWidthsValid = true;
+    for (int i = 0; i < COL_COUNT; ++i)
+        settings_.colOrder[i] = colOrder_[i];
+    settings_.colOrderValid = true;
+    settings_.sortCol = COL_PID;
+    settings_.sortAsc = true;
+    settings_.filter[0] = L'\0';
+    PersistSettings("reset-layout");
+    UpdateStatusBar(L"Columns and layout reset to defaults.");
+}
+
 void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // 9.5.5: recompute the exposure badge here rather than at each
     // UpdateStatusBar call site. This function runs on every debounced
@@ -2550,7 +2850,12 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // as current, and the user has no way to tell the list is not updating.
     // FROZEN takes priority over the timestamp for exactly that reason.
     std::wstring mid;
-    if (frozen_) {
+    if (refreshInFlight_ && !frozen_) {
+        // G25: a request is outstanding and no result has arrived yet. A
+        // slow enum or a DNS stall otherwise looks exactly like idle, so
+        // the bar says what the worker is doing instead of its last age.
+        mid = L"Refreshing...";
+    } else if (frozen_) {
         // FrozenAgeMs returns MILLISECONDS; FormatDuration takes seconds.
         // Dividing is not enough on its own: a view frozen for 900 ms would
         // render "0s", indistinguishable from one frozen for 0 ms, so a
@@ -2610,6 +2915,10 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // balloon on every healthy refresh.
     ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 5,
                     tip.empty() ? 0 : reinterpret_cast<LPARAM>(tip.c_str()));
+    // G31: every pane explains itself; G26: the tray icon says what the
+    // window holds. Both are refreshed with the bar so they never go stale.
+    UpdateStatusTips();
+    UpdateTrayTip();
 }
 
 std::wstring MainWindow::SelectedSummary() const {
@@ -2878,6 +3187,10 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             // empty" deserves when the table is empty for a legitimate reason.
             ShowEmptyStateActions();
             break;
+        case IDM_VIEW_RESET_LAYOUT:
+            // G28: persisted layout, one click back to defaults.
+            ResetLayout();
+            break;
         case IDM_VIEW_FREEZE:
             frozen_ = !frozen_;
             // Stamped from GetTickCount64 (a monotonic counter), not from
@@ -2886,6 +3199,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             frozenAt_ = frozen_ ? ::GetTickCount64() : 0;
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_FREEZE, frozen_);
             UpdateStatusBar(std::wstring());
+            UpdateCaption();
             break;
         case IDM_VIEW_GROUP:
             groupByProcess_ = !groupByProcess_;
@@ -2989,6 +3303,20 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             }
             break;
         }
+        case IDM_VIEW_PROCESSTREE: {
+            // The GUI process-tree view: a tree control over the same
+            // snapshot the list shows. The supplier returns rows by value,
+            // so the tree renders a snapshot the refresh cannot reallocate
+            // underneath it. Toggle, like the change-log window.
+            if (tree_.IsVisible()) {
+                tree_.Close();
+            } else {
+                tree_.Show(hwnd_, font_, [this]() {
+                    return std::vector<Connection>(store_.Rows());
+                });
+            }
+            break;
+        }
         default:
             if (id >= IDM_COL_BASE && id < IDM_COL_BASE + IDM_COL_COUNT)
                 ToggleColumn(static_cast<int>(id - IDM_COL_BASE));
@@ -3002,10 +3330,17 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
     switch (hdr->code) {
         case LVN_GETDISPINFO: {
             auto* di = reinterpret_cast<NMLVDISPINFO*>(hdr);
-            if ((di->item.mask & LVIF_TEXT) == 0) break;
-            dispBuf_[0] = L'\0';
             const size_t viewIdx = static_cast<size_t>(di->item.iItem);
             const Connection* c = store_.ViewRow(viewIdx);
+            // The icon is requested on its own (LVIF_IMAGE) when
+            // the list paints a row's image, independently of the
+            // text, so it is answered before the text-only
+            // early-out below (roadmap G9).
+            if (c != nullptr && (di->item.mask & LVIF_IMAGE) != 0) {
+                di->item.iImage = ProcessIconIndex(c->processPath);
+            }
+            if ((di->item.mask & LVIF_TEXT) == 0) break;
+            dispBuf_[0] = L'\0';
             if (c != nullptr) {
                 const int col = VisibleToCol(di->item.iSubItem);
                 if (col >= 0) {
@@ -3015,13 +3350,13 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
                     // connection so addresses, state and ids stay real.
                     if (const ProcessGroup* g = store_.ViewGroup(viewIdx)) {
                         if (wintcp::GroupColumnText(*g, col, dispBuf_,
-                                                    kMaxColumnText)) {
+                                                            kMaxColumnText)) {
                             di->item.pszText = dispBuf_;
                             break;
                         }
                     }
                     ConnectionStore::GetColumnText(*c, col, dispBuf_,
-                                                   kMaxColumnText);
+                                                           kMaxColumnText);
                 }
             }
             di->item.pszText = dispBuf_;
@@ -3482,7 +3817,6 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     ::AppendMenuW(menu, MF_STRING, IDM_CTX_COPY_ALL, L"Copy &all");
     ::AppendMenuW(menu, MF_STRING | gray, IDM_CTX_EXPORT_SELECTION,
                    L"&Export selection...");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     // REMOVED 2026-10-05 (todo.md 8.7 G2). Both menu entries that used to live here
     // are gone; the capability was moved to the CLI rather than dropped.
     //
@@ -3602,6 +3936,22 @@ bool MainWindow::SelectedRowIndices(std::vector<int>& out) const {
 
 std::wstring MainWindow::SelectedRowsText(bool copyAll) const {
     std::wstring out;
+    // G27: a copy of a grouped or frozen view says so up front, so the
+    // pasted table cannot be mistaken for a live flat one. '#' comment
+    // lines, matching the CLI's own comment convention, so a TSV reader
+    // that skips comment lines keeps working and a human reader sees the
+    // state the rows were copied in.
+    if (groupByProcess_) {
+        out += L"# WinTCP: rows grouped by process (per-process aggregates, "
+               L"not individual connections)\r\n";
+    }
+    if (frozen_) {
+        const ULONGLONG age = FrozenAgeMs(frozenAt_, ::GetTickCount64());
+        out += L"# WinTCP: view frozen " +
+               ((age < kMsPerSecond) ? std::wstring(L"<1s")
+                                     : FormatDuration(age / kMsPerSecond)) +
+               L" ago (stale snapshot, not live)\r\n";
+    }
     // Header = visible columns, tab separated.
     for (size_t i = 0; i < visToCol_.size(); ++i) {
         if (i != 0) out += L"\t";
@@ -4002,8 +4352,12 @@ void MainWindow::BlockSelectedConnection() {
     mo.yes = true;
     const CommandResult br = BlockNow(req, mo);
     if (br.exitCode == kExitOk) {
-        ::MessageBoxW(hwnd_, Utf8ToWide(br.out.c_str()).c_str(),
-                      L"Block connection", MB_OK | MB_ICONINFORMATION);
+        // G32: the block succeeded, so the result goes to the
+        // status bar rather than a modal that interrupts the
+        // flow - the user can keep watching the table. A
+        // partial failure is still a failure and stays a
+        // modal: it must not be missed.
+        UpdateStatusBar(L"Blocked " + req.label);
     } else {
         // Partial success is reported as partial. Saying "done" when only
         // one of the two layers applied would leave the user believing
@@ -4031,7 +4385,7 @@ void MainWindow::CloseSelectedConnection() {
                  c.localEndpoint.c_str(), c.remoteEndpoint.c_str(),
                  c.stateLabel.c_str(), static_cast<unsigned long>(c.pid));
     if (::MessageBoxW(hwnd_, prompt, L"WinTCP - Close connection",
-                      MB_YESNO | MB_ICONWARNING) != IDYES)
+                      MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
         return;
 
     // Execution lives in the abstract layer (Commands::CloseRow); this only
@@ -4083,7 +4437,7 @@ void MainWindow::RemoveAllWinTcpBlocks() {
                  L"recreated by blocking the peer again.",
                  count);
     if (::MessageBoxW(hwnd_, prompt, L"WinTCP - Remove all blocks",
-                      MB_YESNO | MB_ICONWARNING) != IDYES) {
+                       MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
         return;
     }
 
@@ -4107,9 +4461,10 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
         case CDDS_PREPAINT:
             // CDRF_NOTIFYITEMDRAW == 0x20 == "CDRF_NOTIFYITEMPREPAINT"
             // (the SDK defines only the generic name; same value).
-            // Deliberately no CDRF_NOTIFYPOSTPAINT: post-paint is only
-            // needed for sub-item draw stages this list does not use.
-            return CDRF_NOTIFYITEMDRAW;
+            // CDRF_NOTIFYPOSTPAINT (0x10) is requested too: the
+            // empty-state banner is drawn once over the whole list
+            // in post-paint, where the rows would have been.
+            return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
         case CDDS_ITEMPREPAINT: {
             // Change highlighting: green = new, yellow = state changed, red =
             // vanished THIS refresh (then a grey F5.7 retained ghost). The colors
@@ -4170,6 +4525,38 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
                     cd->clrTextBk = RGB(0xF8, 0xF0, 0xB8);
                 }
                 return CDRF_NEWFONT;
+            }
+            // G10: subtle banding on unmarked rows, so the eye can follow a
+            // row across a wide table without selection. Change highlights
+            // above win - a flashing row must not be banded over - and the
+            // shades are faint enough to stay out of the text's way in
+            // both themes. (Hover itself is LVS_EX_TRACKSELECT on the list.)
+            if ((static_cast<size_t>(cd->nmcd.dwItemSpec) % 2) == 1) {
+                cd->clrTextBk =
+                    dark ? RGB(0x26, 0x26, 0x26) : RGB(0xF5, 0xF5, 0xF5);
+                return CDRF_NEWFONT;
+            }
+            return CDRF_DODEFAULT;
+        }
+        case CDDS_POSTPAINT: {
+            // The empty-state banner (roadmap G15). When the view
+            // is empty there are no rows to paint, so the reason is
+            // drawn where the rows would have been - in the list
+            // itself - instead of only in the status bar, which a
+            // user scanning the table never looks at. The hint is
+            // only set for the cases that have a fix, so a plain,
+            // healthy "no traffic yet" table stays quiet.
+            if (store_.View().empty() && !emptyStateHint_.empty()) {
+                RECT rc = cd->nmcd.rc;
+                ::SetBkMode(cd->nmcd.hdc, TRANSPARENT);
+                ::SetTextColor(cd->nmcd.hdc,
+                                   ::GetSysColor(COLOR_GRAYTEXT));
+                ::DrawTextW(cd->nmcd.hdc,
+                                emptyStateHint_.c_str(),
+                                static_cast<int>(emptyStateHint_.size()),
+                                &rc,
+                                DT_CENTER | DT_VCENTER |
+                                    DT_WORDBREAK | DT_NOPREFIX);
             }
             return CDRF_DODEFAULT;
         }
@@ -4506,7 +4893,7 @@ void MainWindow::SavePreset() {
         std::wstring msg = L"A preset named '" + name + L"' already exists.\r\n\r\n"
                            L"Replace it?";
         if (::MessageBoxW(hwnd_, msg.c_str(), L"Save preset",
-                          MB_YESNO | MB_ICONWARNING) != IDYES)
+                          MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
             return;
         result = Presets::Save(name, CurrentPresetView(), true);
     }
@@ -4546,12 +4933,23 @@ void MainWindow::LoadPreset() {
     // A numbered list rather than a combo: with more than a handful of
     // presets a list box scrolls, and the numbers double as a way to refer to
     // one in the message box.
+    //
+    // G4: the list is the LABEL of the prompt, not a discarded local. The
+    // prompt used to build this text and then ask with an empty label, so
+    // the numbers meant nothing. Capped at a dozen rows with a count, so a
+    // long preset library cannot blow the dialog's caption bound (the prompt
+    // truncates past it; a truncated list still reads, a missing one
+    // does not).
     std::wstring text = L"Type the number of the preset to load:\r\n\r\n";
-    for (size_t i = 0; i < names.size(); ++i)
+    const size_t kShownPresets = 12;
+    for (size_t i = 0; i < names.size() && i < kShownPresets; ++i)
         text += std::to_wstring(i + 1) + L".  " + names[i] + L"\r\n";
+    if (names.size() > kShownPresets)
+        text += L"... and " + std::to_wstring(names.size() - kShownPresets) +
+                L" more (type its number anyway)\r\n";
 
     std::wstring answer;
-    if (!PromptForText(hwnd_, L"Load preset", L"", L"1", 8, &answer))
+    if (!PromptForText(hwnd_, L"Load preset", text.c_str(), L"1", 8, &answer))
         return;
     // Parse strictly: the field is user input and "2abc" or "-1" must not
     // silently resolve to preset 2 or wrap to the last entry.
@@ -4592,11 +4990,17 @@ void MainWindow::DeletePreset() {
                       MB_OK | MB_ICONINFORMATION);
         return;
     }
+    // G4: same contract as LoadPreset - the numbered list is the prompt's
+    // label, capped the same way, so the numbers on screen mean something.
     std::wstring text = L"Type the number of the preset to delete:\r\n\r\n";
-    for (size_t i = 0; i < names.size(); ++i)
+    const size_t kShownPresets = 12;
+    for (size_t i = 0; i < names.size() && i < kShownPresets; ++i)
         text += std::to_wstring(i + 1) + L".  " + names[i] + L"\r\n";
+    if (names.size() > kShownPresets)
+        text += L"... and " + std::to_wstring(names.size() - kShownPresets) +
+                L" more (type its number anyway)\r\n";
     std::wstring answer;
-    if (!PromptForText(hwnd_, L"Delete preset", L"", L"1", 8, &answer))
+    if (!PromptForText(hwnd_, L"Delete preset", text.c_str(), L"1", 8, &answer))
         return;
     size_t idx = 0;
     if (answer.empty() ||
@@ -4619,7 +5023,7 @@ void MainWindow::DeletePreset() {
     if (::MessageBoxW(hwnd_,
                       (L"Delete the preset '" + victim + L"'?").c_str(),
                       L"Delete preset",
-                      MB_YESNO | MB_ICONWARNING) != IDYES)
+                      MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
         return;
     if (!Presets::Delete(victim)) {
         ::MessageBoxW(hwnd_, L"Could not delete the preset.", L"Delete preset",
@@ -4778,6 +5182,185 @@ void MainWindow::EditSelectedBookmarkNote() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// About box / shortcuts sheet (roadmap G13)
+//
+// Both used to be a bare MessageBoxW. The About summary runs to a
+// dozen lines and the shortcut list is laid out in columns: a message
+// box wraps them, cannot be monospaced, and does not scroll. A small
+// modal sheet with a read-only, scrolling edit does all three, and the
+// shortcut sheet is given a fixed-pitch font so its columns line up.
+namespace {
+
+constexpr int kSheetIdEdit = 1000;
+
+struct TextSheetState {
+    std::wstring text;
+    HFONT font = nullptr;   // a stock object when set; never owned here
+};
+
+INT_PTR CALLBACK TextSheetProc(HWND dlg, UINT msg,
+                                    WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_INITDIALOG: {
+            auto* st = reinterpret_cast<TextSheetState*>(lParam);
+            ::SetWindowLongPtrW(dlg, DWLP_USER,
+                                  reinterpret_cast<LONG_PTR>(st));
+            HWND edit = ::GetDlgItem(dlg, kSheetIdEdit);
+            if (edit != nullptr && st != nullptr) {
+                ::SetWindowTextW(edit, st->text.c_str());
+                if (st->font != nullptr)
+                    ::SendMessageW(edit, WM_SETFONT,
+                                     reinterpret_cast<WPARAM>(st->font),
+                                     TRUE);
+                ::SendMessageW(edit, EM_SETSEL, 0, 0);
+            }
+            return TRUE;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+                ::EndDialog(dlg, LOWORD(wParam));
+                return TRUE;
+            }
+            break;
+        case WM_CLOSE:
+            ::EndDialog(dlg, IDCANCEL);
+            return TRUE;
+    }
+    return FALSE;
+}
+
+// 4-DLU alignment, local to this translation unit: PromptDialog and
+// BlockedPeersDialog each carry their own Pad4 in their anonymous
+// namespaces, so this one does too rather than reaching into another.
+size_t Pad4Local(size_t n) {
+    return (n + 3) & ~static_cast<size_t>(3);
+}
+
+// A bounds-checked DLGITEMTEMPLATE writer, the same shape PromptDialog
+// and BlockedPeersDialog use, so a partial template is never handed to
+// the dialog manager (cdit says how many controls it will read).
+bool WriteSheetItem(BYTE** p, BYTE* end, DWORD style, short x,
+                        short y, short cx, short cy, int id,
+                        WORD cls, const wchar_t* caption) {
+    const size_t capChars =
+        (caption != nullptr) ? wcslen(caption) + 1 : 1;
+    const size_t capBytes = Pad4Local(capChars * sizeof(wchar_t));
+    const size_t need = sizeof(DLGITEMTEMPLATE) + 4 + capBytes + 2;
+    if (static_cast<size_t>(end - *p) < need) return false;
+    auto* it = reinterpret_cast<DLGITEMTEMPLATE*>(*p);
+    it->style = style;
+    it->dwExtendedStyle = 0;
+    it->x = x; it->y = y; it->cx = cx; it->cy = cy;
+    it->id = static_cast<WORD>(id);
+    *p += sizeof(DLGITEMTEMPLATE);
+    // Extended window class: a 0xFFFF marker followed by the ordinal.
+    *reinterpret_cast<WORD*>(*p) = 0xFFFF;
+    *reinterpret_cast<WORD*>(*p + 2) = cls;
+    *p += 4;
+    if (caption != nullptr)
+        memcpy(*p, caption, capChars * sizeof(wchar_t));
+    else
+        memset(*p, 0, sizeof(wchar_t));
+    *p += capBytes;
+    *reinterpret_cast<WORD*>(*p) = 0;   // no extra data
+    *p += 2;
+    return true;
+}
+
+// The sheet template: a scrolling read-only edit over an OK button.
+// Coordinates are dialog units, as in every in-memory template here.
+std::vector<BYTE> MakeTextSheetTemplate(const wchar_t* title) {
+    if (title == nullptr) return std::vector<BYTE>();
+    const size_t titleBytes =
+        Pad4Local((wcslen(title) + 1) * sizeof(wchar_t));
+    constexpr wchar_t kFont[] = L"Segoe UI";
+    const size_t fontBytes =
+        Pad4Local((sizeof(kFont) / sizeof(wchar_t)) * sizeof(wchar_t));
+
+    // Two controls. The capacity is deliberately generous - the writer
+    // bounds-checks every byte and the buffer is trimmed to the true
+    // length at the end - so an over-estimate here is harmless and an
+    // under-estimate is caught by the writer, not by the dialog manager.
+    const size_t capacity =
+        sizeof(DLGTEMPLATE) + 4 + titleBytes + 2 + fontBytes +
+        2 * (sizeof(DLGITEMTEMPLATE) + 4 +
+             Pad4Local(16 * sizeof(wchar_t)) + 2) +
+        4096;
+    std::vector<BYTE> buf(capacity, 0);
+    BYTE* p = buf.data();
+    BYTE* const begin = p;
+    BYTE* const end = buf.data() + buf.size();
+
+    if (static_cast<size_t>(end - p) < sizeof(DLGTEMPLATE))
+        return std::vector<BYTE>();
+    auto* dlg = reinterpret_cast<DLGTEMPLATE*>(p);
+    dlg->style = DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU |
+                 DS_MODALFRAME | DS_SETFONT;
+    dlg->dwExtendedStyle = 0;
+    dlg->cdit = 2;
+    dlg->x = 0; dlg->y = 0; dlg->cx = 440; dlg->cy = 300;
+    p += sizeof(DLGTEMPLATE);
+
+    if (static_cast<size_t>(end - p) < 4)
+        return std::vector<BYTE>();
+    memset(p, 0, 4);   // no menu, default window class
+    p += 4;
+
+    const size_t tChars = wcslen(title) + 1;
+    if (static_cast<size_t>(end - p) < titleBytes)
+        return std::vector<BYTE>();
+    memcpy(p, title, tChars * sizeof(wchar_t));
+    p += titleBytes;
+
+    if (static_cast<size_t>(end - p) < 2)
+        return std::vector<BYTE>();
+    *reinterpret_cast<WORD*>(p) = 9;   // 9pt, matching the app
+    p += 2;
+
+    if (static_cast<size_t>(end - p) < fontBytes)
+        return std::vector<BYTE>();
+    memcpy(p, kFont, (sizeof(kFont) / sizeof(wchar_t)) * sizeof(wchar_t));
+    p += fontBytes;
+
+    // The scrolling text edit, then the OK button.
+    if (!WriteSheetItem(&p, end,
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER |
+                        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+                        8, 8, 424, 258, kSheetIdEdit, 0x80, nullptr) ||
+        !WriteSheetItem(&p, end,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                            BS_DEFPUSHBUTTON,
+                        376, 274, 56, 16, IDOK, 0x81, L"OK")) {
+        return std::vector<BYTE>();
+    }
+
+    buf.resize(static_cast<size_t>(p - begin));
+    return buf;
+}
+
+void ShowTextSheet(HWND owner, const wchar_t* title,
+                     const std::wstring& text, HFONT font) {
+    TextSheetState st;
+    st.text = text;
+    st.font = font;
+    std::vector<BYTE> tpl = MakeTextSheetTemplate(title);
+    if (tpl.empty()) {
+        // The template could not be built. Fall back to a message box
+        // so the information still reaches the user rather than
+        // silently showing nothing.
+        ::MessageBoxW(owner, text.c_str(), title,
+                          MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    ::DialogBoxIndirectParamW(::GetModuleHandleW(nullptr),
+                                  reinterpret_cast<LPCDLGTEMPLATEW>(tpl.data()),
+                                  owner, TextSheetProc,
+                                  reinterpret_cast<LPARAM>(&st));
+}
+
+}  // namespace
+
 void MainWindow::ShowAboutBox() {
     // 7.5. Every line of the capability block is read from live state, not
     // hard-coded: a summary that always said "Administrator: no" would be
@@ -4807,16 +5390,19 @@ void MainWindow::ShowAboutBox() {
     s.rowCount = store_.View().size();
     s.rowCountKnown = true;
     s.columnCountKnown = true;
-    ::MessageBoxW(hwnd_, AboutText(s).c_str(),
-                  L"About WinTCP", MB_OK | MB_ICONINFORMATION);
+    ShowTextSheet(hwnd_, L"About WinTCP", AboutText(s), nullptr);
 }
 
 // 7.6. The sheet is rendered from the same list the selftest checks, so a
 // shortcut that exists but is undocumented (or documented but absent) is a
 // test failure rather than something a user discovers.
 void MainWindow::ShowShortcutsSheet() {
-    ::MessageBoxW(hwnd_, ShortcutsText().c_str(),
-                  L"WinTCP — Keyboard shortcuts", MB_OK);
+    // A fixed-pitch font so the shortcut columns line up,
+    // which the proportional message-box font could not do.
+    ShowTextSheet(hwnd_, L"WinTCP — Keyboard shortcuts",
+                      ShortcutsText(),
+                      static_cast<HFONT>(
+                          ::GetStockObject(OEM_FIXED_FONT)));
 }
 
 // 4.3. Pick a user-supplied MaxMind .mmdb and start filling the Country
@@ -5172,11 +5758,9 @@ void MainWindow::ClearFilterBox() {
 // special case.
 
 bool MainWindow::HighContrastActive() const {
-    HIGHCONTRASTW hc = {};
-    hc.cbSize = sizeof(hc);
-    if (::SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0) == 0)
-        return false;
-    return (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
+    // G12: one probe for the whole app (Theme.h); the body used to repeat
+    // the SystemParametersInfoW call DetailsDialog carried line for line.
+    return wintcp::HighContrastActive();
 }
 
 // True when the system theme is dark, so highlight colors can be picked to

@@ -19,6 +19,8 @@
 #define IDC_CBO_STATE           1107
 #define IDC_EDIT_SEARCH         1108
 #define IDC_STATIC_FILTER       1109
+#define IDC_STATIC_PROTO        1110
+#define IDC_STATIC_STATE        1111
 
 #define IDM_FILE_REFRESH        40001
 #define IDM_FILE_EXPORT         40002
@@ -64,6 +66,13 @@
 // other View ids; 40200 is IDM_COL_BASE and must stay the boundary.
 #define IDM_VIEW_FIX_EMPTY      40066
 #define IDM_VIEW_ASNIP          40040
+// G28: one-click recovery for a mangled column layout. Beside the other View
+// ids; 40067/40068 are free (the column block starts at 40200).
+#define IDM_VIEW_RESET_LAYOUT   40067
+// GUI process-tree view: a tree control over the same snapshot the list
+// shows. The engine (ProcessTree) and the killtree verb already shipped;
+// this is the view chrome over them.
+#define IDM_VIEW_PROCESSTREE    40068
 
 // 9.4.4 column profiles and F5.11/9.4.3 quick filters. Appended after the
 // highest in-use View id so no existing command number shifts - the same rule
