@@ -153,11 +153,21 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
         return 1;
     }
 
-    // Register the ListView / status bar / other common-control classes and
-    // enable visual styles (ComCtl32 v6, via the embedded manifest).
+    // Register the ListView / tree view / status bar / other common-control
+    // classes and enable visual styles (ComCtl32 v6, via the embedded
+    // manifest).
+    //
+    // ICC_TREEVIEW_CLASSES is what registers WC_TREEVIEWW ("SysTreeView32").
+    // Without it the class does not exist, so the process-tree window's
+    // CreateWindowExW fails and returns NULL - the frame, buttons and status
+    // line are plain Win32 and still appear, which is exactly how a missing
+    // tree looks like "the window opens but is empty". InitCommonControlsEx
+    // is cumulative and idempotent per class, so adding the flag here is the
+    // one fix; a second call from the tree window would be a workaround.
     INITCOMMONCONTROLSEX icc = {};
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES |
+                ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
     ::InitCommonControlsEx(&icc);
 
     if (!wintcp::MainWindow::RegisterClass(hInstance)) {

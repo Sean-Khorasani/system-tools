@@ -68,7 +68,10 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "&Freeze view\tF6",     IDM_VIEW_FREEZE
         MENUITEM "&Group rows by process\tF7", IDM_VIEW_GROUP
-        MENUITEM "Process &tree...", IDM_VIEW_PROCESSTREE
+        ; Roadmap: the process tree is a MODE of the main window (a tree
+        ; control where the list view is), not a dialog - hence no ellipsis -
+        ; and like Group/Freeze it carries a check mark while it is on.
+        MENUITEM "Process &tree", IDM_VIEW_PROCESSTREE
         POPUP "Column &profile"
         BEGIN
             MENUITEM "&Default",         IDM_PROFILE_DEFAULT

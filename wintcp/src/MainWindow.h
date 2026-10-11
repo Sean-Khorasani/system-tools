@@ -44,7 +44,7 @@
 #include "Presets.h"
 #include "Bookmarks.h"
 #include "ChangeLogWindow.h"
-#include "ProcessTreeWindow.h"   // GUI process-tree view (View > Process tree)
+#include "ProcessTreeView.h"   // Roadmap: the process-tree view mode's fill
 #include "TypeToJump.h"
 #include "SocketTraffic.h"
 
@@ -207,6 +207,22 @@ private:
     void InitTooltips();                // G31: control-bar tips
     void UpdateStatusTips();            // G31: every status pane gets a tip
     void ResetLayout();                 // G28: defaults + persist + rebuild
+    // Roadmap: the process-tree view mode. Toggle swaps the tree control in
+    // where the list view is; RebuildTree refills it from the store's rows
+    // (the same rows the list would show, by value).
+    void ToggleTreeMode();
+    void RebuildTree();
+    // The selection pane's text while tree mode is on: the process/connection
+    // counts of the last rebuild. The list's own summary is meaningless
+    // there, because the list is hidden and cannot be selected.
+    std::wstring TreeSummary() const { return treeSummary_; }
+    // Select the first VIEW row owned by 'pid' in the (hidden) list and
+    // return true, so every command handler - Details, Copy, Export, Block,
+    // Close, End process, Open file location - runs against the tree's node
+    // without any of them knowing the tree exists. One selection, one
+    // answer; a second mapping inside each handler is how the two would
+    // drift apart.
+    bool SelectViewRowForPid(DWORD pid);
     // Status-bar panes 3 and 4, factored out so the countdown stays a pure
     // function of the last refresh tick and the auto-refresh interval.
     std::wstring SelectedSummary() const;
@@ -487,14 +503,32 @@ private:
     // list exactly.
     bool groupByProcess_ = false;
 
+    // Roadmap: the process-tree VIEW MODE. Not another window - a tree
+    // control where the list view is, which is what the roadmap asked for
+    // and what Task Manager's Processes tab is. A separate detached window
+    // answering the same question is a second answer, so the toggle swaps
+    // the two controls in place instead of adding a third surface.
+    bool treeMode_ = false;
+
     // 5.4 change-log window. Fed from the SAME drain the file writer uses -
     // TakeChangeEvents is destructive, so there is exactly one drain and both
     // consumers get the batch. See WriteChangeLog().
     ChangeLogWindow changeLog_;
 
-    // The GUI process-tree view. Fed a snapshot supplier, not the store, so
-    // the tree renders values the refresh cannot reallocate mid-render.
-    ProcessTreeWindow tree_;
+    // Roadmap: the tree control that REPLACES the list in tree mode, over
+    // the same rows (ProcessTreeFill). Hidden until the mode is on; the
+    // list is hidden while it is.
+    HWND hwndTree_ = nullptr;
+    // The summary the status bar shows in place of the selection count.
+    std::wstring treeSummary_;
+    // The list's selection and scroll as they were when tree mode was
+    // switched ON, restored when it is switched off: a view mode is a lens,
+    // not a state destructor, and the person who toggled back expects to
+    // find the rows they were looking at still selected and still scrolled
+    // to the same place.
+    std::vector<std::uint64_t> treeSavedIds_;
+    std::uint64_t treeSavedFocus_ = 0;
+    int treeSavedTop_ = -1;
 
     // 4.3 GeoIP. Loaded lazily from the user-supplied .mmdb; never
     // downloaded. The module existed and was fully tested but was never

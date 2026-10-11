@@ -461,6 +461,43 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"grouped") == 0) {
         return groupByProcess_ ? L"1" : L"0";
     }
+    if (::wcscmp(op, L"treeMode") == 0) {
+        // Roadmap: whether the main window is showing the tree instead of
+        // the list. Read from the control's state rather than from a
+        // re-derived variable, so a mode that failed to apply cannot lie.
+        return (treeMode_ && hwndTree_ != nullptr) ? L"1" : L"0";
+    }
+    if (::wcscmp(op, L"treeItems") == 0) {
+        // The tree control's OWN item count, not the store's process count:
+        // this is what a reader would see, so an empty tree reads as 0 even
+        // when the store is full (a fill that silently failed, say).
+        if (hwndTree_ == nullptr) return L"-1";
+        const LRESULT n = ::SendMessageW(hwndTree_, TVM_GETCOUNT, 0, 0);
+        ::swprintf_s(buf, L"%lld", (long long)n);
+        return buf;
+    }
+    if (::wcscmp(op, L"treeSelection") == 0) {
+        // The list selection the tree's current node mapped to, as the pid
+        // the node carries. Empty when nothing is selected or the tree has
+        // no caret item - the harness asserts the mapping exists at all.
+        if (hwndTree_ == nullptr) return L"";
+        const HTREEITEM item = reinterpret_cast<HTREEITEM>(
+            ::SendMessageW(hwndTree_, TVM_GETNEXTITEM, TVGN_CARET, 0));
+        if (item == nullptr) return L"";
+        TVITEMW it = {};
+        it.mask = TVIF_PARAM | TVIF_HANDLE;
+        it.hItem = item;
+        if (::SendMessageW(hwndTree_, TVM_GETITEMW, 0,
+                           reinterpret_cast<LPARAM>(&it)) == 0)
+            return L"";
+        ::swprintf_s(buf, L"%lu", static_cast<unsigned long>(it.lParam));
+        return buf;
+    }
+    if (::wcscmp(op, L"listSelectionCount") == 0) {
+        const LRESULT n = ::SendMessageW(hwndList_, LVM_GETSELECTEDCOUNT, 0, 0);
+        ::swprintf_s(buf, L"%lld", (long long)n);
+        return buf;
+    }
     if (::wcscmp(op, L"preserveSelection") == 0) {
         return preserveSelection_ ? L"1" : L"0";
     }
@@ -1113,6 +1150,10 @@ void MainWindow::OnCreate() {
     // to whatever the resource compiled with - an unticked "Preserve
     // selection" that is actually on would be the reverse lie.
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PRESERVE_SEL, preserveSelection_);
+    // Roadmap: the tree mode starts off, so the tick is set from the member
+    // for the same reason as the line above - a stale compiled-in check mark
+    // is a lie either way.
+    SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PROCESSTREE, treeMode_);
     if (autoRefresh_)
         ::SetTimer(hwnd_, kRefreshTimerId, autoRefreshMs_, nullptr);
     // Drives the status bar's age / countdown pane. Runs even with
@@ -1159,7 +1200,6 @@ void MainWindow::OnDestroy() {
     etw_.Stop();                         // stop the kernel logger
     charts_.Close();                     // stop the 1 s sampler
     changeLog_.Close();                  // 5.4: destroy before the owner goes
-    tree_.Close();                       // process-tree view: same terms
     {
         std::lock_guard<std::mutex> lk(Sink()->m);
         Sink()->shuttingDown = true;
@@ -1610,6 +1650,23 @@ void MainWindow::CreateControls() {
                    LVS_EX_HEADERDRAGDROP | LVS_EX_LABELTIP | LVS_EX_INFOTIP |
                    LVS_EX_TRACKSELECT);
     ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, 0, 0);
+
+    // Roadmap: the process-tree view mode. A tree control where the list
+    // view is, not another window answering the same question - Task
+    // Manager's Processes tab is the model. Created hidden beside the list
+    // and swapped in by ToggleTreeMode, so the mode costs nothing while it
+    // is off and the list state (selection, scroll, columns) survives the
+    // round trip untouched. Filled by ProcessTreeFill, the same
+    // implementation the detached viewer uses.
+    hwndTree_ = ::CreateWindowExW(
+        WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
+        WS_CHILD | WS_BORDER | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES |
+            TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_DISABLEDRAGDROP,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(IDC_PROCESS_TREE),
+        hInstance_, nullptr);
+    ::SendMessageW(hwndTree_, WM_SETFONT,
+                   reinterpret_cast<WPARAM>(font_), MAKELPARAM(TRUE, 0));
+    if (hwndTree_ != nullptr) ::ShowWindow(hwndTree_, SW_HIDE);
 
     // G21: per-row accessible names for screen readers. The subclass serves
     // WM_GETOBJECT on the LIST itself (a query for the main window must keep
@@ -2297,8 +2354,8 @@ void MainWindow::RecreateFont() {
     // its cache-owned faces at its own DPI; it must hear about the
     // replacement too, otherwise a monitor DPI change leaves it behind.
     details_.ApplyFont(font_);
-    // The process-tree view borrows the same handle for its own children.
-    tree_.ApplyFont(font_);
+    // Roadmap: the tree control is a child like any other, so it gets the
+    // face through ApplyFontToChildren - the mode adds no font plumbing.
 }
 
 void MainWindow::ApplyFontToChildren() {
@@ -2373,13 +2430,25 @@ void MainWindow::LayoutControls(int cx, int cy) {
     if (hwndStateCbo_ != nullptr)
         ::MoveWindow(hwndStateCbo_, stateComboX, kRow2Y, stateW, S(240), TRUE);
 
-    if (hwndStatus_ != nullptr)
-        ::MoveWindow(hwndStatus_, 0, cy - kStatusH, cx, kStatusH, TRUE);
-    if (hwndList_ != nullptr) {
-        int listH = cy - kTopH - kStatusH - kMargin;
-        if (listH < S(40)) listH = S(40);
-        ::MoveWindow(hwndList_, kMargin, kTopH, cx - 2 * kMargin, listH, TRUE);
-    }
+if (hwndStatus_ != nullptr)
+    ::MoveWindow(hwndStatus_, 0, cy - kStatusH, cx, kStatusH, TRUE);
+if (hwndList_ != nullptr) {
+    int listH = cy - kTopH - kStatusH - kMargin;
+    if (listH < S(40)) listH = S(40);
+    ::MoveWindow(hwndList_, kMargin, kTopH, cx - 2 * kMargin, listH, TRUE);
+}
+// Roadmap: the tree occupies exactly the list's rectangle, and only one of
+// the two is ever visible. The swap lives here - the single place every
+// size, DPI change and toggle flows through - rather than in the toggle, so
+// a resize while the mode is on cannot leave the tree at its old size.
+if (hwndTree_ != nullptr) {
+    int treeH = cy - kTopH - kStatusH - kMargin;
+    if (treeH < S(40)) treeH = S(40);
+    ::MoveWindow(hwndTree_, kMargin, kTopH, cx - 2 * kMargin, treeH, TRUE);
+    ::ShowWindow(hwndTree_, treeMode_ ? SW_SHOW : SW_HIDE);
+}
+if (hwndList_ != nullptr)
+    ::ShowWindow(hwndList_, treeMode_ ? SW_HIDE : SW_SHOW);
 }
 
 void MainWindow::OnSize(int cx, int cy) {
@@ -2501,6 +2570,11 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     RestoreSelection(ids, focusedId, topIdx);
     ::InvalidateRect(hwndList_, nullptr, TRUE);
     SyncGroupHeader();   // G27: the group count moves every refresh
+    // Roadmap: in tree mode the tree IS the view, so every path that lands
+    // here - a refresh result, a column toggle, a preset, a GeoIP pick -
+    // refills it. Filling from the unfiltered rows is the tree's rule, so
+    // the filter box deliberately does not narrow the tree.
+    if (treeMode_) RebuildTree();
     UpdateStatusBar(lastError_);
 }
 
@@ -2652,8 +2726,117 @@ void MainWindow::UpdateCaption() {
     std::wstring title = L"WinTCP - TCP/UDP Connections";
     if (groupByProcess_) title += L" [Grouped]";
     if (frozen_) title += L" [Frozen]";
+    if (treeMode_) title += L" [Tree]";
     if (!CurrentSearchText().empty()) title += L" [Filtered]";
     ::SetWindowTextW(hwnd_, title.c_str());
+}
+
+void MainWindow::ToggleTreeMode() {
+    // Roadmap: a tree control where the list view is. This is a MODE of the
+    // main window rather than a window of its own, because the two would be
+    // two answers to "show me the process hierarchy", and the list's own
+    // state (selection, scroll, column widths) must be there when the mode
+    // is switched off. The rows are re-read by value (ProcessTreeFill takes
+    // a snapshot), so a refresh racing the render cannot reallocate the
+    // store under it.
+    treeMode_ = !treeMode_;
+    if (::GetMenu(hwnd_) != nullptr)
+        SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PROCESSTREE, treeMode_);
+    if (treeMode_) {
+        // Leaving: remember the list's selection and scroll so switching
+        // back restores what the reader had, rather than whatever row the
+        // tree's last caret mapped to.
+        CaptureSelection(treeSavedIds_, &treeSavedFocus_, &treeSavedTop_);
+    } else if (!treeSavedIds_.empty() || treeSavedFocus_ != 0 ||
+               treeSavedTop_ >= 0) {
+        RestoreSelection(treeSavedIds_, treeSavedFocus_, treeSavedTop_);
+        treeSavedIds_.clear();
+        treeSavedFocus_ = 0;
+        treeSavedTop_ = -1;
+        ::SetFocus(hwndList_);
+    }
+    if (hwndTree_ != nullptr) {
+        ::ShowWindow(hwndTree_, treeMode_ ? SW_SHOW : SW_HIDE);
+        ::InvalidateRect(hwndTree_, nullptr, TRUE);
+    }
+    if (hwndList_ != nullptr) {
+        ::ShowWindow(hwndList_, treeMode_ ? SW_HIDE : SW_SHOW);
+        ::InvalidateRect(hwndList_, nullptr, TRUE);
+    }
+    if (treeMode_) RebuildTree();
+    UpdateCaption();
+    UpdateTrayTip();
+    UpdateStatusBar(lastError_);
+}
+
+void MainWindow::RebuildTree() {
+    if (hwndTree_ == nullptr) return;
+    // store_.Rows() is the UNFILTERED row set, which is the rule the engine
+    // documents: a tree built from a filtered view is a broken tree, because
+    // the parents are missing. Copying by value is the price of that rule
+    // and it is paid only while the mode is on.
+    const std::vector<Connection> rows(store_.Rows());
+    bool depthExceeded = false;
+    const size_t procs = ProcessTreeFill(hwndTree_, rows, &depthExceeded);
+    // The fill preselects the first root; map that caret to a list SELECTION
+    // here, so the mode opens with something selected - the status bar, the
+    // context menu and every row command have a row to act on from the first
+    // frame rather than after the user clicks. Mirrors what TVN_SELCHANGED
+    // does for every later caret move.
+    {
+        const HTREEITEM caret = reinterpret_cast<HTREEITEM>(
+            ::SendMessageW(hwndTree_, TVM_GETNEXTITEM, TVGN_CARET, 0));
+        if (caret != nullptr) {
+            TVITEMW it = {};
+            it.mask = TVIF_PARAM | TVIF_HANDLE;
+            it.hItem = caret;
+            if (::SendMessageW(hwndTree_, TVM_GETITEMW, 0,
+                               reinterpret_cast<LPARAM>(&it)))
+                SelectViewRowForPid(static_cast<DWORD>(it.lParam));
+        }
+    }
+    std::wstring text = std::to_wstring(procs) + L" processes, " +
+                        std::to_wstring(rows.size()) + L" connections";
+    if (depthExceeded)
+        text += L"  \u2022  very deep chain: some nodes omitted";
+    // G35: an empty tree names its next action, like the other windows.
+    if (procs == 0)
+        text = L"No processes \u2014 the main table has no rows. Refresh, "
+               L"then switch back to the list view.";
+    treeSummary_ = text;
+    UpdateStatusBar(lastError_);
+}
+
+bool MainWindow::SelectViewRowForPid(DWORD pid) {
+    if (hwndList_ == nullptr || pid == 0) return false;
+    // The VIEW, not the rows: the command handlers read the selection through
+    // store_.ViewRow(item), so a row outside a filtered view must not be
+    // selected - it would make every command act on something the user
+    // cannot see.
+    const size_t count = store_.View().size();
+    size_t viewIdx = count;
+    for (size_t v = 0; v < count; ++v) {
+        const Connection* c = store_.ViewRow(v);
+        if (c != nullptr && c->pid == pid) {
+            viewIdx = v;
+            break;
+        }
+    }
+    if (viewIdx == count) return false;
+    LVITEMW st = {};
+    st.mask = LVIF_STATE;
+    st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
+                   reinterpret_cast<LPARAM>(&st));
+    LVITEMW sel = {};
+    sel.mask = LVIF_STATE;
+    sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+    sel.state = LVIS_SELECTED | LVIS_FOCUSED;
+    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(viewIdx),
+                   reinterpret_cast<LPARAM>(&sel));
+    ::SendMessageW(hwndList_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(viewIdx),
+                   FALSE);
+    return true;
 }
 
 void MainWindow::UpdateTrayTip() {
@@ -2926,7 +3109,9 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     ::SendMessageW(hwndStatus_, SB_SETTEXTW, 2,
                    reinterpret_cast<LPARAM>(mid.c_str()));
     ::SendMessageW(hwndStatus_, SB_SETTEXTW, 3,
-                   reinterpret_cast<LPARAM>(SelectedSummary().c_str()));
+                   reinterpret_cast<LPARAM>(
+                       treeMode_ ? TreeSummary().c_str()
+                                 : SelectedSummary().c_str()));
     ::SendMessageW(hwndStatus_, SB_SETTEXTW, 4,
                    reinterpret_cast<LPARAM>(RefreshAgeText().c_str()));
     ::SendMessageW(hwndStatus_, SB_SETTEXTW, 5,
@@ -3353,17 +3538,11 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         }
         case IDM_VIEW_PROCESSTREE: {
-            // The GUI process-tree view: a tree control over the same
-            // snapshot the list shows. The supplier returns rows by value,
-            // so the tree renders a snapshot the refresh cannot reallocate
-            // underneath it. Toggle, like the change-log window.
-            if (tree_.IsVisible()) {
-                tree_.Close();
-            } else {
-                tree_.Show(hwnd_, font_, [this]() {
-                    return std::vector<Connection>(store_.Rows());
-                });
-            }
+            // Roadmap: the process-tree view mode. A tree control where the
+            // list view is - Task Manager's Processes tab - rather than a
+            // second window holding the same information. Toggle, like
+            // group-by-process, with its own check mark on the menu.
+            ToggleTreeMode();
             break;
         }
         default:
@@ -3375,7 +3554,73 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
 }
 
 void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
-    if (hdr == nullptr || hdr->hwndFrom != hwndList_) return;
+    if (hdr == nullptr) return;
+    // Roadmap: in tree mode the tree is the surface, so its notifications
+    // route here too. Everything the tree needs resolves to a list selection
+    // first (SelectViewRowForPid), which is what keeps the command handlers
+    // free of tree knowledge.
+    if (hdr->hwndFrom == hwndTree_) {
+        if (!treeMode_) return;
+        switch (hdr->code) {
+            case NM_DBLCLK:
+            case NM_RETURN: {
+                HTREEITEM item = reinterpret_cast<HTREEITEM>(
+                    ::SendMessageW(hwndTree_, TVM_GETNEXTITEM, TVGN_CARET, 0));
+                if (item == nullptr) break;
+                TVITEMW it = {};
+                it.mask = TVIF_PARAM | TVIF_HANDLE;
+                it.hItem = item;
+                if (::SendMessageW(hwndTree_, TVM_GETITEMW, 0,
+                                   reinterpret_cast<LPARAM>(&it)) &&
+                    SelectViewRowForPid(static_cast<DWORD>(it.lParam)))
+                    ShowDetailsOfSelectedRow();
+                break;
+            }
+            case NM_RCLICK: {
+                // Select under the cursor first, so the menu acts on the
+                // node that was clicked - the same rule the list applies at
+                // LVM_HITTEST below.
+                POINT cp;
+                ::GetCursorPos(&cp);
+                POINT local = cp;
+                ::ScreenToClient(hwndTree_, &local);
+                TVHITTESTINFO hti = {};
+                hti.pt = local;
+                HTREEITEM hit = reinterpret_cast<HTREEITEM>(
+                    ::SendMessageW(hwndTree_, TVM_HITTEST, 0,
+                                   reinterpret_cast<LPARAM>(&hti)));
+                if (hit != nullptr &&
+                    (hti.flags & (TVHT_ONITEM | TVHT_ONITEMRIGHT |
+                                  TVHT_ONITEMBUTTON)) != 0) {
+                    ::SendMessageW(hwndTree_, TVM_SELECTITEM, TVGN_CARET,
+                                   reinterpret_cast<LPARAM>(hit));
+                    TVITEMW it = {};
+                    it.mask = TVIF_PARAM | TVIF_HANDLE;
+                    it.hItem = hit;
+                    if (::SendMessageW(hwndTree_, TVM_GETITEMW, 0,
+                                       reinterpret_cast<LPARAM>(&it)))
+                        SelectViewRowForPid(static_cast<DWORD>(it.lParam));
+                }
+                break;
+            }
+            case TVN_SELCHANGEDW: {
+                // Every caret move - arrow keys or click - maps to a list
+                // selection, which is what keeps the status bar's summary and
+                // every row command pointed at the node the reader is on.
+                // Without this the tree's own caret and the row the commands
+                // act on would be two different things after the first
+                // keypress.
+                const auto* nm = reinterpret_cast<NMTREEVIEWW*>(hdr);
+                if (nm->itemNew.mask & TVIF_PARAM)
+                    SelectViewRowForPid(static_cast<DWORD>(nm->itemNew.lParam));
+                break;
+            }
+            default:
+                break;
+        }
+        return;
+    }
+    if (hdr->hwndFrom != hwndList_) return;
     switch (hdr->code) {
         case LVN_GETDISPINFO: {
             auto* di = reinterpret_cast<NMLVDISPINFO*>(hdr);
@@ -3782,36 +4027,45 @@ void MainWindow::CheckRefreshWatchdog() {
 }
 
 void MainWindow::OnContextMenu(HWND target, int x, int y) {
-    if (target != hwndList_) return;
+    // Roadmap: the tree is a valid target in tree mode - NM_RCLICK above
+    // already selected its node, so nothing on the list needs hit-testing.
+    if (target != hwndList_ && target != hwndTree_) return;
     POINT pt = {x, y};
 
     if (x != -1 || y != -1) {
-        // Mouse invocation: select the row under the cursor first,
-        // otherwise Details/Copy/Close would act on an unrelated selection.
-        POINT cp = pt;
-        ::ScreenToClient(hwndList_, &cp);
-        LVHITTESTINFO hti = {};
-        hti.pt = cp;
-        const int hit = static_cast<int>(::SendMessageW(
-            hwndList_, LVM_HITTEST, 0, reinterpret_cast<LPARAM>(&hti)));
-        if (hit >= 0) {
-            const int selected = static_cast<int>(::SendMessageW(
-                hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(hit),
-                MAKELPARAM(LVNI_SELECTED, 0)));
-            if (selected != hit) {
-                LVITEMW st = {};
-                st.mask = LVIF_STATE;
-                st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-                ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
-                               static_cast<WPARAM>(-1),
-                               reinterpret_cast<LPARAM>(&st));
-                LVITEMW sel = {};
-                sel.mask = LVIF_STATE;
-                sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-                sel.state = LVIS_SELECTED | LVIS_FOCUSED;
-                ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
-                               static_cast<WPARAM>(hit),
-                               reinterpret_cast<LPARAM>(&sel));
+        if (target == hwndTree_) {
+            // Keyboard-free path: the node was selected on NM_RCLICK, and
+            // the menu is built from the list selection that selection made.
+            // Keyboard invocation on the tree comes through the branch below
+            // with (-1, -1), so there is nothing to anchor here.
+        } else {
+            // Mouse invocation: select the row under the cursor first,
+            // otherwise Details/Copy/Close would act on an unrelated selection.
+            POINT cp = pt;
+            ::ScreenToClient(hwndList_, &cp);
+            LVHITTESTINFO hti = {};
+            hti.pt = cp;
+            const int hit = static_cast<int>(::SendMessageW(
+                hwndList_, LVM_HITTEST, 0, reinterpret_cast<LPARAM>(&hti)));
+            if (hit >= 0) {
+                const int selected = static_cast<int>(::SendMessageW(
+                    hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(hit),
+                    MAKELPARAM(LVNI_SELECTED, 0)));
+                if (selected != hit) {
+                    LVITEMW st = {};
+                    st.mask = LVIF_STATE;
+                    st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+                    ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
+                                   static_cast<WPARAM>(-1),
+                                   reinterpret_cast<LPARAM>(&st));
+                    LVITEMW sel = {};
+                    sel.mask = LVIF_STATE;
+                    sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+                    sel.state = LVIS_SELECTED | LVIS_FOCUSED;
+                    ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
+                                   static_cast<WPARAM>(hit),
+                                   reinterpret_cast<LPARAM>(&sel));
+                }
             }
         }
     } else {

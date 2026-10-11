@@ -124,7 +124,12 @@ int RunUiMode() {
 
     INITCOMMONCONTROLSEX icc = {};
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
+    // ICC_TREEVIEW_CLASSES registers WC_TREEVIEWW, which the process-tree
+    // window needs. The product's own init (main.cpp) carries the same flag;
+    // a harness whose flags differ from the product's is a harness that
+    // passes where the shipped binary would fail.
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES |
+                ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
     ::InitCommonControlsEx(&icc);
 
     if (!wintcp::MainWindow::RegisterClass(hInstance)) {

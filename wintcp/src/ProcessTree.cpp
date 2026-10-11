@@ -78,6 +78,32 @@ ProcessTree BuildProcessTree(const std::vector<TreeNodeInfo>& rows) {
         }
     }
 
+    // Roots FIRST, in node order, so the documented contract - nodes()
+    // [0..rootCount) are exactly the roots - is true rather than assumed.
+    // A renderer that walks [0, rootCount) as roots (which is what the
+    // contract reads like) would otherwise draw the first rootCount NODES:
+    // a forest containing subtrees that have a parent, and missing the
+    // roots that come later in row order. rowIndex travels with the node,
+    // so the caller's row references stay correct.
+    {
+        std::vector<size_t> order;
+        order.reserve(tree.nodes.size());
+        for (size_t i = 0; i < tree.nodes.size(); ++i)
+            if (parentRow[i] == SIZE_MAX) order.push_back(i);
+        for (size_t i = 0; i < tree.nodes.size(); ++i)
+            if (parentRow[i] != SIZE_MAX) order.push_back(i);
+        std::vector<size_t> newIndex(tree.nodes.size(), 0);
+        std::vector<TreeNode> reordered;
+        reordered.reserve(order.size());
+        for (size_t n = 0; n < order.size(); ++n) {
+            newIndex[order[n]] = n;
+            reordered.push_back(std::move(tree.nodes[order[n]]));
+        }
+        for (TreeNode& nd : reordered)
+            for (size_t& c : nd.children) c = newIndex[c];
+        tree.nodes = std::move(reordered);
+    }
+
     // Walk, iteratively, so a deep chain cannot exhaust the stack even if the
     // ceiling were ever mis-set. Every reachable node is visited, which is
     // what leaves an unreached one to be reported.
@@ -261,7 +287,14 @@ void AppendPostOrder(const ProcessTree& tree, std::vector<bool>* visited,
             break;
         }
         if (!descended) {
-            out->push_back(top.node);
+            // ROW index, not node index: the plan's contract says "row
+            // indices to end", and it held only because the node order used
+            // to match the row order. Reordering the nodes (roots first, so
+            // a renderer walking [0, rootCount) is drawing roots) broke that
+            // accident, which is how the mistake surfaced: the plan named
+            // the right SHAPE and the wrong processes. Mapping here makes
+            // the contract true by construction rather than by coincidence.
+            out->push_back(tree.nodes[top.node].rowIndex);
             stack.pop_back();
         }
     }
@@ -296,10 +329,13 @@ KillTreePlan PlanKillTree(const std::vector<TreeNodeInfo>& rows, DWORD rootPid,
 
     // 'selfPid' last, not absent: a tree that contains the caller can only be
     // planned from the top, and a plan that quietly omits the root would read
-    // as "the whole tree died" when the caller is still running.
+    // as "the whole tree died" when the caller is still running. 'targets'
+    // holds ROW indices (see AppendPostOrder), so the pid is read through
+    // 'rows' - indexing the tree's nodes there was the accident that made
+    // the two orderings load-bearing.
     if (selfPid != 0) {
         for (size_t i = 0; i < plan.targets.size(); ++i) {
-            if (tree.nodes[plan.targets[i]].info.pid == selfPid) {
+            if (rows[plan.targets[i]].pid == selfPid) {
                 const size_t me = plan.targets[i];
                 plan.targets.erase(plan.targets.begin() +
                                    static_cast<ptrdiff_t>(i));

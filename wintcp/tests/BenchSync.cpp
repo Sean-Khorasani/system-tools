@@ -559,6 +559,75 @@ void CheckProcessTree(TestResult& r) {
               "n=" + std::to_string(roots.size()));
     }
 
+    // ---- the roots-first contract is real, not assumed -------------------
+    //
+    // The header promises nodes()[0..rootCount) are exactly the roots. A
+    // renderer walking that range as roots is reading the contract as
+    // written; before the builder ordered the nodes that range held the
+    // first rootCount NODES, so a forest whose roots sit later in row order
+    // drew subtrees with parents as top-level items and missed real roots.
+    {
+        // Row order deliberately puts a CHILD first: 200's parent is 100, so
+        // a node-order read would take node 0 (the child) as a root.
+        const std::vector<TreeNodeInfo> rows = {
+            node(200, 100), node(300, 100), node(100, 1)};
+        const ProcessTree t = BuildProcessTree(rows);
+        bool allRootsAreRoots = t.rootCount == 1;
+        for (size_t i = 0; allRootsAreRoots && i < t.rootCount; ++i) {
+            const TreeNodeInfo& n = t.nodes[i].info;
+            // "Claimed" means the node's OWN parent is present in the set -
+            // i.e. some row carries a pid equal to this node's ppid. A root
+            // that is itself a PARENT (rows pointing at it) is still a root.
+            bool claimed = false;
+            if (n.ppidKnown)
+                for (const TreeNodeInfo& o : rows)
+                    if (o.pid == n.ppid) claimed = true;
+            if (claimed) allRootsAreRoots = false;
+        }
+        Check(r, "9.5.6.roots-first.range-is-roots", allRootsAreRoots,
+              "rootCount=" + std::to_string(t.rootCount));
+        Check(r, "9.5.6.roots-first.root-is-pid-100",
+              t.rootCount == 1 && t.nodes[0].info.pid == 100,
+              "rootPid=" + std::to_string(t.rootCount ? t.nodes[0].info.pid
+                                                      : 0));
+        // Every node is still reachable from the roots, so reordering lost
+        // nothing: node count is the process count.
+        Check(r, "9.5.6.roots-first.nothing-lost", t.nodes.size() == 3,
+              "n=" + std::to_string(t.nodes.size()));
+        // And the child moved to a non-root index with its parent's link
+        // remapped, not pointing at a stale slot. (auto, because this file's
+        // own helper function is also called TreeNode and shadows the struct
+        // name inside this function.)
+        const auto& root = t.nodes[0];
+        bool childLinksOk = root.children.size() == 2;
+        for (size_t c : root.children) {
+            if (c < t.rootCount || c >= t.nodes.size()) childLinksOk = false;
+            else if (t.nodes[c].info.ppid != 100) childLinksOk = false;
+        }
+        Check(r, "9.5.6.roots-first.children-remapped", childLinksOk,
+              "children=" + std::to_string(root.children.size()));
+    }
+
+    // ---- the plan's indices are ROW indices, by construction -------------
+    //
+    // KillTreePlan::targets says "row indices to end". That was true only
+    // because node order matched row order - an accident exposed the moment
+    // the nodes were reordered roots-first. A plan must name the right
+    // processes, not the right shape.
+    {
+        // A pid==0 row (a socket nobody resolved) is skipped by the builder,
+        // so node index and row index differ even before any reordering.
+        // Sibling order is row order, each subtree complete before the next,
+        // root last - the same shape the other kill tests pin.
+        const std::vector<TreeNodeInfo> rows = {
+            node(0, 0), node(10, 0), node(11, 10), node(12, 10)};
+        const KillTreePlan plan = PlanKillTree(rows, 10, 0);
+        Check(r, "9.5.6.plan.row-indices-with-skipped-row",
+              plan.targets.size() == 3 &&
+                  Pids(rows, plan) == std::vector<DWORD>({11, 12, 10}),
+              PidsText(rows, plan));
+    }
+
     // ---- a CYCLE is refused, not followed ----
     {
         // 100 -> 200 -> 300 -> 100 (a stale-parent cycle, which Windows can
