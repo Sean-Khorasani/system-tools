@@ -6,8 +6,6 @@
 
 #include <commctrl.h>
 
-#include <unordered_map>
-
 #include "ProcessTree.h"
 
 namespace wintcp {
@@ -18,53 +16,24 @@ namespace {
 // truncates rather than overruns in any case.
 constexpr size_t kLabelChars = 320;
 
-// One process in the snapshot: every row with this PID folds into it, so
-// the tree shows processes (like Task Manager) rather than sockets.
-struct TreeProc {
-    DWORD pid = 0;
-    DWORD ppid = 0;
-    bool ppidKnown = false;
-    std::wstring name;
-    size_t connections = 0;
-};
-
 }  // namespace
 
-size_t ProcessTreeFill(HWND tree, const std::vector<Connection>& rows,
+size_t ProcessTreeFill(HWND tree, const std::vector<ProcessTreeNode>& procs,
                        bool* depthExceeded) {
     if (tree == nullptr) return 0;
     if (depthExceeded != nullptr) *depthExceeded = false;
     ::SendMessageW(tree, TVM_DELETEITEM, 0,
                    reinterpret_cast<LPARAM>(TVI_ROOT));
-    if (rows.empty()) return 0;
+    if (procs.empty()) return 0;
 
-    // Aggregate rows by PID, first-seen order. The engine builds its tree
-    // over one TreeNodeInfo per process, indexed by row position, so the
-    // aggregation order here is the index space there.
-    std::vector<TreeProc> procs;
-    procs.reserve(rows.size());
-    std::unordered_map<DWORD, size_t> byPid;
-    byPid.reserve(rows.size() * 2 + 1);
-    for (const Connection& r : rows) {
-        auto it = byPid.find(r.pid);
-        if (it == byPid.end()) {
-            TreeProc p;
-            p.pid = r.pid;
-            p.ppid = r.ppid;
-            p.ppidKnown = r.ppidKnown;
-            p.name = r.processName.empty() ? std::wstring(L"(unknown)")
-                                           : r.processName;
-            p.connections = 1;
-            byPid[r.pid] = procs.size();
-            procs.push_back(std::move(p));
-        } else {
-            procs[it->second].connections += 1;
-        }
-    }
-
+    // The engine builds its tree over one TreeNodeInfo per process, indexed
+    // by position, so 'procs' order IS the index space here. No aggregation
+    // in this module: the caller decides which processes exist and the label
+    // names them, so "chrome.exe appears 32 times" is the caller's answer,
+    // not a folding rule hidden here.
     std::vector<TreeNodeInfo> infos;
     infos.reserve(procs.size());
-    for (const TreeProc& p : procs) {
+    for (const ProcessTreeNode& p : procs) {
         TreeNodeInfo info;
         info.pid = p.pid;
         info.ppid = p.ppid;
@@ -111,7 +80,7 @@ size_t ProcessTreeFill(HWND tree, const std::vector<Connection>& rows,
             if (!f.entered) {
                 ++entered;
                 f.entered = true;
-                const TreeProc& p =
+                const ProcessTreeNode& p =
                     procs[n.rowIndex < procs.size() ? n.rowIndex : 0];
                 wchar_t label[kLabelChars] = {0};
                 ::swprintf_s(label, L"%ls  (PID %lu, %zu connection%ls)",

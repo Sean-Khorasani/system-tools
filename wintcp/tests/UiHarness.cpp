@@ -46,8 +46,10 @@
 #include <cstdlib>
 #include <cwchar>
 #include <cwctype>
+#include <set>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "MainWindow.h"
 #include "Bookmarks.h"
@@ -322,16 +324,59 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
               "comctl32 with ICC_TREEVIEW_CLASSES, and ProcessTreeFill "
               "needs the store's rows");
 
+        // The tree must show the MACHINE's processes, not only the ones that
+        // happen to own a socket. This is the reported defect: chrome.exe has
+        // 32 processes and almost none of them holds a connection at any
+        // instant, so a tree built from the connection table showed a browser
+        // as one or two nodes and nothing else. Machine-independent by
+        // construction - it compares the tree against the same machine's
+        // enumeration, so it means the same thing on a VM and on a busy
+        // desktop.
+        const long enumerated = Num(w, "enumeratedProcesses");
+        const long connectedPids = Num(w, "distinctConnectionPids");
+        std::snprintf(line, sizeof(line),
+                      "SMOKE tree mode: the tree is the machine's process "
+                      "list (%ld of %ld processes; %ld own a connection)",
+                      items, enumerated, connectedPids);
+        if (enumerated <= 0) {
+            Skip("tree mode: the machine's process enumeration",
+                 "EnumerateProcesses returned nothing, so the comparison "
+                 "cannot be made");
+        } else if (enumerated <= connectedPids) {
+            // Every process on this machine owns a connection. Rare but
+            // legitimate (a small VM, or a tool-heavy host), and a skip that
+            // names the reason is not a disguised failure.
+            Skip("tree mode: the tree shows more than the connection owners",
+                 "every enumerated process owns a connection on this "
+                 "machine, so the two counts cannot differ");
+        } else {
+            Check(items == enumerated, line,
+                  "the tree is not the machine's process list");
+        }
+
         // A node maps to a list selection, which is what makes every row
         // command (Details, Copy, Block, End process) work unchanged in the
         // mode. Without the mapping the menu is grey and the tree is a
         // picture.
+        //
+        // The check is EXACT rather than "some selection exists": comparing
+        // the selected row's pid with the caret's pid catches a mapping that
+        // points at an unrelated row, and it also states the one case where
+        // an empty answer is the CORRECT one - the caret can sit on a
+        // process that owns no connection (System, PID 4, is usually first),
+        // where there is no row to select at all. An earlier version merely
+        // required "a selection", which passed on a stale selection left by
+        // an earlier section while the mapping was selecting nothing.
         const std::string pid = Of(w, "treeSelection");
+        const std::string mapped = Of(w, "listSelectionPid");
         std::snprintf(line, sizeof(line),
-                      "SMOKE tree mode: the caret node maps to a list "
-                      "selection (pid %s)", pid.empty() ? "none" : pid.c_str());
-        Check(!pid.empty() && Num(w, "listSelectionCount") == 1, line,
-              "no list selection behind the tree's node");
+                      "SMOKE tree mode: the caret node maps to its own row "
+                      "(tree pid %s, selected row pid %s)",
+                      pid.empty() ? "none" : pid.c_str(),
+                      mapped.empty() ? "none" : mapped.c_str());
+        Check(!pid.empty() && (mapped == pid || mapped.empty()), line,
+              "the selected row is not the tree node's process - the "
+              "mapping points at something else");
 
         // And back again: the mode is a toggle, not a one-way trip.
         Cmd(hwnd, IDM_VIEW_PROCESSTREE);
@@ -342,6 +387,119 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         Check(Is(w, "rowCount", rows),
               "SMOKE tree mode: the list's rows survive the round trip",
               Of(w, "rowCount").c_str());
+    }
+
+    // ---- Details on a process that owns NO connection --------------------
+    // Most of the tree is this case: chrome's renderers between requests, the
+    // System process, every idle service. They have no row to map to, so
+    // Details used to silently do nothing - which made most of the tree a
+    // dead end. The synthetic row (pid + name from the tree's own data) is
+    // what answers it, and Enter is the key that drives it.
+    Mark("tree-details-no-connection");
+    {
+        // The tree's notifications are routed only while the mode is ON
+        // (OnNotify's first branch), so the section has to enter the mode
+        // itself rather than assume the previous section left it there. It
+        // does not: that section deliberately switches the mode back off.
+        Cmd(hwnd, IDM_VIEW_PROCESSTREE);
+        Pump(1200);
+        // The set of PIDs that own a connection, so a node outside it can be
+        // chosen deliberately rather than by luck.
+        std::set<std::string> connected;
+        {
+            const std::string list = Of(w, "connectionPidList");
+            size_t pos = 0;
+            while (pos <= list.size()) {
+                const size_t comma = list.find(',', pos);
+                const std::string one =
+                    list.substr(pos, comma == std::string::npos
+                                          ? std::string::npos
+                                          : comma - pos);
+                if (!one.empty()) connected.insert(one);
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+        }
+
+        // One depth-first walk over the tree, holding the first node whose
+        // pid owns no connection. Handles come back as HTREEITEM, so the walk
+        // keeps the item it wants rather than its pid.
+        HWND treeHwnd = ::GetDlgItem(hwnd, IDC_PROCESS_TREE);
+        HTREEITEM want = nullptr;
+        long wantPid = -1;
+        if (treeHwnd != nullptr) {
+            std::vector<HTREEITEM> pending;
+            if (HTREEITEM root = reinterpret_cast<HTREEITEM>(
+                    ::SendMessageW(treeHwnd, TVM_GETNEXTITEM, TVGN_ROOT, 0)))
+                pending.push_back(root);
+            while (!pending.empty() && want == nullptr) {
+                HTREEITEM cur = pending.back();
+                pending.pop_back();
+                TVITEMW it = {};
+                it.mask = TVIF_PARAM | TVIF_HANDLE;
+                it.hItem = cur;
+                if (::SendMessageW(treeHwnd, TVM_GETITEMW, 0,
+                                   reinterpret_cast<LPARAM>(&it))) {
+                    const std::string pid =
+                        std::to_string(static_cast<long>(it.lParam));
+                    if (connected.count(pid) == 0) {
+                        want = cur;
+                        wantPid = static_cast<long>(it.lParam);
+                        break;
+                    }
+                }
+                for (HTREEITEM ch = reinterpret_cast<HTREEITEM>(
+                         ::SendMessageW(treeHwnd, TVM_GETNEXTITEM, TVGN_CHILD,
+                                        reinterpret_cast<LPARAM>(cur)));
+                     ch != nullptr;
+                     ch = reinterpret_cast<HTREEITEM>(::SendMessageW(
+                         treeHwnd, TVM_GETNEXTITEM, TVGN_NEXT,
+                         reinterpret_cast<LPARAM>(ch))))
+                    pending.push_back(ch);
+            }
+        }
+
+        if (want == nullptr) {
+            Skip("tree mode: Details on a connection-less process",
+                 "no such node on this machine - every process owns a "
+                 "connection, or the tree is empty");
+        } else {
+            // WHICH Details matters more than whether one exists: Details is
+            // one reused instance, so "a window is open" is true whatever you
+            // pressed Enter on - including when a previous section left it
+            // open. The window tracks the pid it is describing, so the check
+            // is exact.
+            const std::string pidBefore = Of(w, "detailsPid");
+            ::SendMessageW(treeHwnd, TVM_SELECTITEM, TVGN_CARET,
+                           reinterpret_cast<LPARAM>(want));
+            ::SetFocus(treeHwnd);
+            Pump(50);
+            // Enter means "details for this node" in the tree, the way
+            // double-click does in the list.
+            ::SendMessageW(treeHwnd, WM_KEYDOWN, VK_RETURN, 0);
+            Pump(400);
+            const std::string pidAfter = Of(w, "detailsPid");
+            const std::string wantPidText = std::to_string(wantPid);
+            const bool detailsOpen = std::stol(Of(w, "detailsVisible")) != 0;
+            std::snprintf(line, sizeof(line),
+                          "SMOKE tree mode: Enter on a connection-less "
+                          "process (pid %s) opens its Details",
+                          wantPidText.c_str());
+            Check(detailsOpen && pidAfter == wantPidText &&
+                      pidAfter != pidBefore,
+                  line,
+                  std::string("the window is describing pid '" + pidAfter +
+                              "', wanted " + wantPidText)
+                      .c_str());
+        }
+
+        // Leave the mode the check was driven in; the section below starts
+        // from a clean list state again.
+        if (Is(w, "treeMode", 1)) {
+            ::SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDM_VIEW_PROCESSTREE, 0),
+                           reinterpret_cast<LPARAM>(hwnd));
+            Pump(400);
+        }
     }
 
     // ---- every column must be reachable from the menu (C3) ---------------

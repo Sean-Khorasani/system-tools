@@ -223,6 +223,15 @@ private:
     // answer; a second mapping inside each handler is how the two would
     // drift apart.
     bool SelectViewRowForPid(DWORD pid);
+    // The tree's process entry for 'pid', or nullptr. The tree node carries
+    // only a pid, so this is how a name is looked back up - for a process
+    // with no connection row, which is most of the tree.
+    const ProcessTreeNode* TreeProcessForPid(DWORD pid) const;
+    // Details for a tree node: the process's first connection when it owns
+    // one, and the process dossier alone when it does not. The second case
+    // is why this exists - Details on a connection-less process used to do
+    // nothing, which made most of the tree a dead end.
+    void ShowDetailsForTreePid(DWORD pid);
     // Status-bar panes 3 and 4, factored out so the countdown stays a pure
     // function of the last refresh tick and the auto-refresh interval.
     std::wstring SelectedSummary() const;
@@ -519,6 +528,11 @@ private:
     // the same rows (ProcessTreeFill). Hidden until the mode is on; the
     // list is hidden while it is.
     HWND hwndTree_ = nullptr;
+    // The process list the last tree fill drew, keyed by pid. The tree's
+    // node carries only the pid (its lParam), so looking a node's NAME back
+    // up needs its source - and a process that owns no connection has no row
+    // at all, which is the case the synthesized Details row is built from.
+    std::vector<ProcessTreeNode> treeProcs_;
     // The summary the status bar shows in place of the selection count.
     std::wstring treeSummary_;
     // The list's selection and scroll as they were when tree mode was

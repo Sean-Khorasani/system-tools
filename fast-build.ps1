@@ -62,6 +62,7 @@ $StartTime = Get-Date
 
 $Root      = $PSScriptRoot
 $Build     = Join-Path $Root 'build-fast'
+$GatedExe  = Join-Path $Root 'build\wintcp.exe'   # build.bat's output: the shipped one
 $ObjDir    = Join-Path $Build 'obj'
 $LogDir    = Join-Path $Build 'log'
 $TstDir    = Join-Path $Build 'tests'
@@ -601,11 +602,42 @@ try {
                 $lines = $r.Text.Trim().Split("`n")
                 for ($k = [Math]::Max(0, $lines.Count - 25); $k -lt $lines.Count; $k++) { Say ("    " + $lines[$k]) }
             }
-            Remove-Item -LiteralPath (Join-Path $t 'unit.txt'), (Join-Path $t 'unit.txt.err') -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $t 'unit.txt'), ((Join-Path $t 'unit.txt') + '.err') -ErrorAction SilentlyContinue
+        }
+
+        # The stale-gate trap: fast-build writes HERE (build-fast\) and the
+        # shipped binary comes from build.bat (build\). A dev loop that ends
+        # here therefore leaves the gated binary older than the one just
+        # verified, and the next person to run build\wintcp.exe tests code
+        # that no longer exists in the tree. That happened: a fixed process
+        # tree was verified in build-fast while build\wintcp.exe, the binary
+        # actually being run, was two hours stale - and the user read it as
+        # "the fix does not work".
+        #
+        # So the dev gate now refuses to be green while that is true. The
+        # check is skipped, not failed, when build\ does not exist (a clean
+        # clone, or build.bat has never run): nothing is stale then.
+        if (Test-Path -LiteralPath $GatedExe) {
+            $devM = Get-Mtime $ProdExe
+            $gateM = Get-Mtime $GatedExe
+            if ($gateM -lt $devM) {
+                $fails++
+                Say "FAIL  gated binary is STALE (build\wintcp.exe is older than build-fast\wintcp.exe)"
+                Say "      The code just verified here is NOT what build\wintcp.exe contains."
+                Say "      Run build.bat before testing build\wintcp.exe, or run build-fast\wintcp.exe."
+            } else {
+                Say "ok    gated binary current (build\wintcp.exe >= build-fast\wintcp.exe)"
+            }
+        } else {
+            Say "note  gated binary absent (build.bat has not run here); nothing to compare"
         }
         if (Test-Path -LiteralPath $tmpExport) { Remove-Item -LiteralPath $tmpExport -ErrorAction SilentlyContinue }
 
-        $totalChecks = $checks.Count + 1 + $(if ($needTests) { 1 } else { 0 })
+        # Counts the gated-binary check only when it could run (build\ exists),
+        # so the denominator is what actually ran rather than a fixed number.
+        $gatedCheckRan = (Test-Path -LiteralPath $GatedExe)
+        $extra = 1 + $(if ($needTests) { 1 } else { 0 }) + $(if ($gatedCheckRan) { 1 } else { 0 })
+        $totalChecks = $checks.Count + $extra
         if ($fails -gt 0) {
             Say ("FAST: FAIL - {0} of {1} checks failed (logs: build-fast\log)" -f $fails, $totalChecks)
             exit 2
