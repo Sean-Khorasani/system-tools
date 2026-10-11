@@ -4,12 +4,22 @@
 
 #include "Utils.h"
 
+#include <objbase.h>   // CoInitializeEx / CoCreateInstance (G21 annotation)
+// INITGUID before oleacc.h: the CLSID/IID/PROPID this uses are defined in
+// this TU, so no oleacc.lib import is needed (and none of the three build
+// paths grows a new link dependency for one annotation call). Virtual
+// calls need no import; CoCreateInstance/CoInitializeEx are ole32, which
+// is already linked (delay-loaded, and gated below at runtime).
+#include <initguid.h>
+#include <oleacc.h>    // IAccPropServices / PROPID_ACC_NAME (G21 annotation)
+
 #include <cstdio>
 #include <cwchar>
 #include <cwctype>
 #include <fstream>
 
 #include "Opt.h"
+#include "WinCaps.h"   // DllAvailable: ole32/oleacc are delay-loaded (G21)
 
 namespace wintcp {
 
@@ -300,6 +310,51 @@ bool HasLowerSubstring(const std::wstring& haystackLower,
                        const std::wstring& needleLower) {
     if (needleLower.empty()) return true;
     return haystackLower.find(needleLower) != std::wstring::npos;
+}
+
+void SetAccessibleName(HWND hwnd, const std::wstring& name) {
+    // G21: the annotation itself. Dynamic Annotation (IAccPropServices)
+    // rather than a hand-rolled IAccessible: one property set on the
+    // window, and every screen reader picks it up as the accessible
+    // name - no object to implement, no WM_GETOBJECT to serve, no state
+    // to keep in sync afterwards (the service holds the string).
+    if (hwnd == nullptr || name.empty()) return;
+    // ole32/oleacc are delay-loaded: on a machine without them there is
+    // no annotation service, and the window keeps its default behaviour
+    // rather than raising.
+    if (!DllAvailable("ole32.dll") || !DllAvailable("oleacc.dll")) return;
+    // An accessible NAME is a summary, not the document (Copy gives the
+    // whole text). 2048 characters keeps every real summary whole while
+    // bounding what the service stores per window.
+    constexpr size_t kAccNameMax = 2048;
+    std::wstring capped = name.substr(0, kAccNameMax);
+
+    // Per-call COM, the shape BlockConn uses: initialise, create, set,
+    // release. RPC_E_CHANGED_MODE means the thread already lives in
+    // another apartment - COM is still usable, but this call did not
+    // initialise it and must not uninitialise it.
+    const HRESULT initHr =
+        ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool inited = false;
+    if (initHr == RPC_E_CHANGED_MODE) {
+        inited = false;
+    } else if (FAILED(initHr)) {
+        return;
+    } else {
+        inited = true;
+    }
+    IAccPropServices* svc = nullptr;
+    if (::CoCreateInstance(CLSID_AccPropServices, nullptr,
+                           CLSCTX_INPROC_SERVER, IID_IAccPropServices,
+                           reinterpret_cast<void**>(&svc)) == S_OK &&
+        svc != nullptr) {
+        svc->SetHwndPropStr(hwnd, static_cast<DWORD>(OBJID_CLIENT),
+                            static_cast<DWORD>(CHILDID_SELF),
+                            PROPID_ACC_NAME,
+                            const_cast<wchar_t*>(capped.c_str()));
+        svc->Release();
+    }
+    if (inited) ::CoUninitialize();
 }
 
 UINT QueryDpiForWindow(HWND hwnd) {
