@@ -215,6 +215,7 @@
     <ClCompile Include="src\CliCommands.cpp" />
     <ClCompile Include="src\ViewState.cpp" />
     <ClCompile Include="src\DnsResolver.cpp" />
+    <ClCompile Include="src\DnsCache.cpp" />
     <ClCompile Include="src\Settings.cpp" />
     
     
@@ -286,6 +287,7 @@
     <ClInclude Include="src\CliCommands.h" />
     <ClInclude Include="src\ViewState.h" />
     <ClInclude Include="src\DnsResolver.h" />
+    <ClInclude Include="src\DnsCache.h" />
     <ClInclude Include="src\Settings.h" />
     
     

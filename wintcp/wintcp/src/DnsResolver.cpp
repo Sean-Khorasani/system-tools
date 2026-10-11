@@ -7,7 +7,12 @@
 // completion in the background and delivers a resolved result when it
 // returns. The single-shot CLI path (Lookup) is still synchronous - it is
 // opt-in and explicitly waits for answers.
+//
+// F5.5 alternative: Lookup consults the on-disk answer cache first and
+// records what it learns. See DnsCache.h for why the cache is a set of
+// answers rather than the ETW DNS snooping the ticket originally specified.
 
+#include "DnsCache.h"
 #include "DnsResolver.h"
 #include "Utils.h"   // RunGuarded (R2 worker containment)
 
@@ -35,8 +40,7 @@ std::wstring StripScope(const std::wstring& addr) {
 // CLI one-shot Lookup funnel through here, so the two can never disagree
 // about what a given address resolves to. Unchanged by 9.2.8 (only the
 // caller's deadline framing changed).
-std::wstring DoLookup(const std::wstring& addr) {
-    const std::wstring bare = StripScope(addr);
+std::wstring DoLookup(const std::wstring& addr) {    const std::wstring bare = StripScope(addr);
     const bool v6 = bare.find(L':') != std::wstring::npos;
 
     sockaddr_storage ss = {};
@@ -142,14 +146,29 @@ std::wstring DnsResolver::Lookup(const std::wstring& addr, unsigned timeoutMs) {
     // callers that need the blocking core directly.
     (void)timeoutMs;   // getnameinfo itself is un-cancellable; the bound is a
                        // documentation/contract value for one-shot callers.
+
+    // F5.5: an answer already on disk, and still believed, so no query at
+    // all. This is the whole point of the cache - a peer seen in an earlier
+    // run costs a map lookup instead of a resolver round trip, and on a
+    // machine with no PTR coverage that is the difference between a `--dns`
+    // pass finishing and one that stalls on every peer.
+    const int64_t now = NowEpoch();
+    DnsAnswerCache& cache = ResolverDnsCache();
+    if (std::wstring cached; cache.Find(addr, now, &cached)) return cached;
+
     // R2: a throwing lookup resolves to empty — the same answer a failed
     // lookup gives, and the cache records it either way. A name we could
     // not compute is not worth a dead resolver thread.
     std::wstring host;
     if (!RunGuarded([&] { host = DoLookup(addr); }).empty()) host.clear();
+
+    // Record only what was actually answered. An empty result is not
+    // recorded: DoLookup cannot tell "no PTR record" from "the query failed
+    // or timed out", and caching either would show `host: -` for a name that
+    // exists on the next run.
+    cache.Record(addr, host, now);
     return host;
 }
-
 void DnsResolver::Run() {
     if (timeoutMs_ == 0) timeoutMs_ = kDnsTimeoutDefault;
     for (;;) {

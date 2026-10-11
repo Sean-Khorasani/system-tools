@@ -55,6 +55,7 @@ add_executable(wintcp
     wintcp/src/ViewState.cpp
     wintcp/src/ViewState.h
     wintcp/src/DnsResolver.cpp
+    wintcp/src/DnsCache.cpp
     wintcp/src/DnsResolver.h
     wintcp/src/Settings.cpp
     wintcp/src/Settings.h

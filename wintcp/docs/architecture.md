@@ -54,6 +54,7 @@ Every helper - RAII handles, UTF-8/UTF-16 conversion, `FormatSystemError`, DPI a
 | UI / main | `main.cpp` | Window, message pump, painting, `ApplyView`, and every `SetTimer` tick. Nothing below runs here. |
 | Refresh worker | `RefreshEngine.cpp` | One pass per interval: enumerate endpoints, resolve processes and services, sample stats, join traffic. Posts a complete `RefreshResult` back to the UI. |
 | DNS worker | `DnsResolver.cpp` | Pops one remote address at a time, `getnameinfo(NI_NAMEREQD)`, caches, delivers. Reverse DNS is slow and blocking, so it never runs on the UI thread. |
+| DNS answer cache | `DnsCache.cpp` | Persists the answers the worker earns to `%APPDATA%\WinTCP\dns-cache.txt`, so a peer seen by an earlier run costs a file read instead of a query. Positive answers only, 24 h TTL. |
 | ETW session | `EtwTraffic.cpp` | The kernel-logger session's event callback. Elevated only; when it cannot start the UI arms the non-admin fallback instead. |
 | Probe workers (x16) | `SocketTraffic.cpp` | The non-admin fallback: one `SIO_TCP_INFO` ioctl per socket, farmed out across `kProbeWorkers` threads. |
 | Thread sampler | `ProcessInfo.cpp` | Enumerates one process's threads for the Details window. `CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)` walks every thread on the machine and costs ~48 ms, so it runs here rather than on the UI thread, which rebuilds the Details model on every refresh tick. `ProcessThreads` never blocks: it publishes the last sample and asks for a refresh. |
