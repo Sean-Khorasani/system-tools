@@ -177,6 +177,7 @@
     <ClCompile Include="..\src\MainWindow.cpp" />
     <ClCompile Include="..\src\TcpTable.cpp" />
   <ClCompile Include="src\RowEnrichment.cpp" />
+  <ClCompile Include="src\ListViewColumns.cpp" />
   <ClCompile Include="src\TrayIcon.cpp" />
     <ClCompile Include="..\src\ProcessInfo.cpp" />
     <ClCompile Include="..\src\Utils.cpp" />

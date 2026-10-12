@@ -50,6 +50,7 @@
 #include "TrayIcon.h"          // the notification-area icon
 #include "WorkerSink.h"        // the mailbox the worker threads post into
 #include "RowEnrichment.h"     // DNS / country / ASN
+#include "ListViewColumns.h"   // column geometry: mask, widths, order
 
 namespace wintcp {
 
@@ -131,11 +132,17 @@ private:
     void OnRefreshResult(RefreshResult* payload);   // takes ownership if registered
     void OnDnsResult(DnsResolver::Result* payload); // takes ownership if registered
 
-    void CreateControls();
-    void LayoutControls(int cx, int cy);
-    void RebuildColumns();                 // apply visibility + widths
-    void HarvestColumnWidths();            // physical -> logical (96-dpi) units
-    void InitFilterControls();
+void CreateControls();
+void LayoutControls(int cx, int cy);
+// Column geometry lives in ListViewColumns; these are the window's half of
+// it - the dialogs, the side effects, the persistence and the repaint.
+void RebuildColumns();                 // apply visibility + widths
+void HarvestColumnWidths();            // physical -> logical (96-dpi) units
+void SyncGroupHeader();                // grouped label + live group count
+void UpdateSortIndicator();
+void ToggleColumn(int columnId);
+void SyncColumnMenuChecks();           // View > Columns ticks trace the mask
+void InitFilterControls();
     void StartWorker();                    
     void StartDnsWorker();                 
 
@@ -199,10 +206,8 @@ private:
                           std::uint64_t* focusedId, int* topIdx) const;
     void RestoreSelection(const std::vector<std::uint64_t>& ids,
                           std::uint64_t focusedId, int topIdx);
-    void UpdateSortIndicator();            
     void UpdateStatusBar(const std::wstring& errorText);
     void UpdateCaption();               // the state-carrying title
-    void SyncGroupHeader();             // "Process (N groups)" header
     void UpdateExposure();                   // the exposure badge
     void UpdateTrayTip();               // rows/frozen/grouped/alerts tip
     void InitTooltips();                // control-bar tips
@@ -270,9 +275,6 @@ private:
     void RefreshBookmarkMarks();            // registry -> row model
     void BookmarkSelectedConnection();
     void EditSelectedBookmarkNote();
-    void ToggleColumn(int columnId);       
-    void SyncColumnMenuChecks();           // View > Columns ticks track visibleCols_
-    bool AnyTrafficColVisible() const;     // TRAFFIC/RX/TX/NETTOTAL on screen?
     void EnsureTrafficCounters();          // ETW try + socket fallback
 
     // Change log: append APPEAR/DISAPPEAR/STATE lines to a CSV
@@ -344,8 +346,11 @@ private:
 
     bool SelectedRowIndices(std::vector<int>& out) const;
 
-    int VisibleToCol(int visibleIndex) const;   // -1 when out of range
-    int ColToVisible(int columnId) const;       // -1 when hidden
+int VisibleToCol(int visibleIndex) const;   // -1 when out of range
+int ColToVisible(int columnId) const;       // -1 when hidden
+// The window's own traffic-column question, which is the column object's
+// answer, kept as a method because every caller wrote the mask by hand.
+bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
 
     // The index in the shell's system image list for a
     // process image, or -1 when the shell has none.
@@ -478,21 +483,12 @@ private:
     UINT dpi_ = 96;
     HFONT font_ = nullptr;
 
-    // columns
-    UINT32 visibleCols_ = 0;               // bitmask over ColumnId
-    int colWidths_[COL_COUNT] = {};
-    std::vector<int> visToCol_;            // visible index -> ColumnId
-    // The user's column order: a permutation over ALL ColumnIds, seeded
-    // from kDisplayOrder and rewritten by OnColumnDrag. A vector, not an array,
-    // so erase/insert cannot leave a stale tail.
-    //
-    // Sized at CONSTRUCTION from COL_COUNT. OnCreate writes all COL_COUNT
-    // entries into it, and subscripting an empty vector writes through a null
-    // data pointer - which is an access violation on the very first line of
-    // startup, and only in a release build with the accesses inlined. The
-    // crash showed up as a fault in SaveSettings' colWidths copy loop because
-    // the optimiser hoisted and merged the two identical loops.
-    std::vector<int> colOrder_ = std::vector<int>(COL_COUNT, 0);
+    // Column geometry: the visible mask, the widths in 96-dpi logical units,
+    // the user's order and the control's visible-index mapping. Four members
+    // and ten methods that managed them became one object, because the header
+    // drag path, the menu-tick path and the persistence path were each
+    // reaching into a bitmask of their own.
+    ListViewColumns cols_;
 
     // keep the selection across auto-refresh ticks. On by default -
     // a row the user is inspecting must not jump to the top of the list every

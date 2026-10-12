@@ -36,6 +36,7 @@
 
 #include "Columns.h"
 #include "ConnectionStore.h"
+#include "Elevate.h"       // IsElevated, IsAdminMember
 #include "resource.h"    // IDM_COL_*, IDM_VIEW_TRAFFIC
 #include "WinCaps.h"     // DllAvailable: shell32 is delay-loaded
 
