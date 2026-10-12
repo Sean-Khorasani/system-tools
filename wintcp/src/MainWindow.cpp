@@ -48,7 +48,7 @@ using namespace mw;
 
 const wchar_t* MainWindow::kClassName = L"WinTcpViewerMainWindow";
 
-std::shared_ptr<MainWindow::WorkerSink> MainWindow::Sink() const {
+std::shared_ptr<WorkerSink> MainWindow::Sink() const {
     if (sink_ == nullptr) sink_ = std::make_shared<WorkerSink>();
     return sink_;
 }
@@ -58,7 +58,7 @@ std::shared_ptr<MainWindow::WorkerSink> MainWindow::Sink() const {
 
 MainWindow::~MainWindow() {
     engine_.Stop();
-    dns_.Stop();
+    enrich_.StopDnsWorker();
     std::lock_guard<std::mutex> lk(Sink()->m);
     for (RefreshResult* p : Sink()->pendingRefresh) delete p;
     Sink()->pendingRefresh.clear();
@@ -422,7 +422,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     // "streamVisible" was removed with the hex window. Nothing queried it, and
     // a property that always answers "0" would be a lie waiting for a caller.
     if (::wcscmp(op, L"geoLoaded") == 0) {
-        return geo_.Loaded() ? L"1" : L"0";
+        return enrich_.CountryLoaded() ? L"1" : L"0";
     }
     if (::wcscmp(op, L"trafficTimeouts") == 0) {
         if (socketTraffic_ == nullptr) return L"0";
@@ -836,7 +836,7 @@ void MainWindow::OnCreate() {
     // database still reports the parser's reason on demand.
     if (settings_.geoIpPath[0] != L'\0') {
         std::wstring err;
-        if (geo_.Load(settings_.geoIpPath, &err)) {
+        if (enrich_.LoadCountry(settings_.geoIpPath, &err)) {
             OfferGeoIpForAllRows();
             ApplyView();
         }
@@ -846,7 +846,7 @@ void MainWindow::OnCreate() {
     // neither survives a relaunch.
     if (settings_.asnIpPath[0] != L'\0') {
         std::wstring asnErr;
-        if (asnGeo_.Load(settings_.asnIpPath, &asnErr)) {
+        if (enrich_.LoadAsn(settings_.asnIpPath, &asnErr)) {
             OfferAsnForAllRows();
             ApplyView();
         }
@@ -954,7 +954,7 @@ void MainWindow::OnDestroy() {
     ::KillTimer(hwnd_, kStatusTimerId);
     ::KillTimer(hwnd_, kFilterTimerId);
     engine_.Stop();                      // no callbacks can be in flight after join
-    dns_.Stop();
+    enrich_.StopDnsWorker();
     etw_.Stop();                         // stop the kernel logger
     charts_.Close();                     // stop the 1 s sampler
     changeLog_.Close();                  // destroy before the owner goes
@@ -1057,142 +1057,40 @@ void MainWindow::StartWorker() {
 }
 
 void MainWindow::StartDnsWorker() {
-    const std::shared_ptr<WorkerSink> sink = Sink();
-    sink->hwnd = hwnd_;
-    // a per-lookup budget so a wedged resolver stalls at most one tick
-    // instead of the whole queue. The GUI renders `pending` for the rows still
-    // in flight; a status-bar hint fires on stalls.
-    dns_.SetTimeoutMs(DnsResolver::kDnsTimeoutDefault);
-    dns_.SetStallSink([sink](unsigned pending, unsigned /*ms*/) {
-        // Post a status hint; the row cells already show `pending`. Guarded so
-        // a late fire during shutdown does not dereference a torn-down window.
-        if (sink->hwnd != nullptr && !sink->shuttingDown)
-            ::PostMessageW(sink->hwnd, WM_APP_DNS_STALLED,
-                           static_cast<WPARAM>(pending), 0);
-    });
-    dns_.Start([sink](std::unique_ptr<DnsResolver::Result> r) {
-        DnsResolver::Result* raw = r.release();
-        bool registered = false;
-        {
-            std::lock_guard<std::mutex> lk(sink->m);
-            if (!sink->shuttingDown) {
-                sink->pendingDns.insert(raw);
-                registered = true;
-            }
-        }
-        if (registered) {
-            if (::PostMessageW(sink->hwnd, WM_APP_DNS_RESULT, 0,
-                               reinterpret_cast<LPARAM>(raw)) == FALSE) {
-                std::lock_guard<std::mutex> lk(sink->m);
-                if (sink->pendingDns.erase(raw) != 0) delete raw;
-            }
-        } else {
-            delete raw;
-        }
-    });
-    dns_.SetEnabled(dnsEnabled_);
+    enrich_.StartDnsWorker(hwnd_, Sink());
 }
 
 void MainWindow::OnDnsResult(DnsResolver::Result* payload) {
-    if (payload == nullptr) return;
-    {
-        std::lock_guard<std::mutex> lk(Sink()->m);
-        if (Sink()->pendingDns.erase(payload) == 0) return;   // not ours (shutdown)
-    }
-    const std::unique_ptr<DnsResolver::Result> result(payload);
-    if (store_.SetHostname(result->address, result->hostname)) {
-        // Hostname affects filtering/sorting only when one of them is in
-        // play; otherwise a repaint is enough.
-        if (store_.SortColumn() == COL_HOST || !filterProgram_.empty()) {
+    // The effect the enrichment layer reports is mapped to this window's
+    // controls here, and nowhere else: the layer cannot know a list view
+    // exists, and a layer that asked the window to repaint would be a layer
+    // with a window dependency.
+    const RowEnrichment::Effect effect =
+        enrich_.OnDnsResult(payload, store_, Sink(),
+                            !filterProgram_.empty());
+    switch (effect) {
+        case RowEnrichment::Effect::kReapply:
             ApplyView();
-        } else if (hwndList_ != nullptr) {
-            ::InvalidateRect(hwndList_, nullptr, FALSE);
-        }
+            break;
+        case RowEnrichment::Effect::kRepaint:
+            if (hwndList_ != nullptr)
+                ::InvalidateRect(hwndList_, nullptr, FALSE);
+            break;
+        case RowEnrichment::Effect::kNone:
+        default:
+            break;
     }
 }
 
-void MainWindow::OfferDnsForAllRows() {
-    for (const Connection& r : store_.Rows()) dns_.Offer(r.remoteAddress);
-}
+void MainWindow::OfferDnsForAllRows() { enrich_.OfferAll(store_); }
 
-// GeoIP join.
-//
-// Walks the rows and fills the Country column from the user-supplied MMDB.
-// Unlike DNS this is entirely SYNCHRONOUS and local: a tree walk per distinct
-// address, no thread, no queue, no re-entrancy. That is what makes it cheap
-// enough to do inline on every refresh - a few hundred binary searches over a
-// mapped file is microseconds, and a separate worker would cost more in
-// synchronisation than the lookups cost.
-//
-// The distinct-address memo is what keeps it that way. A busy machine has
-// thousands of rows but far fewer distinct peers (every one of a browser's
-// connections to one CDN edge shares an address), and looking each up again is
-// pure waste. 'seen' is scoped to this call rather than kept on the member
-// because the row set is replaced wholesale on every refresh - a persistent
-// cache would have to be invalidated anyway, and a per-pass set is provably
-// correct with no invalidation logic to get wrong.
-void MainWindow::OfferGeoIpForAllRows() {
-    if (!geo_.Loaded()) return;
-    std::unordered_set<std::wstring> seen;
-    seen.reserve(store_.Rows().size());
-    for (const Connection& r : store_.Rows()) {
-        if (r.remoteAddress.empty()) continue;
-        if (!seen.insert(r.remoteAddress).second) continue;
-        std::wstring code;
-        if (r.family == AF_INET) {
-            // Rows carry the address as text, so parse back to the integer the
-            // tree walk wants. A remote address in the store always came from
-            // the stack, so this cannot fail; if it somehow does, skipping is
-            // correct and must not blank a country another row already set.
-            in_addr v4 = {};
-            if (::InetPtonW(AF_INET, r.remoteAddress.c_str(), &v4) != 1)
-                continue;
-            code = geo_.LookupV4(ntohl(v4.S_un.S_addr));
-        } else {
-            IN6_ADDR v6 = {};
-            if (::InetPtonW(AF_INET6, r.remoteAddress.c_str(), &v6) != 1)
-                continue;
-            code = geo_.LookupV6(reinterpret_cast<const unsigned char*>(&v6));
-        }
-        // An empty code is written too: it clears a stale value when a peer
-        // moves out of a covered range, and SetCountry is a no-op when the
-        // value is already right, so this costs nothing.
-        store_.SetCountry(r.remoteAddress, code);
-    }
-}
+// GeoIP and the ASN join: the engine half is RowEnrichment's (one local pass
+// per database, both synchronous, both sharing the distinct-address memo
+// rule). What is left here is the WHEN - after every refresh, and immediately
+// after a database is loaded.
+void MainWindow::OfferGeoIpForAllRows() { enrich_.OfferGeoIp(store_); }
+void MainWindow::OfferAsnForAllRows() { enrich_.OfferAsn(store_); }
 
-// The ASN pass. Separate from OfferGeoIpForAllRows rather than folded into
-// it, because the two databases are independent: either may be loaded without
-// the other, and a row must be able to carry a country with no ASN or an ASN with
-// no country.
-//
-// It also has to run even when the COUNTRY database is absent - which is the
-// case that would otherwise silently do nothing, since the country function
-// returns early when its own database is not loaded.
-void MainWindow::OfferAsnForAllRows() {
-    if (!asnGeo_.Loaded()) return;
-    std::unordered_set<std::wstring> seen;
-    seen.reserve(store_.Rows().size());
-    for (const Connection& r : store_.Rows()) {
-        if (r.remoteAddress.empty()) continue;
-        if (!seen.insert(r.remoteAddress).second) continue;
-        AsnInfo info;
-        if (r.family == AF_INET) {
-            in_addr v4 = {};
-            if (::InetPtonW(AF_INET, r.remoteAddress.c_str(), &v4) != 1)
-                continue;
-            info = asnGeo_.LookupAsnV4(ntohl(v4.S_un.S_addr));
-        } else {
-            IN6_ADDR v6 = {};
-            if (::InetPtonW(AF_INET6, r.remoteAddress.c_str(), &v6) != 1)
-                continue;
-            info = asnGeo_.LookupAsnV6(reinterpret_cast<const unsigned char*>(&v6));
-        }
-        // Written even when empty: that clears a stale AS number when the file is
-        // reloaded with different contents, exactly as the CLI path does.
-        store_.SetAsn(r.remoteAddress, info.number, info.org);
-    }
-}
 
 void MainWindow::OnRefreshResult(RefreshResult* payload) {
     if (payload == nullptr) return;
@@ -1779,7 +1677,7 @@ void MainWindow::UpdateEmptyState() {
     // A country-bearing column with no database behind it. Both databases count,
     // because either fills the cell.
     const bool countryShown = (visibleCols_ & (1u << COL_COUNTRY)) != 0;
-    if (countryShown && !geo_.Loaded() && !asnGeo_.Loaded()) {
+    if (countryShown && !enrich_.CountryLoaded() && !enrich_.AsnLoaded()) {
         emptyStateHint_ = L"no GeoIP database loaded - pick one in View > GeoIP "
                           L"database to fill Country";
         return;
@@ -1803,8 +1701,8 @@ void MainWindow::UpdateEmptyState() {
 void MainWindow::ShowEmptyStateActions() {
     const EmptyStateOffer offer = DecideEmptyState(
         store_.Rows().size(), store_.View().size(),
-        (visibleCols_ & (1u << COL_COUNTRY)) != 0, geo_.Loaded(),
-        asnGeo_.Loaded(), AnyTrafficColVisible(), etw_.Running(),
+        (visibleCols_ & (1u << COL_COUNTRY)) != 0, enrich_.CountryLoaded(),
+        enrich_.AsnLoaded(), AnyTrafficColVisible(), etw_.Running(),
         fallbackFlag_->load(), IsElevated());
 
     // Nothing to offer. The status-bar sentence UpdateEmptyState already sets
@@ -3172,7 +3070,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         case IDM_VIEW_RESOLVE: {
             dnsEnabled_ = !dnsEnabled_;
-            dns_.SetEnabled(dnsEnabled_);
+            enrich_.SetDnsEnabled(dnsEnabled_);
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_RESOLVE, dnsEnabled_);
             if (dnsEnabled_) OfferDnsForAllRows();
             break;
@@ -4978,7 +4876,7 @@ PresetView MainWindow::CurrentPresetView() const {
     // It is the same enrichment applied from a second file, and kPresetSourceAll
     // is a four-bit mask - adding a fifth bit would be a schema change to a
     // persisted value for no distinction a user can act on.
-    if (geo_.Loaded() || asnGeo_.Loaded()) sources |= kPresetSourceGeoIp;
+    if (enrich_.CountryLoaded() || enrich_.AsnLoaded()) sources |= kPresetSourceGeoIp;
     // Widget reads stay here (search box, column mask, sort); the ViewState
     // assembly lives in the abstract layer so the CLI builds the same type.
     return CurrentPresetViewFor(CurrentSearchText(), visibleCols_,
@@ -5000,7 +4898,7 @@ void MainWindow::ApplyPresetView(const PresetView& v) {
     const bool wantDns = (v.sources & kPresetSourceHosts) != 0;
     if (wantDns != dnsEnabled_) {
         dnsEnabled_ = wantDns;
-        dns_.SetEnabled(wantDns);
+        enrich_.SetDnsEnabled(wantDns);
     }
     const bool wantTraffic = (v.sources & kPresetSourceEtw) != 0;
     if (wantTraffic) EnsureTrafficCounters();
@@ -5513,7 +5411,7 @@ void MainWindow::ShowAboutBox() {
         s.trafficTimeouts = socketTraffic_->TimeoutCount();
         s.trafficScanFailures = socketTraffic_->ScanFailureCount();
     }
-    s.geoIpLoaded = geo_.Loaded();
+    s.geoIpLoaded = enrich_.CountryLoaded();
     s.presetsAvailable = true;   // the store is in-process; always available
     for (int i = 0; i < COL_COUNT; ++i)
         if ((visibleCols_ & (1u << i)) != 0) ++s.visibleColumnCount;
@@ -5564,7 +5462,7 @@ void MainWindow::LoadGeoIpDatabase() {
     if (!::GetOpenFileNameW(&ofn)) return;   // cancelled: not an error
 
     std::wstring error;
-    if (!geo_.Load(file, &error)) {
+    if (!enrich_.LoadCountry(file, &error)) {
         ::MessageBoxW(hwnd_, error.c_str(), L"GeoIP database not loaded",
                       MB_OK | MB_ICONERROR);
         return;
@@ -5584,6 +5482,9 @@ void MainWindow::LoadGeoIpDatabase() {
 
     // Fill immediately rather than waiting for the next tick, so the Country
     // column appears at once. The user chose a file precisely to see results.
+    // Only the database that was loaded: the ASN pass has its own loader and
+    // its own settings key, and offering the other one here would make this
+    // command do twice what it says.
     OfferGeoIpForAllRows();
     ApplyView();
     UpdateStatusBar(std::wstring());
@@ -5613,7 +5514,7 @@ void MainWindow::LoadAsnDatabase() {
     if (!::GetOpenFileNameW(&ofn)) return;   // cancelled: not an error
 
     std::wstring error;
-    if (!asnGeo_.Load(file, &error)) {
+    if (!enrich_.LoadAsn(file, &error)) {
         ::MessageBoxW(hwnd_, error.c_str(),
                       L"ASN database not loaded (expected GeoLite2-ASN)",
                       MB_OK | MB_ICONERROR);
@@ -5663,13 +5564,13 @@ void MainWindow::SaveSettings() {
     // pure waste: two full registry writes on every exit, and the second
     // overwrote the first regardless.
     ::wcsncpy_s(settings_.geoIpPath,
-                geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
+                enrich_.CountryLoaded() ? enrich_.CountrySourcePath().c_str() : L"",
                 _TRUNCATE);
     // the ASN path is remembered on the same terms - whatever is actually
     // loaded - so a database the user cleared does not come back on the next
     // launch. Same single PersistSettings call below; do not add another.
     ::wcsncpy_s(settings_.asnIpPath,
-                asnGeo_.Loaded() ? asnGeo_.SourcePath().c_str() : L"",
+                enrich_.AsnLoaded() ? enrich_.AsnSourcePath().c_str() : L"",
                 _TRUNCATE);
     PersistSettings("shutdown");
 }

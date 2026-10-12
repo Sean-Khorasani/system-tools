@@ -31,13 +31,9 @@
 
 #include <string>
 
-namespace wintcp {
+#include "WorkerSink.h"   // WM_APP_TRAY: the app's private message space
 
-// The tray icon's callback message. Defined here rather than in MainWindow.h
-// because the icon owns it: the message arrives for the icon, and the class
-// that knows that is this one. The value must stay in the tool's private
-// WM_APP range - see the other worker messages in MainWindow.h.
-inline constexpr UINT WM_APP_TRAY = WM_APP + 3;   // tray icon callback
+namespace wintcp {
 
 class TrayIcon {
 public:
