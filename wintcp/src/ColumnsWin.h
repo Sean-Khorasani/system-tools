@@ -148,23 +148,23 @@ constexpr UINT32 kNetworkProfileCols =
     ~(1u << COL_RETRANS) & ~(1u << COL_GROUPRATE) & ~(1u << COL_PPID) &
     ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) & ~(1u << COL_NOTE);
 
-// Network answers "who is this talking to, over what, and did it move anything",
-// so it keeps the address columns and adds the byte counters - and drops the
-// process-budget readings, which are about the machine rather than the socket.
-constexpr UINT32 kSecurityProfileCols =
-    kAllColMask &
-    ~(1u << COL_LOCAL) & ~(1u << COL_LPORT) & ~(1u << COL_BANDWIDTH) &
-    ~(1u << COL_RTT) & ~(1u << COL_MINRTT) & ~(1u << COL_CWND) &
-    ~(1u << COL_RETRANS) & ~(1u << COL_DISK) & ~(1u << COL_NOTE);
-
 // Security answers "which process, on whose authority, from where", so it keeps
 // the trust columns (path, integrity, signature) and drops the socket-level noise.
+constexpr UINT32 kSecurityProfileCols =
+kAllColMask &
+~(1u << COL_LOCAL) & ~(1u << COL_LPORT) & ~(1u << COL_BANDWIDTH) &
+~(1u << COL_RTT) & ~(1u << COL_MINRTT) & ~(1u << COL_CWND) &
+~(1u << COL_RETRANS) & ~(1u << COL_DISK) & ~(1u << COL_NOTE);
+
+// Performance answers "what is this process spending", so it keeps the
+// process-budget readings (CPU, memory, disk) - the ones a socket has no say
+// in - and drops the socket-level detail, the trust columns and the notes.
 constexpr UINT32 kPerformanceProfileCols =
-    kAllColMask &
-    ~(1u << COL_SERVICE) & ~(1u << COL_PATH) & ~(1u << COL_COUNTRY) &
-    ~(1u << COL_TLS) & ~(1u << COL_RTT) & ~(1u << COL_MINRTT) &
-    ~(1u << COL_CWND) & ~(1u << COL_RETRANS) & ~(1u << COL_PPID) &
-    ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) & ~(1u << COL_NOTE);
+kAllColMask &
+~(1u << COL_SERVICE) & ~(1u << COL_PATH) & ~(1u << COL_COUNTRY) &
+~(1u << COL_TLS) & ~(1u << COL_RTT) & ~(1u << COL_MINRTT) &
+~(1u << COL_CWND) & ~(1u << COL_RETRANS) & ~(1u << COL_PPID) &
+~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) & ~(1u << COL_NOTE);
 
 // The five diagnostic readings, as one mask. "Show diagnostics" ORs these on
 // rather than replacing what is visible.
