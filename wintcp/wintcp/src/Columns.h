@@ -38,7 +38,30 @@ enum ColumnId {
     // Settings grants them, exactly as it did for COL_CPU.
     COL_DURATION,   // how long this endpoint has existed
     COL_BANDWIDTH,  // per-connection bytes/second
-    COL_TLS,        // TLS protocol / cipher / SNI / certificate
+    // NOT DISPLAYED - reserved, and not offered anywhere in the UI.
+    //
+    // A column has to earn its place by being able to show something. This one
+    // cannot: TLS session parameters are not readable from a socket at all.
+    // `SIO_TLS_INFO` is not declared in this SDK (verified against the Windows
+    // SDK headers), `TCP_INFO_v0` carries no TLS field, and the only per-connection
+    // sources both need elevation AND a source the user cannot be expected to run
+    // continuously (the ETW Schannel provider, or a packet capture of the
+    // handshake). Measured on a real host, elevated, with every data source
+    // enabled: the cell answers "unknown" on 302 of 302 rows - 100%, with no
+    // row anywhere it could ever differ. A column that is always unknown is not
+    // information; it is a blank column that teaches the user to ignore blanks.
+    //
+    // The enum value and its mask bit are deliberately KEPT. Renumbering would
+    // shift every column after it, which silently moves the bits in a persisted
+    // column mask and changes what a restored layout shows. Excluding it from
+    // kDisplayOrder is what actually removes it: that list is the single place
+    // the header, the Columns menu and the presets all read from, so one entry
+    // removes it from all three at once without touching a bit anywhere.
+    //
+    // If a socket-level TLS source ever appears, the way back is one entry in
+    // kDisplayOrder plus a line in kDefaultVisibleCols - no data migration, no
+    // mask change, nothing else to undo.
+    COL_TLS,        // reserved: not populated, so not displayed
     COL_COUNTRY,    // GeoIP country of the remote address
     COL_PINNED,     // user bookmark + colour tag
     // The bookmark NOTE, as its own column.

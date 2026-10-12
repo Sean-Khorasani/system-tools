@@ -227,7 +227,7 @@ two pickers, and why neither is required for the other.
 
 **Enumeration and enrichment** - `TcpTable.*` (IP Helper table, including scope IDs), `ProcessInfo.*` (Toolhelp / OpenProcess / SCM cache), `ProcStats.*` (per-PID CPU, memory and IO), `SysStats.*` (system CPU, memory, disk, net), `GeoIp.*` (MaxMind DB reader), `WinCaps.*` (Windows capability report).
 
-**Handshake parsing** - `TlsDecode.*` (TLS record framing, ClientHello/ServerHello parsing, cipher-suite names). `capture --text` calls it on the reassembled stream and reports the handshake it found (`tls: ClientHello: SNI=... ALPN=...`), which is its one production caller. The `tls` *column* still reads "unknown": a socket-level TLS source would be needed over every row, and neither of the two real sources can supply it (`SIO_TLS_INFO` is not declared in the SDK, `TCP_INFO_v0` has no TLS field), which is why the column is documented as reserved.
+**Handshake parsing** - `TlsDecode.*` (TLS record framing, ClientHello/ServerHello parsing, cipher-suite names). `capture --text` calls it on the reassembled stream and reports the handshake it found, which is its one production caller. The `tls` *column* is a separate matter and is deliberately **not offered**: a socket-level TLS source would be needed over every row, and neither of the two real sources can supply one (`SIO_TLS_INFO` is not declared in this SDK, `TCP_INFO_v0` has no TLS field). The `ColumnId`, its mask bit and its stored width are all kept so nothing renumbers, and the single place it is excluded is the display-order list.
 
 **Traffic** - `EtwTraffic.*` and `EtwTrafficTypes.h` (kernel-logger counters, elevated), `SocketTraffic.*` (non-admin `SIO_TCP_INFO` fallback).
 

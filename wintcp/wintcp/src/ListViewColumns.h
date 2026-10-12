@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "Columns.h"
+#include "MainWindowInternal.h"   // kDisplayOrder: the offered-column set
 #include "Settings.h"      // the stored mask / widths / order
 
 namespace wintcp {
@@ -120,6 +121,17 @@ public:
     // control's own mapping, exposed rather than re-derived per caller.
     const std::vector<int>& VisibleOrder() const { return visToCol_; }
 
+    // The order the columns are offered in, which doubles as the set of
+    // columns that are offered AT ALL. kDisplayOrder (MainWindowInternal.h)
+    // is the single source: a ColumnId absent from it is not inserted into the
+    // header, not offered in the menu, and not saved into a preset. See the
+    // free functions in ListViewColumns.cpp, which are the one implementation.
+    static const std::vector<int>& OfferedColumns();
+    static bool IsOffered(int columnId);
+    // The full permutation (offered first, unoffered appended), which is what
+    // colOrder_ is seeded from and what the settings round trip writes.
+    static const std::vector<int>& OrderedColumns();
+
 private:
     // Scale a logical width to pixels at 'dpi'.
     int Scale(int logical, int dpi) const;
@@ -131,6 +143,11 @@ private:
     // kDisplayOrder and rewritten by a header drag. A vector, not an array,
     // because a settings file can name fewer ids than this build has and the
     // defensive path below must be able to resize.
+    //
+    // ALL ColumnIds, including the unoffered ones: the settings round trip
+    // writes and reads COL_COUNT entries, so a short permutation would shift
+    // every saved position. Unoffered ids are appended after the offered ones,
+    // so they never reach the header.
     std::vector<int> colOrder_ = std::vector<int>(COL_COUNT, 0);
 };
 
