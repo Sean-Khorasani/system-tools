@@ -68,7 +68,7 @@ A worker cannot hand a `RefreshResult` to the UI by reference: by the time the U
 The mechanism is a registry of **heap payloads** held in a refcounted block that neither side owns alone:
 
 ```text
-MainWindow.h
+WorkerSink.h
 struct WorkerSink {
     std::mutex m;
     std::set<RefreshResult*>      pendingRefresh;
@@ -185,7 +185,7 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
     wintcp.vcxproj (+.filters)
     res/                    app.ico, wintcp.manifest
     tests/                  everything that is not the product
-    src/                    53 .cpp + 59 .h - the product, and nothing else
+    src/                    61 .cpp + 68 .h - the product, and nothing else
 ```
 
 ### `wintcp\src` by responsibility
@@ -227,7 +227,7 @@ two pickers, and why neither is required for the other.
 
 **Enumeration and enrichment** - `TcpTable.*` (IP Helper table, including scope IDs), `ProcessInfo.*` (Toolhelp / OpenProcess / SCM cache), `ProcStats.*` (per-PID CPU, memory and IO), `SysStats.*` (system CPU, memory, disk, net), `GeoIp.*` (MaxMind DB reader), `WinCaps.*` (Windows capability report).
 
-**Handshake parsing** - `TlsDecode.*` (TLS record framing, ClientHello/ServerHello parsing, cipher-suite names). Complete and tested, but it currently has **no production caller**: it used to be read by the deleted hex window, and nothing in the snapshot or enrichment path calls it. It is kept because the parser is the tested specification of what a handshake contains, and because `capture --text` is the obvious place to use it.
+**Handshake parsing** - `TlsDecode.*` (TLS record framing, ClientHello/ServerHello parsing, cipher-suite names). `capture --text` calls it on the reassembled stream and reports the handshake it found (`tls: ClientHello: SNI=... ALPN=...`), which is its one production caller. The `tls` *column* still reads "unknown": a socket-level TLS source would be needed over every row, and neither of the two real sources can supply it (`SIO_TLS_INFO` is not declared in the SDK, `TCP_INFO_v0` has no TLS field), which is why the column is documented as reserved.
 
 **Traffic** - `EtwTraffic.*` and `EtwTrafficTypes.h` (kernel-logger counters, elevated), `SocketTraffic.*` (non-admin `SIO_TCP_INFO` fallback).
 
@@ -237,7 +237,7 @@ two pickers, and why neither is required for the other.
 
 **Blocking** - `BlockConn.*` (firewall rules and their ledger), `Elevate.*`.
 
-**Windows** - `MainWindow.*` (window, controls, menus, list, tray, theming), `DetailsDialog.*` with `DetailModel.*`, `ChartsWindow.*` with `ChartExport.*`, `ChangeLogWindow.*`, `PromptDialog.*`, `Alerts.*`, `TypeToJump.*`, `Freeze.*`.
+**Windows** - `MainWindow.*` (the window, its controls, menus, settings, and the message routing), `MainWindowInternal.h` (the shared constants and free helpers every window unit uses), `ConnectionsList.*` with `ConnectionsListOwner.*` (the list control, its cell text, its painting and its selection, and the sink it reports through), `ListViewColumns.*` (column geometry: mask, widths, order), `RowEnrichment.*` (DNS, country, ASN), `WorkerSink.h` (the worker mailbox), `AlertMonitor.*` (the alert engine's wiring), `ViewPresets.*` and `BookmarkActions.*` (the preset and bookmark dialogs), `DetailsDialog.*` with `DetailModel.*`, `ChartsWindow.*` with `ChartExport.*`, `ChangeLogWindow.*`, `PromptDialog.*`, `Alerts.*`, `TypeToJump.*`, `Freeze.*`, `RowAccessible.*`, `ProcessTreeView.*`, `Theme.h`, `FontCache.*`.
 
 There is deliberately no hex window. `HexTextWindow.*` was the view behind the GUI's *Follow TCP stream* action, and it was deleted on 2026-10-05: the action was removed first (it re-elevated the whole application, then blocked modally on a capture that can legitimately return nothing), which left the class unreachable, and an unreachable window is worse than no window - it still compiles, still appears in the project file, and reads as a feature that works. The capability lives in the CLI instead (`capture --text` prints the reassembled stream, `capture --out FILE` keeps the pcapng), and `MainWindow.cpp` keeps the removal note that explains why, because the chain of reasons is the argument for the CLI having the feature at all.
 
@@ -255,5 +255,3 @@ There is deliberately no hex window. `HexTextWindow.*` was the view behind the G
 | `d2probe.bat`, `d2probe.cpp` | the measurement probe behind `kProbeWorkers` - **not a gate** |
 
 `wintcp-tests.exe` links the *same* product sources as `wintcp.exe`, minus `main.cpp`. That is the point: a test that exercised a copy of the logic would prove nothing. See [Development](development.md#testing).
-
-Country column rather than growing the mask.
