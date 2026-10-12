@@ -223,7 +223,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return buf;
     }
     if (::wcscmp(op, L"listSelectionCount") == 0) {
-        const LRESULT n = ::SendMessageW(hwndList_, LVM_GETSELECTEDCOUNT, 0, 0);
+        const LRESULT n = ::SendMessageW(list_.Handle(), LVM_GETSELECTEDCOUNT, 0, 0);
         ::swprintf_s(buf, L"%lld", (long long)n);
         return buf;
     }
@@ -235,7 +235,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // no connection (System, PID 4), where no row can be selected and an
         // empty answer is the correct one.
         const int sel = static_cast<int>(::SendMessageW(
-            hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
+            list_.Handle(), LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
             MAKELPARAM(LVNI_SELECTED, 0)));
         if (sel == -1) return L"";
         const Connection* c = store_.ViewRow(static_cast<size_t>(sel));
@@ -250,7 +250,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // The virtual list's count is the observable contract; read it from
         // the control rather than from the store, so a view that was never
         // pushed to the screen shows up as 0 here.
-        const LRESULT n = ::SendMessageW(hwndList_, LVM_GETITEMCOUNT, 0, 0);
+        const LRESULT n = ::SendMessageW(list_.Handle(), LVM_GETITEMCOUNT, 0, 0);
         ::swprintf_s(buf, L"%lld", (long long)n);
         return buf;
     }
@@ -450,7 +450,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     }
     if (::wcscmp(op, L"selectionCount") == 0) {
         std::vector<int> idx;
-        const bool any = SelectedRowIndices(idx);
+        const bool any = list_.SelectedRowIndices(idx);
         ::swprintf_s(buf, L"%zu", any ? idx.size() : 0);
         return buf;
     }
@@ -458,7 +458,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // Read a cell back out of the virtual list. arg is the visible index.
         const int v = (arg != nullptr) ? ::_wtoi(arg) : -1;
         if (ColToVisible(VisibleToCol(v)) != v) return L"";
-        const LRESULT row = ::SendMessageW(hwndList_, LVM_GETNEXTITEM,
+        const LRESULT row = ::SendMessageW(list_.Handle(), LVM_GETNEXTITEM,
                                            static_cast<WPARAM>(-1),
                                            LVNI_FOCUSED);
         if (row < 0) return L"";
@@ -466,8 +466,8 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // the list itself uses. iSubItem lives on the item sub-struct, which
         // is how the production LVN_GETDISPINFO handler reads it.
         NMLVDISPINFO di = {};
-        di.hdr.hwndFrom = hwndList_;
-        di.hdr.idFrom = ::GetDlgCtrlID(hwndList_);
+        di.hdr.hwndFrom = list_.Handle();
+        di.hdr.idFrom = ::GetDlgCtrlID(list_.Handle());
         di.hdr.code = LVN_GETDISPINFO;
         di.item.mask = LVIF_TEXT;
         di.item.iItem = static_cast<int>(row);
@@ -508,7 +508,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         // address otherwise. Exposed so a test can assert the jump landed on
         // a row that really matches the typed prefix, rather than on a row
         // that merely moved.
-        const LRESULT row = ::SendMessageW(hwndList_, LVM_GETNEXTITEM,
+        const LRESULT row = ::SendMessageW(list_.Handle(), LVM_GETNEXTITEM,
                                            static_cast<WPARAM>(-1),
                                            LVNI_FOCUSED);
         if (row < 0) return L"";
@@ -549,7 +549,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     // (neither - the window or another control has it).
     if (::wcscmp(op, L"focusTarget") == 0) {
         const HWND fg = ::GetFocus();
-        if (fg == hwndList_) return L"list";
+        if (fg == list_.Handle()) return L"list";
         if (fg == hwndSearchEdit_) return L"filter";
         if (fg == hwnd_) return L"window";
         return L"";
@@ -624,23 +624,13 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_NOTIFY: {
             auto* n = reinterpret_cast<NMHDR*>(lParam);
-            if (n != nullptr && n->code == NM_CUSTOMDRAW) {
-                if (n->hwndFrom == hwndList_)
-                    return OnCustomDraw(reinterpret_cast<NMLVCUSTOMDRAW*>(n));
-            }
-            // LVN_BEGINDRAG arrives from the LIST (not the header) and is the
-            // only drag notification that exists: there is no LVN_COLUMNDRAG
-            // and no end-of-drag notification in the Windows SDK - an
-            // exhaustive search of CommCtrl.h found HDN_BEGINDRAG/HDN_ENDDRAG
-            // and LVN_BEGINDRAG/LVN_BEGINRDRAG, and nothing else. So the drag
-            // is ALLOWED here by returning TRUE, and the resulting order is
-            // read back from the header once the drag has finished, rather
-            // than inferred from a payload whose meaning is not documented.
-            if (n != nullptr && n->code == LVN_BEGINDRAG &&
-                n->hwndFrom == hwndList_) {
-                ::PostMessageW(hwnd_, WM_APP_COLUMNORDER_SYNC, 0, 0);
-                return 1;   // non-zero: permit the drag
-            }
+            if (n == nullptr) return 0;
+            // The list answers for its own notifications first; whatever it
+            // does not consume falls through to this window's handler, which
+            // is what keeps the dispatcher a router rather than a second
+            // implementation of the list.
+            const std::optional<LRESULT> fromList = list_.HandleNotify(n);
+            if (fromList.has_value()) return *fromList;
             OnNotify(n, lParam);
             return 0;
         }
@@ -658,14 +648,14 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             // is NOT passed to OnTypeJumpChar, which would consume it as a
             // matching step (`/` is not a prefix of any process name, so it does
             // nothing visible but still eats the key).
-            if (hwndList_ != nullptr &&
-                ::GetFocus() == hwndList_ &&
+            if (list_.Handle() != nullptr &&
+                ::GetFocus() == list_.Handle() &&
                 static_cast<wchar_t>(wParam) == L'/') {
                 FocusFilterBox();
                 return 0;
             }
-            if (hwndList_ != nullptr &&
-                ::GetFocus() == hwndList_) {
+            if (list_.Handle() != nullptr &&
+                ::GetFocus() == list_.Handle()) {
                 if (OnTypeJumpChar(static_cast<wchar_t>(wParam)))
                     return 0;
             }
@@ -679,7 +669,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                           static_cast<int>(GET_Y_LPARAM(lParam)));
             return 0;
         case WM_SETFOCUS:
-            if (hwndList_ != nullptr) ::SetFocus(hwndList_);
+            if (list_.Handle() != nullptr) ::SetFocus(list_.Handle());
             return 0;
         case WM_APP_REFRESH_RESULT:
             OnRefreshResult(reinterpret_cast<RefreshResult*>(lParam));
@@ -1066,8 +1056,8 @@ void MainWindow::OnDnsResult(DnsResolver::Result* payload) {
             ApplyView();
             break;
         case RowEnrichment::Effect::kRepaint:
-            if (hwndList_ != nullptr)
-                ::InvalidateRect(hwndList_, nullptr, FALSE);
+            if (list_.Handle() != nullptr)
+                ::InvalidateRect(list_.Handle(), nullptr, FALSE);
             break;
         case RowEnrichment::Effect::kNone:
         default:
@@ -1134,7 +1124,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     std::uint64_t focusedId = 0;
     int topIdx = 0;
     if (preserveSelection_) {
-        CaptureSelection(ids, &focusedId, &topIdx);
+        list_.CaptureSelection(ids, &focusedId, &topIdx);
     }
     // freeze. The sampler has already run and the new snapshot is in
     // hand, but the DISPLAY is left exactly as it was. Freezing the display
@@ -1280,72 +1270,66 @@ void MainWindow::CreateControls() {
     // instead of the read dropping them where they are not.
     ::SendMessageW(hwndSearchEdit_, EM_LIMITTEXT, kSearchTextMaxChars, 0);
 
-    // Virtual list view: rows are supplied by LVN_GETDISPINFO from the
-    // store, so refreshes never destroy/recreate items.
-    //
-    // LVS_SHAREIMAGELISTS is load-bearing with the system icon list:
-    // without it the list view DESTROYS the image list assigned via
-    // LVM_SETIMAGELIST when it is itself destroyed - and that list is the
-    // shell's shared system list, not ours to destroy.
-    const DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT |
-                            LVS_OWNERDATA | LVS_SHOWSELALWAYS | WS_CLIPCHILDREN |
-                            WS_VSCROLL | WS_HSCROLL | LVS_SHAREIMAGELISTS;
-    hwndList_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", listStyle,
-                                  0, 0, 0, 0, hwnd_,
-                                  reinterpret_cast<HMENU>(IDC_LIST), hInstance_,
-                                  nullptr);
-    ::SendMessageW(hwndList_, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
-                   LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
-                   LVS_EX_HEADERDRAGDROP | LVS_EX_LABELTIP | LVS_EX_INFOTIP |
-                   LVS_EX_TRACKSELECT);
-    ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, 0, 0);
+// Virtual list view: rows are supplied by LVN_GETDISPINFO from the
+// store, so refreshes never destroy/recreate items.
+//
+// The control itself is ConnectionsList's now; all that is left here is
+// creating it and detaching the shell's shared image list onto it, which is
+// a one-time shell32 call the window owns.
+if (!list_.Create(hwnd_, hInstance_)) {
+    // No list view: the window has nothing to show. Failing here rather than
+    // carrying on makes the failure loud at startup instead of a blank
+    // rectangle with a live table nobody can see.
+    ::DestroyWindow(hwnd_);
+    hwnd_ = nullptr;
+    return;
+}
 
-    // the process-tree view mode. A tree control where the list
-    // view is, not another window answering the same question - Task
-    // Manager's Processes tab is the model. Created hidden beside the list
-    // and swapped in by ToggleTreeMode, so the mode costs nothing while it
-    // is off and the list state (selection, scroll, columns) survives the
-    // round trip untouched. Filled by ProcessTreeFill, the same
-    // implementation the detached viewer uses.
-    hwndTree_ = ::CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
-        WS_CHILD | WS_BORDER | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES |
-            TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_DISABLEDRAGDROP,
-        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(IDC_PROCESS_TREE),
-        hInstance_, nullptr);
-    ::SendMessageW(hwndTree_, WM_SETFONT,
-                   reinterpret_cast<WPARAM>(font_), MAKELPARAM(TRUE, 0));
-    if (hwndTree_ != nullptr) ::ShowWindow(hwndTree_, SW_HIDE);
+// Per-row process icons. The shell's system
+// small-icon list is attached once; each row then supplies
+// its icon's index in that list from LVN_GETDISPINFO, so a
+// connection shows the icon of the program that owns the
+// socket, the way Task Manager and Process Explorer do.
+// shell32.dll is delay-loaded, so it is checked before the
+// first shell call; a machine without it shows no icons -
+// the list is unchanged, not broken.
+if (iconImageList_ == nullptr && DllAvailable("shell32.dll")) {
+    SHFILEINFOW sfi = {};
+    iconImageList_ = reinterpret_cast<HIMAGELIST>(
+        ::SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi),
+                         SHGFI_SYSICONINDEX | SHGFI_SMALLICON));
+if (iconImageList_ != nullptr)
+    ::SendMessageW(list_.Handle(), LVM_SETIMAGELIST,
+                   LVSIL_SMALL,
+                   reinterpret_cast<LPARAM>(iconImageList_));
+}
 
-    // per-row accessible names for screen readers. The subclass serves
-    // WM_GETOBJECT on the LIST itself (a query for the main window must keep
-    // answering the main window - serving the list's object there would hide
-    // the control bar from assistive tech). Everything else passes straight
-    // through, the way ChangeLogWindow's list subclass does.
-    ::SetWindowSubclass(hwndList_, &MainWindow::ListSubclassProc, 2,
-                        reinterpret_cast<DWORD_PTR>(this));
+// the process-tree view mode. A tree control where the list
+// view is, not another window answering the same question - Task
+// Manager's Processes tab is the model. Created hidden beside the list
+// and swapped in by ToggleTreeMode, so the mode costs nothing while it
+// is off and the list state (selection, scroll, columns) survives the
+// round trip untouched. Filled by ProcessTreeFill, the same
+// implementation the detached viewer uses.
+hwndTree_ = ::CreateWindowExW(
+    WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
+    WS_CHILD | WS_BORDER | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES |
+        TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_DISABLEDRAGDROP,
+    0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(IDC_PROCESS_TREE),
+    hInstance_, nullptr);
+::SendMessageW(hwndTree_, WM_SETFONT,
+               reinterpret_cast<WPARAM>(font_), MAKELPARAM(TRUE, 0));
+if (hwndTree_ != nullptr) ::ShowWindow(hwndTree_, SW_HIDE);
 
-    // Per-row process icons. The shell's system
-    // small-icon list is attached once; each row then supplies
-    // its icon's index in that list from LVN_GETDISPINFO, so a
-    // connection shows the icon of the program that owns the
-    // socket, the way Task Manager and Process Explorer do.
-    // shell32.dll is delay-loaded, so it is checked before the
-    // first shell call; a machine without it shows no icons -
-    // the list is unchanged, not broken.
-    if (iconImageList_ == nullptr && DllAvailable("shell32.dll")) {
-        SHFILEINFOW sfi = {};
-        iconImageList_ = reinterpret_cast<HIMAGELIST>(
-            ::SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi),
-                             SHGFI_SYSICONINDEX | SHGFI_SMALLICON));
-        if (iconImageList_ != nullptr)
-            ::SendMessageW(hwndList_, LVM_SETIMAGELIST,
-                                 LVSIL_SMALL,
-                                 reinterpret_cast<LPARAM>(
-                                     iconImageList_));
-    }
+// per-row accessible names for screen readers. The subclass serves
+// WM_GETOBJECT on the LIST itself (a query for the main window must keep
+// answering the main window - serving the list's object there would hide
+// the control bar from assistive tech). Everything else passes straight
+// through, the way ChangeLogWindow's list subclass does.
+::SetWindowSubclass(list_.Handle(), &MainWindow::ListSubclassProc, 2,
+                    reinterpret_cast<DWORD_PTR>(this));
 
-    hwndStatus_ = ::CreateWindowExW(0, STATUSCLASSNAMEW, nullptr,
+hwndStatus_ = ::CreateWindowExW(0, STATUSCLASSNAMEW, nullptr,
                                     WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                     0, 0, 0, 0, hwnd_,
                                     reinterpret_cast<HMENU>(IDC_STATUS),
@@ -1359,7 +1343,7 @@ void MainWindow::CreateControls() {
     SetChildFont(hwndProtoCbo_, font);
     SetChildFont(hwndStateCbo_, font);
     SetChildFont(hwndSearchEdit_, font);
-    SetChildFont(hwndList_, font);
+    SetChildFont(list_.Handle(), font);
     SetChildFont(hwndStatus_, font);
     SetChildFont(hwndFilterLabel, font);
     SetChildFont(hwndProtoLabel, font);
@@ -1389,7 +1373,7 @@ void MainWindow::CreateControls() {
     const HWND order[] = {
         hwndAutoChk_, hwndIntervalCbo_, hwndSearchEdit_,
         hwndProtoCbo_, hwndStateCbo_,
-        hwndList_, hwndRefreshBtn_, hwndExportBtn_,
+        list_.Handle(), hwndRefreshBtn_, hwndExportBtn_,
     };
     const int n = static_cast<int>(sizeof(order) / sizeof(order[0]));
     for (int i = n - 1; i > 0; --i) {
@@ -1438,18 +1422,18 @@ void MainWindow::InitFilterControls() {
 void MainWindow::HarvestColumnWidths() {
     // The window's half is nothing: the geometry object reads the control
     // back itself.
-    cols_.HarvestWidths(hwndList_, static_cast<int>(dpi_));
+    cols_.HarvestWidths(list_.Handle(), static_cast<int>(dpi_));
 }
 
 void MainWindow::RebuildColumns() {
-    if (hwndList_ == nullptr) return;
+    if (list_.Handle() == nullptr) return;
 
     // Remember current widths (user may have dragged separators).
     HarvestColumnWidths();
 
     // Rebuilding the columns annihilates the sort arrow, so it is restored
     // here - one call, in the one place that deletes and re-inserts them.
-    cols_.SyncColumns(hwndList_, static_cast<int>(dpi_));
+    cols_.SyncColumns(list_.Handle(), static_cast<int>(dpi_));
     UpdateSortIndicator();
     SyncGroupHeader();
 }
@@ -1459,7 +1443,7 @@ void MainWindow::SyncGroupHeader() {
     // header of the column that carries the aggregation says so with the
     // live group count. A flat view keeps the plain title, so the label
     // is state rather than decoration.
-    cols_.SetGroupTitle(hwndList_, groupByProcess_, store_.View().size());
+    cols_.SetGroupTitle(list_.Handle(), groupByProcess_, store_.View().size());
 }
 
 int MainWindow::VisibleToCol(int visibleIndex) const {
@@ -1470,26 +1454,8 @@ int MainWindow::ColToVisible(int columnId) const {
     return cols_.ColToVisible(columnId);
 }
 
-int MainWindow::ProcessIconIndex(const std::wstring& path) const {
-    // The shell's system image list is the source of every
-    // index, so the index this returns is only meaningful with
-    // that list attached to the list control. Without it (no
-    // shell, or the shell list not yet resolved) there is no
-    // list to index into, so -1 ("no icon") is the honest
-    // answer rather than a number that would draw nothing.
-    if (iconImageList_ == nullptr || path.empty()) return -1;
-    SHFILEINFOW sfi = {};
-    ::SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi),
-                         SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-    // SHGetFileInfo leaves iIcon at -1 when it has no icon for
-    // the path (a process that has already exited, say), which is
-    // the list control's own "no icon" value, so it passes
-    // straight through.
-    return sfi.iIcon;
-}
-
 void MainWindow::UpdateSortIndicator() {
-    cols_.UpdateSortIndicator(hwndList_, store_.SortColumn(),
+    cols_.UpdateSortIndicator(list_.Handle(), store_.SortColumn(),
                               store_.SortAscending());
 }
 
@@ -1927,8 +1893,8 @@ void MainWindow::ApplyFontToChildren() {
          c = ::GetWindow(c, GW_HWNDNEXT)) {
         SetChildFont(c, f);
     }
-    if (hwndList_ != nullptr) {
-        if (HWND hdr = ListView_GetHeader(hwndList_)) SetChildFont(hdr, f);
+    if (list_.Handle() != nullptr) {
+        if (HWND hdr = ListView_GetHeader(list_.Handle())) SetChildFont(hdr, f);
     }
 }
 
@@ -1994,10 +1960,10 @@ void MainWindow::LayoutControls(int cx, int cy) {
 
 if (hwndStatus_ != nullptr)
     ::MoveWindow(hwndStatus_, 0, cy - kStatusH, cx, kStatusH, TRUE);
-if (hwndList_ != nullptr) {
+if (list_.Handle() != nullptr) {
     int listH = cy - kTopH - kStatusH - kMargin;
     if (listH < S(40)) listH = S(40);
-    ::MoveWindow(hwndList_, kMargin, kTopH, cx - 2 * kMargin, listH, TRUE);
+    ::MoveWindow(list_.Handle(), kMargin, kTopH, cx - 2 * kMargin, listH, TRUE);
 }
 // the tree occupies exactly the list's rectangle, and only one of
 // the two is ever visible. The swap lives here - the single place every
@@ -2009,8 +1975,8 @@ if (hwndTree_ != nullptr) {
     ::MoveWindow(hwndTree_, kMargin, kTopH, cx - 2 * kMargin, treeH, TRUE);
     ::ShowWindow(hwndTree_, treeMode_ ? SW_SHOW : SW_HIDE);
 }
-if (hwndList_ != nullptr)
-    ::ShowWindow(hwndList_, treeMode_ ? SW_HIDE : SW_SHOW);
+if (list_.Handle() != nullptr)
+    ::ShowWindow(list_.Handle(), treeMode_ ? SW_HIDE : SW_SHOW);
 }
 
 void MainWindow::OnSize(int cx, int cy) {
@@ -2086,7 +2052,7 @@ void MainWindow::ApplyView() {
     std::vector<std::uint64_t> ids;
     std::uint64_t focusedId = 0;
     int topIdx = 0;
-    CaptureSelection(ids, &focusedId, &topIdx);
+    list_.CaptureSelection(ids, &focusedId, &topIdx);
     ApplyViewWith(ids, focusedId, topIdx);
     UpdateCaption();
 }
@@ -2127,10 +2093,10 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     // valid.
     UpdateEmptyState();
     const size_t count = store_.View().size();
-    ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, static_cast<WPARAM>(count),
+    ::SendMessageW(list_.Handle(), LVM_SETITEMCOUNT, static_cast<WPARAM>(count),
                    LVSICF_NOINVALIDATEALL);
-    RestoreSelection(ids, focusedId, topIdx);
-    ::InvalidateRect(hwndList_, nullptr, TRUE);
+    list_.RestoreSelection(ids, focusedId, topIdx);
+    ::InvalidateRect(list_.Handle(), nullptr, TRUE);
     SyncGroupHeader();   // the group count moves every refresh
     // in tree mode the tree IS the view, so every path that lands
     // here - a refresh result, a column toggle, a preset, a GeoIP pick -
@@ -2138,90 +2104,6 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     // the filter box deliberately does not narrow the tree.
     if (treeMode_) RebuildTree();
     UpdateStatusBar(lastError_);
-}
-
-void MainWindow::CaptureSelection(std::vector<std::uint64_t>& ids,
-                                  std::uint64_t* focusedId, int* topIdx) const {
-    ids.clear();
-    *focusedId = 0;
-    *topIdx = 0;
-    if (hwndList_ == nullptr) return;
-    int item = -1;
-    while ((item = static_cast<int>(::SendMessageW(
-                hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(item),
-                MAKELPARAM(LVNI_SELECTED, 0)))) != -1) {
-        const Connection* c = store_.ViewRow(static_cast<size_t>(item));
-        if (c != nullptr) ids.push_back(c->id);
-    }
-    const int f = static_cast<int>(::SendMessageW(
-        hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
-        MAKELPARAM(LVNI_FOCUSED, 0)));
-    const Connection* fc = store_.ViewRow(static_cast<size_t>(f));
-    if (fc != nullptr) *focusedId = fc->id;
-    *topIdx = static_cast<int>(::SendMessageW(hwndList_, LVM_GETTOPINDEX, 0, 0));
-}
-
-void MainWindow::RestoreSelection(const std::vector<std::uint64_t>& ids,
-                                  std::uint64_t focusedId, int topIdx) {
-    if (hwndList_ == nullptr) return;
-
-    // id -> view position, built once for all lookups.
-    std::unordered_map<std::uint64_t, size_t> pos;
-    const size_t count = store_.View().size();
-    pos.reserve(count * 2 + 1);
-    for (size_t v = 0; v < count; ++v) {
-        const Connection* c = store_.ViewRow(v);
-        if (c != nullptr) pos[c->id] = v;
-    }
-
-    LVITEMW st = {};
-    st.mask = LVIF_STATE;
-    st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
-                   reinterpret_cast<LPARAM>(&st));   // clears all
-
-    for (std::uint64_t id : ids) {
-        const auto it = pos.find(id);
-        if (it == pos.end()) continue;
-        LVITEMW sel = {};
-        sel.mask = LVIF_STATE;
-        sel.stateMask = LVIS_SELECTED;
-        sel.state = LVIS_SELECTED;
-        ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
-                       static_cast<WPARAM>(it->second),
-                       reinterpret_cast<LPARAM>(&sel));
-    }
-    if (focusedId != 0) {
-        const auto it = pos.find(focusedId);
-        if (it != pos.end()) {
-            LVITEMW fo = {};
-            fo.mask = LVIF_STATE;
-            fo.stateMask = LVIS_FOCUSED;
-            fo.state = LVIS_FOCUSED;
-            ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
-                           static_cast<WPARAM>(it->second),
-                           reinterpret_cast<LPARAM>(&fo));
-        }
-    }
-
-    // Best-effort scroll preservation. Set the top index directly instead
-    // of LVM_SCROLL with a pixel delta: the old code measured the row
-    // height from item 0 (not the first visible item) and could scroll
-    // far past the end of a list that shrank under the filter.
-    //
-    // LVM_SETTOPINDEX is behind an NTDDI_VERSION guard that the Win7
-    // _WIN32_WINNT=0x0601 target hides, so the message is defined here
-    // rather than bumping the project's minimum OS version for one call.
-    const UINT msgSetTopIndex = LVM_FIRST + 119;   // LVM_SETTOPINDEX
-    if (topIdx > 0 && count > 0) {
-        const int cur = static_cast<int>(::SendMessageW(hwndList_,
-                        LVM_GETTOPINDEX, 0, 0));
-        const int maxTop = static_cast<int>(count) - 1;
-        const int want = (topIdx < maxTop) ? topIdx : maxTop;
-        if (cur >= 0 && cur != want)
-            ::SendMessageW(hwndList_, msgSetTopIndex,
-                           static_cast<WPARAM>(want), 0);
-    }
 }
 
 // does this row carry a wildcard bind - 0.0.0.0 or :: - rather than a
@@ -2308,22 +2190,22 @@ void MainWindow::ToggleTreeMode() {
         // Leaving: remember the list's selection and scroll so switching
         // back restores what the reader had, rather than whatever row the
         // tree's last caret mapped to.
-        CaptureSelection(treeSavedIds_, &treeSavedFocus_, &treeSavedTop_);
+        list_.CaptureSelection(treeSavedIds_, &treeSavedFocus_, &treeSavedTop_);
     } else if (!treeSavedIds_.empty() || treeSavedFocus_ != 0 ||
                treeSavedTop_ >= 0) {
-        RestoreSelection(treeSavedIds_, treeSavedFocus_, treeSavedTop_);
+        list_.RestoreSelection(treeSavedIds_, treeSavedFocus_, treeSavedTop_);
         treeSavedIds_.clear();
         treeSavedFocus_ = 0;
         treeSavedTop_ = -1;
-        ::SetFocus(hwndList_);
+        ::SetFocus(list_.Handle());
     }
     if (hwndTree_ != nullptr) {
         ::ShowWindow(hwndTree_, treeMode_ ? SW_SHOW : SW_HIDE);
         ::InvalidateRect(hwndTree_, nullptr, TRUE);
     }
-    if (hwndList_ != nullptr) {
-        ::ShowWindow(hwndList_, treeMode_ ? SW_HIDE : SW_SHOW);
-        ::InvalidateRect(hwndList_, nullptr, TRUE);
+    if (list_.Handle() != nullptr) {
+        ::ShowWindow(list_.Handle(), treeMode_ ? SW_HIDE : SW_SHOW);
+        ::InvalidateRect(list_.Handle(), nullptr, TRUE);
     }
     if (treeMode_) RebuildTree();
     UpdateCaption();
@@ -2411,7 +2293,7 @@ void MainWindow::RebuildTree() {
 }
 
 bool MainWindow::SelectViewRowForPid(DWORD pid) {
-    if (hwndList_ == nullptr || pid == 0) return false;
+    if (list_.Handle() == nullptr || pid == 0) return false;
     // The VIEW, not the rows: the command handlers read the selection through
     // store_.ViewRow(item), so a row outside a filtered view must not be
     // selected - it would make every command act on something the user
@@ -2429,15 +2311,15 @@ bool MainWindow::SelectViewRowForPid(DWORD pid) {
     LVITEMW st = {};
     st.mask = LVIF_STATE;
     st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
+    ::SendMessageW(list_.Handle(), LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
                    reinterpret_cast<LPARAM>(&st));
     LVITEMW sel = {};
     sel.mask = LVIF_STATE;
     sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
     sel.state = LVIS_SELECTED | LVIS_FOCUSED;
-    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(viewIdx),
+    ::SendMessageW(list_.Handle(), LVM_SETITEMSTATE, static_cast<WPARAM>(viewIdx),
                    reinterpret_cast<LPARAM>(&sel));
-    ::SendMessageW(hwndList_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(viewIdx),
+    ::SendMessageW(list_.Handle(), LVM_ENSUREVISIBLE, static_cast<WPARAM>(viewIdx),
                    FALSE);
     return true;
 }
@@ -2789,7 +2671,7 @@ std::wstring MainWindow::SelectedSummary() const {
     // Counted with one LVM_GETSELECTEDCOUNT rather than walking the
     // selection: a multi-row selection on a 50k virtual list must not cost
     // a round trip per selected row on every status-bar refresh.
-    const LRESULT n = ::SendMessageW(hwndList_, LVM_GETSELECTEDCOUNT, 0, 0);
+    const LRESULT n = ::SendMessageW(list_.Handle(), LVM_GETSELECTEDCOUNT, 0, 0);
     if (n <= 0) return L"no selection";
     if (n == 1) return L"1 selected";
     wchar_t buf[48] = {0};
@@ -3081,7 +2963,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             DoExport(true);
             break;
         case IDM_EDIT_SELECTALL:
-            SelectAllRows();
+            list_.SelectAll();
             break;
         case IDM_EDIT_FOCUSFILTER:
             FocusFilterBox();
@@ -3250,216 +3132,16 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
         }
         return;
     }
-    if (hdr->hwndFrom != hwndList_) return;
-    switch (hdr->code) {
-        case LVN_GETDISPINFO: {
-            auto* di = reinterpret_cast<NMLVDISPINFO*>(hdr);
-            const size_t viewIdx = static_cast<size_t>(di->item.iItem);
-            const Connection* c = store_.ViewRow(viewIdx);
-            // The icon is requested on its own (LVIF_IMAGE) when
-            // the list paints a row's image, independently of the
-            // text, so it is answered before the text-only
-            // early-out below.
-            if (c != nullptr && (di->item.mask & LVIF_IMAGE) != 0) {
-                di->item.iImage = ProcessIconIndex(c->processPath);
-            }
-            if ((di->item.mask & LVIF_TEXT) == 0) break;
-            dispBuf_[0] = L'\0';
-            if (c != nullptr) {
-                const int col = VisibleToCol(di->item.iSubItem);
-                if (col >= 0) {
-                    // when the view is grouped, a row is a process, not
-                    // a connection. The aggregate columns show the group's
-                    // totals; everything else falls through to the underlying
-                    // connection so addresses, state and ids stay real.
-                    if (const ProcessGroup* g = store_.ViewGroup(viewIdx)) {
-                        if (wintcp::GroupColumnText(*g, col, dispBuf_,
-                                                            kMaxColumnText)) {
-                            di->item.pszText = dispBuf_;
-                            break;
-                        }
-                    }
-                    ConnectionStore::GetColumnText(*c, col, dispBuf_,
-                                                           kMaxColumnText);
-                }
-            }
-            di->item.pszText = dispBuf_;
-            break;
-        }
-        case LVN_COLUMNCLICK: {
-            const auto* click = reinterpret_cast<const NMLISTVIEW*>(hdr);
-            const int col = VisibleToCol(click->iSubItem);
-            if (col < 0) break;
-            bool asc = true;
-            if (col == store_.SortColumn()) asc = !store_.SortAscending();
-            store_.SetSort(col, asc);
-            UpdateSortIndicator();
-            ApplyView();
-            break;
-        }
-        case NM_DBLCLK:
-            ShowDetailsOfSelectedRow();
-            break;
-        case LVN_GETINFOTIP: {
-            // full-value tooltips.
-            //
-            // The compact columns are abbreviated to fit their width, so a
-            // 12-digit byte count or a long path is elided with an ellipsis
-            // the reader cannot expand. The tooltip shows the value in full,
-            // one item per line, for the columns where truncation actually
-            // loses information.
-            auto* info = reinterpret_cast<NMLVGETINFOTIPW*>(hdr);
-            const int col = VisibleToCol(info->iSubItem);
-            const Connection* c =
-                store_.ViewRow(static_cast<size_t>(info->iItem));
-            if (col < 0 || c == nullptr) break;
-
-            std::wstring tip;
-            const auto add = [&tip](const wchar_t* label,
-                                    const std::wstring& value) {
-                if (!tip.empty()) tip += L"\r\n";
-                tip += label;
-                tip += L": ";
-                tip += value;
-            };
-            const auto bps = [](double v) {
-                wchar_t b[48] = {0};
-                ::swprintf_s(b, L"%.1f B/s", v);
-                return std::wstring(b);
-            };
-
-            switch (col) {
-                case COL_TRAFFIC:
-                    // The cell reads "1.2 MB / 340 kB"; the tooltip separates
-                    // the directions and names them, because "which way is
-                    // this?" is the question the compact form raises.
-                    add(L"Received", FormatBytes(c->trafficRx));
-                    add(L"Sent", FormatBytes(c->trafficTx));
-                    if (c->hostname == DnsResolver::kPendingHost)
-                        add(L"Host", L"(resolving...)");
-                    else if (!c->hostname.empty())
-                        add(L"Host", c->hostname);
-                    break;
-                case COL_BANDWIDTH:
-                    if (c->bpsKnown) {
-                        add(L"Down", bps(c->rxBps));
-                        add(L"Up", bps(c->txBps));
-                    } else {
-                        // Say WHY there is no figure instead of showing an
-                        // em-dash that reads as "zero traffic".
-                        add(L"Speed",
-                            L"not available (no counter source running)");
-                    }
-                    break;
-                case COL_PATH:
-                    if (!c->processPath.empty()) add(L"Path", c->processPath);
-                    else add(L"Path", L"(not available)");
-                    break;
-                case COL_HOST:
-                    if (c->hostname == DnsResolver::kPendingHost)
-                        add(L"Host", L"(resolving...)");
-                    else if (!c->hostname.empty())
-                        add(L"Host", c->hostname);
-                    else
-                        add(L"Host", L"(not resolved)");
-                    break;
-                case COL_CPU:
-                    if (c->cpuPct >= 0.0) {
-                        wchar_t b[48] = {0};
-                        ::swprintf_s(b, L"%.1f%% (whole process, not this "
-                                        L"connection)", c->cpuPct);
-                        add(L"CPU", b);
-                    } else {
-                        add(L"CPU", L"not available");
-                    }
-                    break;
-                case COL_NOTE:
-                    // The note in full, always - it is the one column
-                    // whose whole value is text the user cannot reconstruct
-                    // from the cell, and the cell elides anything past the
-                    // column width. Also reachable from the Bookmarks column,
-                    // so a note is findable even with the Note column hidden
-                    // (which is the default).
-                    if (!c->note.empty()) add(L"Note", c->note);
-                    break;
-                case COL_PINNED:
-                    // A pin with a note is the common case, and the note is
-                    // only visible here when the Note column is hidden - which
-                    // it is by default. Without this the only way to read a
-                    // note in the GUI would be to turn on a column first.
-                    if (c->pinned && !c->note.empty()) add(L"Note", c->note);
-                    break;
-                case COL_MEM:
-                case COL_DISK:
-                case COL_COUNTRY:
-                default:
-                    // For every other column the cell already shows the whole
-                    // value, so an empty string tells the control to use its
-                    // own default rather than a tooltip that says nothing.
-                    break;
-                case COL_TLS:
-                    // The cell shows the negotiated TLS layer, but only when the
-                    // handshake was captured (`capture --text`) or via ETW; an
-                    // empty cell really means "we did not capture it", and a
-                    // plain em-dash would read as "no TLS" rather than
-                    // "not available".
-                    if (c->tls.known && c->tls.secure) {
-                        add(L"TLS", TlsSummary(c->tls));
-                    } else {
-                        // Say WHY the cell is empty instead of showing an em-dash
-                        // that reads as "no TLS".
-                        add(L"TLS",
-                            L"not available (TLS is only populated via capture --text)");
-                    }
-                    break;
-            }
-            if (tip.empty()) break;
-            // LVN_GETINFOTIP must return a pointer the control frees with
-            // LocalFree. A std::wstring's buffer would be freed wrongly and
-            // corrupt the heap - this is the single most important detail in
-            // implementing this notification.
-            const size_t bytes = (tip.size() + 1) * sizeof(wchar_t);
-            wchar_t* out = static_cast<wchar_t*>(
-                ::LocalAlloc(LMEM_FIXED, bytes));
-            if (out == nullptr) break;
-            ::memcpy(out, tip.c_str(), bytes);
-            info->pszText = out;
-            break;
-        }
-        default:
-            break;
-    }
+    // The list's notifications were answered by ConnectionsList (in
+    // WM_NOTIFY, before this is reached), so this handler now serves only the
+    // surface the window owns: the tree.
 }
 
-// Column drag-reorder.
-//
-// THE BUG THIS FIXES. LVS_EX_HEADERDRAGDROP was already set on the list, so
-// dragging a header visibly moved the column and then it snapped back: the
-// list control performs the drag itself and, with no notification handler
-// telling it the drag was allowed to complete, discards the result. The
-// feature looked present and was in fact dead.
-//
-// WHY THE ORDER IS READ BACK rather than taken from the notification payload.
-// There is no LVN_COLUMNDRAG and no end-of-drag notification in the Windows
-// SDK. LVN_BEGINDRAG arrives when the drag STARTS, with no destination, so
-// its payload cannot say where the column was dropped. Rather than infer a
-// destination from a field that is not documented for this purpose, the
-// header is re-read AFTER the drag: at that point its item order IS the
-// user's chosen order, whatever happened in between. That is ground truth
-// instead of a guess.
-//
-// The subtle part is the translation back to colOrder_, which is a
-// permutation over ALL columns, not just the visible ones. The header only
-// knows the visible subset. Writing that straight into colOrder_ would
-// renumber hidden columns and scramble them. Instead each visible column is
-// moved to the position its new visible rank implies, leaving every hidden
-// column exactly where it was - so hiding and re-showing a column preserves
-// the slot the user gave it.
 void MainWindow::SyncColumnOrderFromHeader() {
     // The geometry object folds the drag back into the permutation and says
     // whether it actually changed. Everything else here is the window's job:
     // persist the order, and re-apply so the visible order matches.
-    if (!cols_.SyncOrderFromHeader(hwndList_)) return;
+    if (!cols_.SyncOrderFromHeader(list_.Handle())) return;
 
     // Persist immediately. A reorder is an explicit user action, and losing it
     // because the app was killed afterwards would look like the feature is
@@ -3483,7 +3165,7 @@ void MainWindow::SyncColumnOrderFromHeader() {
 // jump therefore lands on a row that is genuinely on screen; matching against
 // a hidden column could select something the user cannot see.
 bool MainWindow::OnTypeJumpChar(wchar_t ch) {
-    if (hwndList_ == nullptr) return false;
+    if (list_.Handle() == nullptr) return false;
     const size_t count = store_.View().size();
     if (count == 0) return false;
 
@@ -3517,16 +3199,16 @@ bool MainWindow::OnTypeJumpChar(wchar_t ch) {
     LVITEMW st = {};
     st.mask = LVIF_STATE;
     st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
+    ::SendMessageW(list_.Handle(), LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
                    reinterpret_cast<LPARAM>(&st));
     LVITEMW sel = {};
     sel.mask = LVIF_STATE;
     sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
     sel.state = LVIS_SELECTED | LVIS_FOCUSED;
-    ::SendMessageW(hwndList_, LVM_SETITEMSTATE, static_cast<WPARAM>(hit),
+    ::SendMessageW(list_.Handle(), LVM_SETITEMSTATE, static_cast<WPARAM>(hit),
                    reinterpret_cast<LPARAM>(&sel));
-    ::SendMessageW(hwndList_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(hit), 0);
-    ::SetFocus(hwndList_);
+    ::SendMessageW(list_.Handle(), LVM_ENSUREVISIBLE, static_cast<WPARAM>(hit), 0);
+    ::SetFocus(list_.Handle());
     return true;
 }
 
@@ -3637,7 +3319,7 @@ void MainWindow::CheckRefreshWatchdog() {
 void MainWindow::OnContextMenu(HWND target, int x, int y) {
     // the tree is a valid target in tree mode - NM_RCLICK above
     // already selected its node, so nothing on the list needs hit-testing.
-    if (target != hwndList_ && target != hwndTree_) return;
+    if (target != list_.Handle() && target != hwndTree_) return;
     POINT pt = {x, y};
 
     if (x != -1 || y != -1) {
@@ -3650,27 +3332,27 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
             // Mouse invocation: select the row under the cursor first,
             // otherwise Details/Copy/Close would act on an unrelated selection.
             POINT cp = pt;
-            ::ScreenToClient(hwndList_, &cp);
+            ::ScreenToClient(list_.Handle(), &cp);
             LVHITTESTINFO hti = {};
             hti.pt = cp;
             const int hit = static_cast<int>(::SendMessageW(
-                hwndList_, LVM_HITTEST, 0, reinterpret_cast<LPARAM>(&hti)));
+                list_.Handle(), LVM_HITTEST, 0, reinterpret_cast<LPARAM>(&hti)));
             if (hit >= 0) {
                 const int selected = static_cast<int>(::SendMessageW(
-                    hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(hit),
+                    list_.Handle(), LVM_GETNEXTITEM, static_cast<WPARAM>(hit),
                     MAKELPARAM(LVNI_SELECTED, 0)));
                 if (selected != hit) {
                     LVITEMW st = {};
                     st.mask = LVIF_STATE;
                     st.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-                    ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
+                    ::SendMessageW(list_.Handle(), LVM_SETITEMSTATE,
                                    static_cast<WPARAM>(-1),
                                    reinterpret_cast<LPARAM>(&st));
                     LVITEMW sel = {};
                     sel.mask = LVIF_STATE;
                     sel.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
                     sel.state = LVIS_SELECTED | LVIS_FOCUSED;
-                    ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
+                    ::SendMessageW(list_.Handle(), LVM_SETITEMSTATE,
                                    static_cast<WPARAM>(hit),
                                    reinterpret_cast<LPARAM>(&sel));
                 }
@@ -3679,11 +3361,11 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     } else {
         // Keyboard invocation (Shift+F10 / menu key): anchor at focus.
         const int focus = static_cast<int>(::SendMessageW(
-            hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
+            list_.Handle(), LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
             MAKELPARAM(LVNI_FOCUSED, 0)));
         RECT rc = {};
         if (focus >= 0 &&
-            ::SendMessageW(hwndList_, LVM_GETITEMRECT,
+            ::SendMessageW(list_.Handle(), LVM_GETITEMRECT,
                            static_cast<WPARAM>(focus),
                            reinterpret_cast<LPARAM>(&rc))) {
             pt.x = rc.left + 16;
@@ -3692,13 +3374,13 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
             pt.x = 0;
             pt.y = 0;
         }
-        ::ClientToScreen(hwndList_, &pt);
+        ::ClientToScreen(list_.Handle(), &pt);
     }
 
     HMENU menu = ::CreatePopupMenu();
     if (menu == nullptr) return;
     const int selected = static_cast<int>(::SendMessageW(
-        hwndList_, LVM_GETSELECTEDCOUNT, 0, 0));
+        list_.Handle(), LVM_GETSELECTEDCOUNT, 0, 0));
     const UINT gray = (selected > 0) ? MF_ENABLED : MF_GRAYED;
     // The one remaining user of the POINTER form, and deliberately so:
     // every read of `row` below happens BEFORE TrackPopupMenu runs its modal
@@ -3706,7 +3388,7 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     // the row after the menu returns, so there is no window in which a refresh
     // could free it. A copy would also be harmless but would copy a row whose
     // only use is four boolean reads.
-    const Connection* row = FirstSelectedRow();
+    const Connection* row = list_.FirstSelectedRow();
     // "Close connection" only works for IPv4 - SetTcpEntry has no IPv6
     // variant (TcpTable.cpp:262 refuses it with a clear error). Disable the item
     // for IPv6 rows rather than letting the user invoke it and read the error,
@@ -3809,94 +3491,7 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
 }
 
 // ---------------------------------------------------------------------------
-// selection helpers ----------------------------------------------------------
-
-const Connection* MainWindow::FirstSelectedRow() const {
-    if (hwndList_ == nullptr) return nullptr;
-    int item = static_cast<int>(::SendMessageW(
-        hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
-        MAKELPARAM(LVNI_FOCUSED | LVNI_SELECTED, 0)));
-    if (item == -1)
-        item = static_cast<int>(::SendMessageW(
-            hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1),
-            MAKELPARAM(LVNI_SELECTED, 0)));
-    if (item == -1) return nullptr;
-    return store_.ViewRow(static_cast<size_t>(item));
-}
-
-std::optional<Connection> MainWindow::SelectedCopy() const {
-    const Connection* row = FirstSelectedRow();
-    if (row == nullptr) return std::nullopt;
-    return *row;
-}
-
-bool MainWindow::SelectedRowIndices(std::vector<int>& out) const {
-    out.clear();
-    if (hwndList_ == nullptr) return false;
-    int item = -1;
-    while ((item = static_cast<int>(::SendMessageW(
-                hwndList_, LVM_GETNEXTITEM, static_cast<WPARAM>(item),
-                MAKELPARAM(LVNI_SELECTED, 0)))) != -1) {
-        out.push_back(item);
-    }
-    return !out.empty();
-}
-
 // ---------------------------------------------------------------------------
-// actions --------------------------------------------------------------------
-
-std::wstring MainWindow::SelectedRowsText(bool copyAll) const {
-    std::wstring out;
-    // a copy of a grouped or frozen view says so up front, so the
-    // pasted table cannot be mistaken for a live flat one. '#' comment
-    // lines, matching the CLI's own comment convention, so a TSV reader
-    // that skips comment lines keeps working and a human reader sees the
-    // state the rows were copied in.
-    if (groupByProcess_) {
-        out += L"# WinTCP: rows grouped by process (per-process aggregates, "
-               L"not individual connections)\r\n";
-    }
-    if (frozen_) {
-        const ULONGLONG age = FrozenAgeMs(frozenAt_, ::GetTickCount64());
-        out += L"# WinTCP: view frozen " +
-               ((age < kMsPerSecond) ? std::wstring(L"<1s")
-                                     : FormatDuration(age / kMsPerSecond)) +
-               L" ago (stale snapshot, not live)\r\n";
-    }
-    // Header = visible columns, tab separated.
-    for (size_t i = 0; i < cols_.VisToCol().size(); ++i) {
-        if (i != 0) out += L"\t";
-        out += kColumns[cols_.VisToCol()[i]].title;
-    }
-    out += L"\r\n";
-
-    wchar_t buf[kMaxColumnText] = {0};
-    const auto appendRow = [&](const Connection& c) {
-        for (size_t i = 0; i < cols_.VisToCol().size(); ++i) {
-            ConnectionStore::GetColumnText(c, cols_.VisToCol()[i], buf,
-                                           kMaxColumnText);
-            if (i != 0) out += L"\t";
-            out += buf;
-        }
-        out += L"\r\n";
-    };
-
-    if (copyAll) {
-        for (size_t v = 0; v < store_.View().size(); ++v) {
-            const Connection* c = store_.ViewRow(v);
-            if (c != nullptr) appendRow(*c);
-        }
-        return out;
-    }
-    std::vector<int> sel;
-    if (!SelectedRowIndices(sel)) return out;
-    for (int item : sel) {
-        const Connection* c = store_.ViewRow(static_cast<size_t>(item));
-        if (c != nullptr) appendRow(*c);
-    }
-    return out;
-}
-
 void MainWindow::ExportCsv() {
     DoExport(false);
 }
@@ -3909,7 +3504,7 @@ void MainWindow::DoExport(bool selectionOnly) {
     }
     if (selectionOnly) {
         const int n = static_cast<int>(
-            ::SendMessageW(hwndList_, LVM_GETSELECTEDCOUNT, 0, 0));
+            ::SendMessageW(list_.Handle(), LVM_GETSELECTEDCOUNT, 0, 0));
         if (n <= 0) {
             ::MessageBoxW(hwnd_, L"No rows are selected.", L"WinTCP",
                           MB_OK | MB_ICONINFORMATION);
@@ -3960,7 +3555,7 @@ void MainWindow::DoExport(bool selectionOnly) {
     std::vector<Connection> rows;
     if (selectionOnly) {
         std::vector<int> sel;
-        if (SelectedRowIndices(sel)) {
+        if (list_.SelectedRowIndices(sel)) {
             for (int item : sel) {
                 const Connection* c =
                     store_.ViewRow(static_cast<size_t>(item));
@@ -4006,10 +3601,10 @@ void MainWindow::DoExport(bool selectionOnly) {
 void MainWindow::CopySelectionToClipboard(bool copyAll) {
     if (!copyAll) {
         const int n = static_cast<int>(::SendMessageW(
-            hwndList_, LVM_GETSELECTEDCOUNT, 0, 0));
+            list_.Handle(), LVM_GETSELECTEDCOUNT, 0, 0));
         if (n <= 0) return;
     }
-    const std::wstring text = SelectedRowsText(copyAll);
+    const std::wstring text = list_.SelectedRowsText(copyAll, groupByProcess_, frozen_, frozenAt_, cols_);
     if (text.empty()) return;
     if (!::OpenClipboard(hwnd_)) {
         ::MessageBoxW(hwnd_, L"Could not open the clipboard.", L"WinTCP",
@@ -4034,7 +3629,7 @@ void MainWindow::CopySelectionToClipboard(bool copyAll) {
 }
 
 void MainWindow::KillSelectedProcess() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
 
@@ -4052,7 +3647,7 @@ void MainWindow::KillSelectedProcess() {
     //
     // The copy this handler relied on is no longer a local `const Connection
     // row = c;` that a future edit could move below the dialog: it is
-    // `SelectedCopy()` at the top of every handler, so there is no way to write
+    // `list_.SelectedCopy()` at the top of every handler, so there is no way to write
     // this handler wrong. It costs one Connection on a path the user just
     // opened a dialog for, and the whole row is copied rather than the few
     // fields this dialog happens to use, because a partial copy is a copy that
@@ -4142,7 +3737,7 @@ void MainWindow::KillSelectedProcess() {
 }
 
 void MainWindow::OpenSelectedFileLocation() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
     if (c.processPath.empty() || c.processPath == L"System") {
@@ -4169,7 +3764,7 @@ void MainWindow::OpenSelectedFileLocation() {
 // the answer to "why doesn't Process properties work?".
 //
 // void MainWindow::ShowSelectedProcessProperties() {
-//     const std::optional<Connection> sel = SelectedCopy();
+//     const std::optional<Connection> sel = list_.SelectedCopy();
 //     if (!sel.has_value()) return;
 //     const Connection& c = *sel;
 //     if (c.processPath.empty() || c.processPath == L"System") {
@@ -4206,7 +3801,7 @@ void MainWindow::OpenSelectedFileLocation() {
 // file, and Explorer does have the verb.
 
 void MainWindow::BlockSelectedConnection() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
 
@@ -4283,7 +3878,7 @@ void MainWindow::BlockSelectedConnection() {
 }
 
 void MainWindow::CloseSelectedConnection() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
     if (c.protocol != IPPROTO_TCP || c.state == MIB_TCP_STATE_LISTEN)
@@ -4365,120 +3960,11 @@ void MainWindow::RemoveAllWinTcpBlocks() {
         return;
     }
 
-    ::MessageBoxW(hwnd_,
-                  (L"Removed " + std::to_wstring(count) +
-                   L" WinTCP firewall rule(s).").c_str(),
-                  L"WinTCP - Remove all blocks",
-                  MB_OK | MB_ICONINFORMATION);
-}
-
-LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
-    switch (cd->nmcd.dwDrawStage) {
-        case CDDS_PREPAINT:
-            // CDRF_NOTIFYITEMDRAW == 0x20 == "CDRF_NOTIFYITEMPREPAINT"
-            // (the SDK defines only the generic name; same value).
-            // CDRF_NOTIFYPOSTPAINT (0x10) is requested too: the
-            // empty-state banner is drawn once over the whole list
-            // in post-paint, where the rows would have been.
-            return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
-        case CDDS_ITEMPREPAINT: {
-            // Change highlighting: green = new, yellow = state changed, red =
-            // vanished THIS refresh (then a grey retained ghost). The colors
-            // are chosen from the active theme: on a dark theme the pastel
-            // fills would glare, so a darker background and a light
-            // foreground are used instead.
-            const Connection* c = store_.ViewRow(
-                static_cast<size_t>(cd->nmcd.dwItemSpec));
-            if (c == nullptr) return CDRF_DODEFAULT;
-            // High Contrast schemes take precedence over every colour we would
-            // paint. In HC, the system's COLOR_WINDOW/COLOR_WINDOWTEXT pairing
-            // is the only legible answer: our palette would override it with
-            // pale fills on the HC-black background, while the default text
-            // colour would stay white. Returning CDRF_DODEFAULT lets the
-            // ListView paint with the user's HC scheme. The row-flash hint is
-            // a compromise we should keep off when that scheme is in effect.
-            if (HighContrastActive()) return CDRF_DODEFAULT;
-            const bool dark = ThemeIsDark();
-            if (c->flags & kRowRemoved) {
-                // a socket that vanished THIS refresh flashes red once,
-                // then settles to a muted grey retained ghost for the rest of its
-                // life (up to kMaxRetainedGhosts). deathTick is touched only at
-                // vanishing, so it equals this snapshot's tick for the flashing row.
-                const bool justDied = (c->deathTick == store_.SnapshotTick());
-                if (justDied) {
-                    if (dark) {
-                        cd->clrTextBk = RGB(0x4A, 0x1F, 0x1F);
-                        cd->clrText = RGB(0xFF, 0xB4, 0xB4);
-                    } else {
-                        cd->clrTextBk = RGB(0xF8, 0xC8, 0xC8);
-                        cd->clrText = RGB(0x7A, 0x1F, 0x1F);
-                    }
-                } else {
-                    if (dark) {
-                        cd->clrTextBk = RGB(0x2B, 0x2B, 0x2B);
-                        cd->clrText = RGB(0xC0, 0xC0, 0xC0);
-                    } else {
-                        cd->clrTextBk = RGB(0xEA, 0xEA, 0xEA);
-                        cd->clrText = RGB(0x5A, 0x5A, 0x5A);
-                    }
-                }
-                return CDRF_NEWFONT;
-            }
-            if (c->flags & kRowNew) {
-                if (dark) {
-                    cd->clrTextBk = RGB(0x1C, 0x4A, 0x1C);
-                    cd->clrText = RGB(0xB4, 0xFF, 0xB4);
-                } else {
-                    cd->clrTextBk = RGB(0xD6, 0xF5, 0xD6);
-                }
-                return CDRF_NEWFONT;
-            }
-            if (c->flags & kRowChanged) {
-                if (dark) {
-                    cd->clrTextBk = RGB(0x4A, 0x42, 0x1A);
-                    cd->clrText = RGB(0xFF, 0xFF, 0xB4);
-                } else {
-                    cd->clrTextBk = RGB(0xF8, 0xF0, 0xB8);
-                }
-                return CDRF_NEWFONT;
-            }
-            // subtle banding on unmarked rows, so the eye can follow a
-            // row across a wide table without selection. Change highlights
-            // above win - a flashing row must not be banded over - and the
-            // shades are faint enough to stay out of the text's way in
-            // both themes. (Hover itself is LVS_EX_TRACKSELECT on the list.)
-            if ((static_cast<size_t>(cd->nmcd.dwItemSpec) % 2) == 1) {
-                cd->clrTextBk =
-                    dark ? RGB(0x26, 0x26, 0x26) : RGB(0xF5, 0xF5, 0xF5);
-                return CDRF_NEWFONT;
-            }
-            return CDRF_DODEFAULT;
-        }
-        case CDDS_POSTPAINT: {
-            // The empty-state banner. When the view
-            // is empty there are no rows to paint, so the reason is
-            // drawn where the rows would have been - in the list
-            // itself - instead of only in the status bar, which a
-            // user scanning the table never looks at. The hint is
-            // only set for the cases that have a fix, so a plain,
-            // healthy "no traffic yet" table stays quiet.
-            if (store_.View().empty() && !emptyStateHint_.empty()) {
-                RECT rc = cd->nmcd.rc;
-                ::SetBkMode(cd->nmcd.hdc, TRANSPARENT);
-                ::SetTextColor(cd->nmcd.hdc,
-                                   ::GetSysColor(COLOR_GRAYTEXT));
-                ::DrawTextW(cd->nmcd.hdc,
-                                emptyStateHint_.c_str(),
-                                static_cast<int>(emptyStateHint_.size()),
-                                &rc,
-                                DT_CENTER | DT_VCENTER |
-                                    DT_WORDBREAK | DT_NOPREFIX);
-            }
-            return CDRF_DODEFAULT;
-        }
-        default:
-            return CDRF_DODEFAULT;
-    }
+::MessageBoxW(hwnd_,
+             (L"Removed " + std::to_wstring(count) +
+              L" WinTCP firewall rule(s).").c_str(),
+             L"WinTCP - Remove all blocks",
+             MB_OK | MB_ICONINFORMATION);
 }
 
 DetailModel MainWindow::BuildDetails(const Connection& c) const {
@@ -4521,7 +4007,7 @@ void MainWindow::RefreshDetailsWindow() {
 }
 
 void MainWindow::ShowDetailsOfSelectedRow() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
 
@@ -4709,7 +4195,7 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 // blocking is the point rather than the defect.
 //
 // void MainWindow::FollowSelectedStream() {
-//     const std::optional<Connection> sel = SelectedCopy();
+//     const std::optional<Connection> sel = list_.SelectedCopy();
 //     if (!sel.has_value()) return;
 //     const Connection& c = *sel;
 //
@@ -5012,7 +4498,7 @@ void MainWindow::RefreshBookmarkMarks() {
 }
 
 void MainWindow::BookmarkSelectedConnection() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
     if (c.remoteAddress.empty()) {
@@ -5073,7 +4559,7 @@ void MainWindow::BookmarkSelectedConnection() {
 }
 
 void MainWindow::EditSelectedBookmarkNote() {
-    const std::optional<Connection> sel = SelectedCopy();
+    const std::optional<Connection> sel = list_.SelectedCopy();
     if (!sel.has_value()) return;
     const Connection& c = *sel;
     // Copy before the prompt: it runs a modal loop, and a refresh arriving in
@@ -5641,18 +5127,6 @@ void MainWindow::WriteChangeLog() {
     if (changeLog_.IsOpen()) changeLog_.AppendEvents(changes);
 }
 
-// ---- keyboard UX ------------------------------------------------
-
-void MainWindow::SelectAllRows() {
-    if (hwndList_ == nullptr) return;
-    LVITEMW it = {};
-    it.stateMask = LVIS_SELECTED;
-    it.state = LVIS_SELECTED;
-    ::SendMessageW(hwndList_, LVM_SETITEMSTATE,
-                   static_cast<WPARAM>(-1) /* all items */,
-                   reinterpret_cast<LPARAM>(&it));
-}
-
 void MainWindow::FocusFilterBox() {
     if (hwndSearchEdit_ == nullptr) return;
     ::SetFocus(hwndSearchEdit_);
@@ -5713,10 +5187,10 @@ void MainWindow::RefreshSystemColors() {
     if (hwndBrushWindow_ != nullptr) ::DeleteObject(hwndBrushWindow_);
     hwndBrushWindow_ = ::CreateSolidBrush(bg);
 
-    if (hwndList_ != nullptr) {
-        ::SendMessageW(hwndList_, LVM_SETTEXTCOLOR, 0, tx);
-        ::SendMessageW(hwndList_, LVM_SETTEXTBKCOLOR, 0, bg);
-        ::SendMessageW(hwndList_, LVM_SETBKCOLOR, 0, bg);
+    if (list_.Handle() != nullptr) {
+        ::SendMessageW(list_.Handle(), LVM_SETTEXTCOLOR, 0, tx);
+        ::SendMessageW(list_.Handle(), LVM_SETTEXTBKCOLOR, 0, bg);
+        ::SendMessageW(list_.Handle(), LVM_SETBKCOLOR, 0, bg);
     }
     if (hwndStatus_ != nullptr)
         ::SendMessageW(hwndStatus_, SB_SETBKCOLOR, 0,
