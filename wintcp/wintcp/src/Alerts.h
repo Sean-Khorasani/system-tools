@@ -41,15 +41,11 @@ namespace wintcp {
 
 // Thresholds for the alert engine below. Zero disables a given alert.
 //
-// "user-configurable" is what these SHOULD be, not
-// what they are — there is no persistence, no CLI, and no editor, and the
-// engine has no production caller (only selftest drives it). Wiring the loop
-// (persist + per-refresh Evaluate + balloon via ShowTrayBalloon + a surface
-// to set thresholds) is a new feature, not errata, so it is NOT done here.
-// What IS done: the evaluation core, latch semantics and suppression counting
-// are implemented, pure and pinned by alert.* selftests, so the future
-// feature starts at the seam, not from zero. Do not delete this as "dead
-// code" — it is an unwired feature with tests, which is a different thing.
+// These ARE user-configurable: the values persist in the settings store, the
+// `wintcp.exe alert` CLI verb reads and writes them, and the window evaluates
+// them on every refresh and raises a tray balloon per alert. The seam the
+// evaluation core exposes is what that loop is built on - the core itself
+// stays pure, so it is directly testable and the loop over it stays thin.
 struct AlertSettings {
     bool enabled = false;                 // master switch, off by default
     double bpsWarn = 0.0;                 // per-connection bytes/sec
