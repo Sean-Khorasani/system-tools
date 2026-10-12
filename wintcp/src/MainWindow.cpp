@@ -1496,29 +1496,28 @@ void MainWindow::RunAlerts() {
         UpdateStatusBar(L"wintcp.ini: " + portableErr);
     }
     if (!s.Load()) return;              // no store, no alerting - say nothing
-    alertHint_.clear();
-    suppressedAlerts_ = 0;
-    if (!s.alerts.enabled) {
-        // Reset on disable: a stale latch would fire the instant alerting is
-        // turned back on, for a condition the user never saw happen.
-        alertEngine_.Reset();
-        return;
-    }
-    const std::vector<Connection> rows = store_.Rows();   // a copy, on purpose
+
     // The rules are read here, per tick, for the same reason the settings are:
     // `alert rule add` from another process has to reach a running window without a
     // restart. One list, so the CLI and the window cannot disagree about what is
     // being watched.
     const std::vector<AlertRule> rules = AlertRuleStore::Load();
 
-    const std::vector<Alert> fired = alertEngine_.Evaluate(rows, s.alerts);
-    const std::vector<Alert> ruleFired =
-        alertEngine_.EvaluateRules(rows, rules, s.alerts);
-    for (const Alert& a : fired) RaiseAlert(a);
-    for (const Alert& a : ruleFired) RaiseAlert(a);
-    // Surfaced, not hidden: "nothing appeared" and "it is all already on fire" are
-    // different answers and only one of them is fine.
-    suppressedAlerts_ = alertEngine_.SuppressedCount();
+    // The hint is rebuilt from scratch every pass: the status line names what
+    // fired on THIS tick, not an accumulation since the window opened. The
+    // balloon path never touches it, so an empty hint means "no alerts fired
+    // this tick" while the tray is up - which is the right answer to show.
+    alertHint_.clear();
+
+    // The pass itself is AlertMonitor's. The window's contribution is the
+    // snapshot (copied by value: an emit pumps messages and can reallocate the
+    // store) and the answer to "what does an alert look like here", which is
+    // RaiseAlert - one balloon per alert when the tray icon is up, the status
+    // line when it is not.
+    const std::vector<Connection> rows = store_.Rows();   // a copy, on purpose
+    alertMonitor_.Run(rows, s.alerts, rules,
+                      [this](const Alert& a) { RaiseAlert(a); });
+    suppressedAlerts_ = alertMonitor_.SuppressedCount();
     UpdateStatusBar(lastError_);
 }
 
@@ -1528,10 +1527,12 @@ void MainWindow::RunAlerts() {
 void MainWindow::RaiseAlert(const Alert& a) {
     if (tray_.IsShown()) {
         tray_.Balloon(a.title, a.text, NIIF_WARNING);
-    } else {
-        if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
-        alertHint_ += a.title;
+        return;
     }
+    // The monitor built the hint for this tick; the balloon path bypasses it,
+    // so only the no-icon case needs the join.
+    if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
+    alertHint_ += a.title;
 }
 
 // ---- empty states -----------------------------------------------------

@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "Alerts.h"
+#include "AlertMonitor.h"
 #include "BlockConn.h"
 #include "ConnectionStore.h"
 #include "ChartsWindow.h"
@@ -437,10 +438,14 @@ bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
     // which rows the badge decided were exposed, so the reason can be
     // shown without re-walking the store. Keyed on row id.
     std::wstring exposureDetail_;
-    // the alert fallback when there is no tray icon, and the count of
+    // The alert fallback when there is no tray icon, and the count of
     // alerts currently suppressed by the engine's latch.
     std::wstring alertHint_;
     size_t suppressedAlerts_ = 0;
+    // The alert engine's wiring (engine + latch + suppressed count). The engine
+    // is pure and tested; this is its only production caller, and it used to be
+    // inline RunAlerts, which is why a tested feature had no caller at all.
+    AlertMonitor alertMonitor_;
     bool topMost_ = false;                 // View > Always on top
     // View > Tray icon. 'trayIconShown_' was a second truth for the same fact
     // and lived beside it; TrayIcon::IsShown() is the one that decides
@@ -542,11 +547,12 @@ bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
     // and the settings line) through the enrichment object, and holds
     // neither database itself.
     //
-    // The engine is pure; this is its ONLY production caller.
-    // It used to have none at all, which is why the alert.* selftests
-    // were the only thing exercising it.
-    AlertEngine alertEngine_;
-    wchar_t dispBuf_[kMaxColumnText] = {0};  // LVN_GETDISPINFO scratch buffer
+// The alert engine and the rule store both live outside the window now -
+// AlertMonitor owns the engine and the latch, AlertRuleStore (Alerts.h) owns
+// the rule list, and both are wired by that module. Neither was ever the
+// window's business; the alert.* selftests used to be the only thing exercising
+// them because nothing else called them.
+wchar_t dispBuf_[kMaxColumnText] = {0};  // LVN_GETDISPINFO scratch buffer
 
     std::wstring filterDebounceText_;
     bool autoRefresh_ = false;

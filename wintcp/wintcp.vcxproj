@@ -209,6 +209,7 @@
   <ClCompile Include="src\ListViewColumns.cpp" />
   <ClCompile Include="src\ConnectionsList.cpp" />
   <ClCompile Include="src\ConnectionsListOwner.cpp" />
+  <ClCompile Include="src\AlertMonitor.cpp" />
   <ClCompile Include="src\TrayIcon.cpp" />
     <ClCompile Include="src\ProcessInfo.cpp" />
     <ClCompile Include="src\Utils.cpp" />
