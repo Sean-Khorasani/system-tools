@@ -35,334 +35,20 @@
 #include "ExposureScore.h"       // the exposure badge predicate
 #include "FontCache.h"
 #include "Theme.h"       // shared palette + HighContrastActive()
-#include "Alerts.h"     // AlertEngine, ShowTrayBalloon     // shared, DPI-correct fonts
+#include "Alerts.h"      // AlertEngine, ShowTrayBalloon
+#include "MainWindowInternal.h"   // shared constants + free helpers
 #include "resource.h"
 
 namespace wintcp {
-namespace {
 
-const UINT_PTR kRefreshTimerId = 1;     // auto-refresh tick -> worker request
-const UINT_PTR kFilterTimerId  = 2;     // filter debounce
-const UINT_PTR kStatusTimerId  = 3;     // 1 s tick for the status-bar clock
-const UINT   kFilterDebounceMs = 250;   // B4: dev constant. One keystroke-delay
-                                         // on any machine built this century.
-const UINT   kStatusTickMs = 1000;
-
-// Unit conversions. Six sites spelled 1000 as "milliseconds per second"
-// and three as 96 = "DPI at which the design pixel sizes are unscaled". Named
-// because the failure mode of getting them wrong is a factor-of-1000 age or a
-// window a third the intended size at 200% scaling, and neither looks like a
-// bug where it is shown.
-constexpr ULONGLONG kMsPerSecond = 1000;
-constexpr int kDpiUnscaled = 96;
-
-// The layout is authored at an unscaled 1080x640 and multiplied by the system
-// DPI ratio (S() does that). Named because the pair appeared TWICE - once as
-// the MulDiv fallback in Create() and once in the WM_CREATE handler calling
-// LayoutControls - and the two must agree or the first painted frame has a
-// different geometry from every later one.
-constexpr int kDesignWidth = 1080;
-constexpr int kDesignHeight = 640;
-
-// What the filter box holds. One constant for BOTH ends of the round trip: the
-// control's EM_LIMITTEXT (what the user may type) and the buffer
-// CurrentSearchText() reads into. See the create site for why they must agree.
-constexpr int kSearchTextMaxChars = 512;
-
-// Smallest window geometry worth restoring from the saved settings. Below it
-// a toolbar row and the list cannot both be laid out, so the saved rect is
-// ignored in favour of CW_USEDEFAULT rather than restored into something the
-// app cannot draw.
-constexpr int kMinRestorableW = 200;
-constexpr int kMinRestorableH = 140;
-
-// The visible set is a 32-bit mask, one bit per column (Columns.h), so the
-// persisted order can name at most 32 columns - the same freeze the mask
-// encodes, and the UiProbe that reports the order walks no further.
-constexpr size_t kMaxColOrderSlots = 32;
-
-// Longest command line the kill-confirmation prompt will quote in full. A
-// longer one is cut rather than filling a modal dialog with several screenfuls
-// of arguments the user has to dismiss; the name, PID, path and start time
-// below it are the parts that identify the process.
-constexpr size_t kKillPromptCmdChars = 300;
-
-// Text buffers. Each holds a fixed sentence around a value, and every
-// swprintf_s in this file truncates rather than overruns, so these are slack
-// sized for the longest wording each site uses rather than a shared maximum.
-// The UiProbe buffer is a static because it is returned to a caller that
-// reads it after the function has returned.
-constexpr size_t kWatchdogMsgChars = 192;
-constexpr size_t kProbeBufChars = 1024;
-constexpr size_t kMissingColListChars = 512;
-constexpr size_t kCommaColChars = 16;
-constexpr size_t kKillPromptChars = 1536;
-constexpr size_t kBlockPromptChars = 1024;
-
-// Themed colors: the app follows the system theme. High-contrast mode
-// (WO_HC_ACTIVE) wins over everything - see RefreshSystemColors().
-struct ColDef { int id; const wchar_t* title; int width; int fmt; };
-const ColDef kColumns[COL_COUNT] = {
-    // Header text comes from ConnectionStore::ColumnTitle so the GUI, CSV
-    // export and CLI cannot drift apart; only width/format live here.
-    { COL_PROTO,   ConnectionStore::ColumnTitle(COL_PROTO),   70, LVCFMT_LEFT  },
-    { COL_LOCAL,   ConnectionStore::ColumnTitle(COL_LOCAL),  150, LVCFMT_LEFT  },
-    { COL_LPORT,   ConnectionStore::ColumnTitle(COL_LPORT),   65, LVCFMT_RIGHT },
-    { COL_REMOTE,  ConnectionStore::ColumnTitle(COL_REMOTE), 150, LVCFMT_LEFT  },
-    { COL_RPORT,   ConnectionStore::ColumnTitle(COL_RPORT),   65, LVCFMT_RIGHT },
-    { COL_STATE,   ConnectionStore::ColumnTitle(COL_STATE),  110, LVCFMT_LEFT  },
-    { COL_PID,     ConnectionStore::ColumnTitle(COL_PID),     65, LVCFMT_RIGHT },
-    { COL_PROCESS, ConnectionStore::ColumnTitle(COL_PROCESS),150, LVCFMT_LEFT  },
-    { COL_SERVICE, ConnectionStore::ColumnTitle(COL_SERVICE),130, LVCFMT_LEFT  },
-    { COL_HOST,    ConnectionStore::ColumnTitle(COL_HOST),   180, LVCFMT_LEFT  },
-    { COL_PATH,    ConnectionStore::ColumnTitle(COL_PATH),   300, LVCFMT_LEFT  },
-    { COL_TRAFFIC, ConnectionStore::ColumnTitle(COL_TRAFFIC),130, LVCFMT_LEFT  },
-    { COL_RX,      ConnectionStore::ColumnTitle(COL_RX),      88, LVCFMT_RIGHT },
-    { COL_TX,      ConnectionStore::ColumnTitle(COL_TX),      88, LVCFMT_RIGHT },
-    { COL_NETTOTAL, ConnectionStore::ColumnTitle(COL_NETTOTAL),100, LVCFMT_RIGHT },
-    { COL_CPU,     ConnectionStore::ColumnTitle(COL_CPU),     70, LVCFMT_RIGHT },
-    { COL_MEM,     ConnectionStore::ColumnTitle(COL_MEM),    100, LVCFMT_RIGHT },
-    { COL_DISK,    ConnectionStore::ColumnTitle(COL_DISK),   110, LVCFMT_RIGHT },
-    { COL_DURATION, ConnectionStore::ColumnTitle(COL_DURATION), 80, LVCFMT_RIGHT },
-    { COL_BANDWIDTH, ConnectionStore::ColumnTitle(COL_BANDWIDTH),140, LVCFMT_LEFT },
-    { COL_TLS,     ConnectionStore::ColumnTitle(COL_TLS),   190, LVCFMT_LEFT  },
-    { COL_COUNTRY, ConnectionStore::ColumnTitle(COL_COUNTRY), 90, LVCFMT_LEFT  },
-    { COL_PINNED,  ConnectionStore::ColumnTitle(COL_PINNED),  90, LVCFMT_LEFT  },
-    // the `ss -i` columns. Widths are the GUI's own budget rather than
-    // Columns.h's cap: the list view scrolls horizontally and each column is
-    // independently resizable, so there is no table to keep aligned here. Right
-    // aligned, because every one of these is a number.
-    { COL_RTT,     ConnectionStore::ColumnTitle(COL_RTT),     80, LVCFMT_RIGHT },
-    { COL_MINRTT,  ConnectionStore::ColumnTitle(COL_MINRTT),  90, LVCFMT_RIGHT },
-    { COL_CWND,    ConnectionStore::ColumnTitle(COL_CWND),   100, LVCFMT_RIGHT },
-    { COL_RETRANS, ConnectionStore::ColumnTitle(COL_RETRANS),100, LVCFMT_RIGHT },
-    // Wider than COL_BANDWIDTH because the value is a process total and so
-    // carries more digits - the same shape, a larger number.
-    { COL_GROUPRATE, ConnectionStore::ColumnTitle(COL_GROUPRATE),160, LVCFMT_LEFT },
-    // The bookmark note. Wider than most because the value is prose the
-    // user typed, not a code or a number; anything longer elides and the
-    // tooltip shows it whole.
-    { COL_NOTE,    ConnectionStore::ColumnTitle(COL_NOTE),  180, LVCFMT_LEFT },
-  // 150 is generous for "<pid> <name>" because the name is an unbounded
-  // process name; it elides with a tooltip beyond that.
-  { COL_PPID,    ConnectionStore::ColumnTitle(COL_PPID),   150, LVCFMT_LEFT },
-  // Both are short words, sized from their longest possible cell
-  // ("Protected+AC" and "BAD SIG") rather than from a typical row, so enabling
-  // either never shows a truncated header.
-  { COL_INTEGRITY, ConnectionStore::ColumnTitle(COL_INTEGRITY), 90, LVCFMT_LEFT },
-  { COL_SIGNATURE, ConnectionStore::ColumnTitle(COL_SIGNATURE), 90, LVCFMT_LEFT },
-};
-
-// Every column needs exactly one IDM_COL_* command (View > Columns) and one
-// entry in kColumns; a mismatch shows up here instead of as a column that
-// cannot be toggled.
-static_assert(COL_COUNT == IDM_COL_COUNT,
-              "resource.h IDM_COL_COUNT is out of step with Columns.h COL_COUNT");
-static_assert(sizeof(kColumns) / sizeof(kColumns[0]) == COL_COUNT,
-              "kColumns must describe every ColumnId");
-
-// Display order for the list header. IDs, masks and widths stay keyed by
-// ColumnId; the *visible* columns are inserted in this order. Identity
-// leads (Process, CPU %, Traffic) because those are what a first-time
-// user scans, then the connection identity (Proto/addresses/state/PID),
-// then the auxiliary lookups. The hidden-by-default stat columns sit
-// next to CPU so enabling them from View > Columns keeps metrics grouped.
-// EVERY ColumnId must appear exactly once. The static_assert below does not
-// catch a duplicate (the array would still have COL_COUNT entries), so the
-// invariant is also enforced by the sort check: a display order that is not
-// strictly increasing would mean two columns claimed the same slot.
-const int kDisplayOrder[COL_COUNT] = {
-    COL_PROCESS, COL_CPU, COL_TRAFFIC, COL_PROTO,
-    COL_LOCAL, COL_LPORT, COL_REMOTE, COL_RPORT, COL_STATE, COL_PID,
-    COL_SERVICE, COL_HOST, COL_PATH,
-    // The two rate columns sit together, then the connection-health columns:
-    // RTT next to Min RTT next to Cwnd next to Retrans is the order `ss -i`
-    // prints, and keeping them adjacent means the relationship between a
-    // current RTT and its best-ever value is visible at a glance.
-    COL_DURATION, COL_BANDWIDTH, COL_GROUPRATE,
-    COL_RTT, COL_MINRTT, COL_CWND, COL_RETRANS,
-    COL_TLS, COL_COUNTRY, COL_PINNED, COL_NOTE,
-    // join the other per-process identity and trust columns:
-    // after the bookmark fields, before the raw stat columns.
-    COL_PPID, COL_INTEGRITY, COL_SIGNATURE,
-    COL_MEM, COL_DISK, COL_RX, COL_TX, COL_NETTOTAL,
-};
-
-struct StateItem { const wchar_t* label; DWORD state; };
-const StateItem kStateItems[] = {
-    { L"All states",       kAllStates },
-    { L"ESTABLISHED",      MIB_TCP_STATE_ESTAB },
-    { L"LISTENING",        MIB_TCP_STATE_LISTEN },
-    { L"TIME_WAIT",        MIB_TCP_STATE_TIME_WAIT },
-    { L"SYN_SENT",         MIB_TCP_STATE_SYN_SENT },
-    { L"SYN_RECEIVED",     MIB_TCP_STATE_SYN_RCVD },
-    { L"FIN_WAIT_1",       MIB_TCP_STATE_FIN_WAIT1 },
-    { L"FIN_WAIT_2",       MIB_TCP_STATE_FIN_WAIT2 },
-    { L"CLOSE_WAIT",       MIB_TCP_STATE_CLOSE_WAIT },
-    { L"CLOSING",          MIB_TCP_STATE_CLOSING },
-    { L"LAST_ACK",         MIB_TCP_STATE_LAST_ACK },
-    { L"CLOSED",           MIB_TCP_STATE_CLOSED },
-    { L"DELETE_TCB",       MIB_TCP_STATE_DELETE_TCB },
-    { L"— (none / UDP)", 0 },
-};
-
-void SetChildFont(HWND hwnd, HFONT font) {
-    if (font != nullptr && hwnd != nullptr) {
-        ::SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font),
-                       MAKELPARAM(TRUE, 0));
-    }
-}
-
-void AddComboString(HWND cbo, const wchar_t* text, LPARAM itemData = 0) {
-    const LRESULT idx = ::SendMessageW(cbo, CB_ADDSTRING, 0,
-                                       reinterpret_cast<LPARAM>(text));
-    if (idx != CB_ERR)
-        ::SendMessageW(cbo, CB_SETITEMDATA, static_cast<WPARAM>(idx), itemData);
-}
-
-// Check/uncheck a menu item that lives in one of the top-level submenus:
-// CheckMenuItem only inspects the given menu handle, and the item IDs
-// live inside the File/View/Edit popups, not on the menu bar itself.
-void SetMenuCheck(HMENU menu, UINT id, bool on) {
-    if (menu == nullptr) return;
-    const UINT flags = MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED);
-    const int count = ::GetMenuItemCount(menu);
-    for (int i = 0; i < count; ++i) {
-        if (::GetMenuItemID(menu, i) == static_cast<UINT>(-1)) {
-            HMENU sub = ::GetSubMenu(menu, i);
-            if (sub != nullptr &&
-                ::GetMenuState(sub, id, MF_BYCOMMAND) != 0xFFFFFFFF) {
-                ::CheckMenuItem(sub, id, flags);
-                return;
-            }
-        }
-    }
-    ::CheckMenuItem(menu, id, flags);
-}
-
-// Locate the View > Columns popup by scanning for one of its command IDs
-// instead of by hard-coded submenu index. New items have been inserted above
-// "Columns" across phases (tray, traffic, graphs...), so any fixed
-// index silently pointed at the wrong entry and left colsMenu NULL -- which
-// meant no column check mark was ever shown.
-HMENU FindColumnsMenu(HMENU mainMenu) {
-    if (mainMenu == nullptr) return nullptr;
-    const int topCount = ::GetMenuItemCount(mainMenu);
-    for (int t = 0; t < topCount; ++t) {
-        HMENU top = ::GetSubMenu(mainMenu, t);
-        if (top == nullptr) continue;
-        const int subCount = ::GetMenuItemCount(top);
-        for (int i = 0; i < subCount; ++i) {
-            HMENU sub = ::GetSubMenu(top, i);
-            if (sub == nullptr) continue;
-            const int n = ::GetMenuItemCount(sub);
-            for (int j = 0; j < n; ++j) {
-                if (::GetMenuItemID(sub, j) == IDM_COL_PROTO) return sub;
-            }
-        }
-    }
-    return nullptr;
-}
-
-// True for the four columns fed by the ETW per-PID counters.
-// They all render "—" until a traffic session is running, so showing any
-// of them is what triggers the implicit start + status-bar hint below.
-bool IsTrafficColumn(int col) {
-    return col == COL_TRAFFIC || col == COL_RX || col == COL_TX ||
-           col == COL_NETTOTAL;
-}
-
-// the admin-required actions (Block connection, ETW traffic counters)
-// get the standard UAC shield glyph so a click reads as "this needs elevation"
-// before the consent dialog appears. The icon is loaded once from the system
-// via SHGetStockIconInfo (SIID_SHIELD); like every other shell32 call in this
-// file it is skipped when shell32 is delay-load unavailable, and skipped under
-// high contrast - HC already provides its own high-contrast palette and a
-// custom bitmap there would be drawn over it illegibly.
-//
-// The shield is shown only when the action is actually elevation-gated AND the
-// current process is not already elevated. A standard account that cannot
-// elevate at all gets NO shield: there is nothing the glyph could promise, so
-// clicking the item shows ElevationUnavailableReason() instead (see the
-// OnCommand handlers for IDM_BLOCK_CONNECTION / IDM_VIEW_TRAFFIC).
-HICON g_shieldIcon = nullptr;   // owned; never destroyed (leak == exit)
-bool  g_shieldTried = false;    // attempted load once
-
-HICON LoadShieldIcon() {
-    // shell32.dll is delay-loaded (WinCaps.cpp); gate before touching it so
-    // the absence is a clean no-shield rather than an import crash.
-    if (!DllAvailable("shell32.dll")) return nullptr;
-    SHSTOCKICONINFO sii = {};
-    sii.cbSize = sizeof(sii);
-    if (::SHGetStockIconInfo(SIID_SHIELD, SHGFI_ICON | SHGFI_SMALLICON, &sii)
-            != S_OK || sii.hIcon == nullptr)
-        return nullptr;
-    return sii.hIcon;
-}
-
-HICON ShieldIcon() {
-    if (!g_shieldTried) {
-        g_shieldTried = true;
-        g_shieldIcon = LoadShieldIcon();
-    }
-    return g_shieldIcon;
-}
-
-// True when the current process lacks an elevated token but its user still has
-// a linked Administrators token - i.e. elevation is possible via UAC and the
-// shield glyph is meaningful.
-bool ElevationPossibleForUser() {
-    return !IsElevated() && IsAdminMember();
-}
-
-// Put/take the shield glyph on a single menu item. `on == false` clears it.
-// Draws (or clears) the UAC shield glyph on one menu item. `on` already folds
-// in every precondition - the caller's HighContrastActive() result, and
-// ElevationPossibleForUser() - so this function just owns the bitmap plumbing.
-// No-op when there is no shield icon to draw (shell32 delay-loaded away, or
-// the stock-icon query failed).
-void SetMenuItemShield(HMENU menu, UINT id, bool on) {
-    if (menu == nullptr) return;
-    const HICON icon = ShieldIcon();
-    if (icon == nullptr) return;               // no shell / icon unavailable
-    MENUITEMINFO mii = {};
-    mii.cbSize   = sizeof(mii);
-    mii.fMask    = MIIM_BITMAP;
-    mii.dwTypeData = nullptr;                  // not used with MIIM_BITMAP
-    mii.hbmpItem = on ? reinterpret_cast<HBITMAP>(icon) : nullptr;
-    ::SetMenuItemInfoW(menu, id, FALSE, &mii);
-}
-
-// the bar-menu ETW item (View > Per-PID traffic counters). Its submenu
-// is found by scanning for the item, so this fails closed if the menu layout
-// in wintcp.rc changes rather than asserting a wrong submenu index.
-// `highContrast` is supplied by the caller (MainWindow::HighContrastActive)
-// because this is a free function and cannot call that member.
-void ApplyTrafficShield(HMENU bar, bool highContrast) {
-    if (bar == nullptr) return;
-    const bool showShield = !highContrast && ElevationPossibleForUser();
-    const int pops = ::GetMenuItemCount(bar);
-    for (int i = 0; i < pops; ++i) {
-        HMENU sub = ::GetSubMenu(bar, i);
-        if (sub == nullptr) continue;
-        const int subCount = ::GetMenuItemCount(sub);
-        for (int j = 0; j < subCount; ++j) {
-            MENUITEMINFO sm = {};
-            sm.cbSize = sizeof(sm);
-            sm.fMask = MIIM_ID;
-            if (::GetMenuItemInfoW(sub, static_cast<UINT>(j), TRUE, &sm) &&
-                sm.wID == IDM_VIEW_TRAFFIC) {
-                SetMenuItemShield(sub, IDM_VIEW_TRAFFIC, showShield);
-            }
-        }
-    }
-}
-
-}  // namespace
+// The shared helpers/constants live in MainWindowInternal.h so the window's
+// translation units can use them without each owning a copy. Brought in
+// unqualified because that is how they read at every call site.
+using namespace mw;
 
 const wchar_t* MainWindow::kClassName = L"WinTcpViewerMainWindow";
 
-std::shared_ptr<MainWindow::WorkerSink> MainWindow::Sink() const {
+std::shared_ptr<WorkerSink> MainWindow::Sink() const {
     if (sink_ == nullptr) sink_ = std::make_shared<WorkerSink>();
     return sink_;
 }
@@ -372,7 +58,7 @@ std::shared_ptr<MainWindow::WorkerSink> MainWindow::Sink() const {
 
 MainWindow::~MainWindow() {
     engine_.Stop();
-    dns_.Stop();
+    enrich_.StopDnsWorker();
     std::lock_guard<std::mutex> lk(Sink()->m);
     for (RefreshResult* p : Sink()->pendingRefresh) delete p;
     Sink()->pendingRefresh.clear();
@@ -736,7 +422,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     // "streamVisible" was removed with the hex window. Nothing queried it, and
     // a property that always answers "0" would be a lie waiting for a caller.
     if (::wcscmp(op, L"geoLoaded") == 0) {
-        return geo_.Loaded() ? L"1" : L"0";
+        return enrich_.CountryLoaded() ? L"1" : L"0";
     }
     if (::wcscmp(op, L"trafficTimeouts") == 0) {
         if (socketTraffic_ == nullptr) return L"0";
@@ -856,7 +542,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return buf;
     }
     if (::wcscmp(op, L"trayShown") == 0) {
-        return trayIconShown_ ? L"1" : L"0";
+        return tray_.IsShown() ? L"1" : L"0";
     }
     // which child control holds keyboard focus, so the harness can prove
     // the `/` shortcut moved focus to the filter box. "list", "filter", or ""
@@ -1016,7 +702,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 ::ShowWindow(hwnd_, SW_RESTORE);
                 ::SetForegroundWindow(hwnd_);
             } else if (ev == WM_RBUTTONUP) {
-                ShowTrayMenu();
+                tray_.ShowMenu(hwnd_, topMost_);
             }
             return 0;
         }
@@ -1054,7 +740,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                             break;
                     }
                 }
-                if (trayEnabled_ && trayIconShown_) {
+                if (trayEnabled_ && tray_.IsShown()) {
                     ::ShowWindow(hwnd_, SW_HIDE);
                     // the first hide explains where the window went and
                     // how to get it back. A window that vanishes with no
@@ -1064,15 +750,12 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (!trayHideBalloonShown_ &&
                         DllAvailable("shell32.dll")) {
                         trayHideBalloonShown_ = true;
-                        trayNid_.uFlags = NIF_INFO;
-                        ::wcscpy_s(trayNid_.szInfo,
-                                   L"WinTCP is still running in the tray. "
-                                   L"Single-click the icon to restore it; "
-                                   L"right-click it for options.");
-                        ::wcscpy_s(trayNid_.szInfoTitle, L"WinTCP");
-                        trayNid_.dwInfoFlags = NIIF_INFO;
-                        trayNid_.uTimeout = 5000;
-                        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+                        tray_.Balloon(
+                            L"WinTCP",
+                            L"WinTCP is still running in the tray. "
+                            L"Single-click the icon to restore it; "
+                            L"right-click it for options.",
+                            NIIF_INFO);
                     }
                     return 0;
                 }
@@ -1153,7 +836,7 @@ void MainWindow::OnCreate() {
     // database still reports the parser's reason on demand.
     if (settings_.geoIpPath[0] != L'\0') {
         std::wstring err;
-        if (geo_.Load(settings_.geoIpPath, &err)) {
+        if (enrich_.LoadCountry(settings_.geoIpPath, &err)) {
             OfferGeoIpForAllRows();
             ApplyView();
         }
@@ -1163,7 +846,7 @@ void MainWindow::OnCreate() {
     // neither survives a relaunch.
     if (settings_.asnIpPath[0] != L'\0') {
         std::wstring asnErr;
-        if (asnGeo_.Load(settings_.asnIpPath, &asnErr)) {
+        if (enrich_.LoadAsn(settings_.asnIpPath, &asnErr)) {
             OfferAsnForAllRows();
             ApplyView();
         }
@@ -1237,8 +920,8 @@ void MainWindow::OnCreate() {
     if (topMost_)
         ::SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    RefreshSystemColors();                // system theme / high contrast
-    if (trayEnabled_) TrayAdd();
+RefreshSystemColors();                // system theme / high contrast
+SyncTray();
 
     // resume per-PID traffic counters if they were enabled while
     // elevated. A silent failure here (e.g. the user is no longer elevated)
@@ -1271,7 +954,7 @@ void MainWindow::OnDestroy() {
     ::KillTimer(hwnd_, kStatusTimerId);
     ::KillTimer(hwnd_, kFilterTimerId);
     engine_.Stop();                      // no callbacks can be in flight after join
-    dns_.Stop();
+    enrich_.StopDnsWorker();
     etw_.Stop();                         // stop the kernel logger
     charts_.Close();                     // stop the 1 s sampler
     changeLog_.Close();                  // destroy before the owner goes
@@ -1285,8 +968,8 @@ void MainWindow::OnDestroy() {
         for (DnsResolver::Result* p : Sink()->pendingDns) delete p;
         Sink()->pendingDns.clear();
     }
-    SaveSettings();                        // persist UI state
-    TrayRemove();                          
+SaveSettings();                        // persist UI state
+tray_.Remove();
     if (logFile_ != INVALID_HANDLE_VALUE) {
         ::CloseHandle(logFile_);
         logFile_ = INVALID_HANDLE_VALUE;
@@ -1374,142 +1057,40 @@ void MainWindow::StartWorker() {
 }
 
 void MainWindow::StartDnsWorker() {
-    const std::shared_ptr<WorkerSink> sink = Sink();
-    sink->hwnd = hwnd_;
-    // a per-lookup budget so a wedged resolver stalls at most one tick
-    // instead of the whole queue. The GUI renders `pending` for the rows still
-    // in flight; a status-bar hint fires on stalls.
-    dns_.SetTimeoutMs(DnsResolver::kDnsTimeoutDefault);
-    dns_.SetStallSink([sink](unsigned pending, unsigned /*ms*/) {
-        // Post a status hint; the row cells already show `pending`. Guarded so
-        // a late fire during shutdown does not dereference a torn-down window.
-        if (sink->hwnd != nullptr && !sink->shuttingDown)
-            ::PostMessageW(sink->hwnd, WM_APP_DNS_STALLED,
-                           static_cast<WPARAM>(pending), 0);
-    });
-    dns_.Start([sink](std::unique_ptr<DnsResolver::Result> r) {
-        DnsResolver::Result* raw = r.release();
-        bool registered = false;
-        {
-            std::lock_guard<std::mutex> lk(sink->m);
-            if (!sink->shuttingDown) {
-                sink->pendingDns.insert(raw);
-                registered = true;
-            }
-        }
-        if (registered) {
-            if (::PostMessageW(sink->hwnd, WM_APP_DNS_RESULT, 0,
-                               reinterpret_cast<LPARAM>(raw)) == FALSE) {
-                std::lock_guard<std::mutex> lk(sink->m);
-                if (sink->pendingDns.erase(raw) != 0) delete raw;
-            }
-        } else {
-            delete raw;
-        }
-    });
-    dns_.SetEnabled(dnsEnabled_);
+    enrich_.StartDnsWorker(hwnd_, Sink());
 }
 
 void MainWindow::OnDnsResult(DnsResolver::Result* payload) {
-    if (payload == nullptr) return;
-    {
-        std::lock_guard<std::mutex> lk(Sink()->m);
-        if (Sink()->pendingDns.erase(payload) == 0) return;   // not ours (shutdown)
-    }
-    const std::unique_ptr<DnsResolver::Result> result(payload);
-    if (store_.SetHostname(result->address, result->hostname)) {
-        // Hostname affects filtering/sorting only when one of them is in
-        // play; otherwise a repaint is enough.
-        if (store_.SortColumn() == COL_HOST || !filterProgram_.empty()) {
+    // The effect the enrichment layer reports is mapped to this window's
+    // controls here, and nowhere else: the layer cannot know a list view
+    // exists, and a layer that asked the window to repaint would be a layer
+    // with a window dependency.
+    const RowEnrichment::Effect effect =
+        enrich_.OnDnsResult(payload, store_, Sink(),
+                            !filterProgram_.empty());
+    switch (effect) {
+        case RowEnrichment::Effect::kReapply:
             ApplyView();
-        } else if (hwndList_ != nullptr) {
-            ::InvalidateRect(hwndList_, nullptr, FALSE);
-        }
+            break;
+        case RowEnrichment::Effect::kRepaint:
+            if (hwndList_ != nullptr)
+                ::InvalidateRect(hwndList_, nullptr, FALSE);
+            break;
+        case RowEnrichment::Effect::kNone:
+        default:
+            break;
     }
 }
 
-void MainWindow::OfferDnsForAllRows() {
-    for (const Connection& r : store_.Rows()) dns_.Offer(r.remoteAddress);
-}
+void MainWindow::OfferDnsForAllRows() { enrich_.OfferAll(store_); }
 
-// GeoIP join.
-//
-// Walks the rows and fills the Country column from the user-supplied MMDB.
-// Unlike DNS this is entirely SYNCHRONOUS and local: a tree walk per distinct
-// address, no thread, no queue, no re-entrancy. That is what makes it cheap
-// enough to do inline on every refresh - a few hundred binary searches over a
-// mapped file is microseconds, and a separate worker would cost more in
-// synchronisation than the lookups cost.
-//
-// The distinct-address memo is what keeps it that way. A busy machine has
-// thousands of rows but far fewer distinct peers (every one of a browser's
-// connections to one CDN edge shares an address), and looking each up again is
-// pure waste. 'seen' is scoped to this call rather than kept on the member
-// because the row set is replaced wholesale on every refresh - a persistent
-// cache would have to be invalidated anyway, and a per-pass set is provably
-// correct with no invalidation logic to get wrong.
-void MainWindow::OfferGeoIpForAllRows() {
-    if (!geo_.Loaded()) return;
-    std::unordered_set<std::wstring> seen;
-    seen.reserve(store_.Rows().size());
-    for (const Connection& r : store_.Rows()) {
-        if (r.remoteAddress.empty()) continue;
-        if (!seen.insert(r.remoteAddress).second) continue;
-        std::wstring code;
-        if (r.family == AF_INET) {
-            // Rows carry the address as text, so parse back to the integer the
-            // tree walk wants. A remote address in the store always came from
-            // the stack, so this cannot fail; if it somehow does, skipping is
-            // correct and must not blank a country another row already set.
-            in_addr v4 = {};
-            if (::InetPtonW(AF_INET, r.remoteAddress.c_str(), &v4) != 1)
-                continue;
-            code = geo_.LookupV4(ntohl(v4.S_un.S_addr));
-        } else {
-            IN6_ADDR v6 = {};
-            if (::InetPtonW(AF_INET6, r.remoteAddress.c_str(), &v6) != 1)
-                continue;
-            code = geo_.LookupV6(reinterpret_cast<const unsigned char*>(&v6));
-        }
-        // An empty code is written too: it clears a stale value when a peer
-        // moves out of a covered range, and SetCountry is a no-op when the
-        // value is already right, so this costs nothing.
-        store_.SetCountry(r.remoteAddress, code);
-    }
-}
+// GeoIP and the ASN join: the engine half is RowEnrichment's (one local pass
+// per database, both synchronous, both sharing the distinct-address memo
+// rule). What is left here is the WHEN - after every refresh, and immediately
+// after a database is loaded.
+void MainWindow::OfferGeoIpForAllRows() { enrich_.OfferGeoIp(store_); }
+void MainWindow::OfferAsnForAllRows() { enrich_.OfferAsn(store_); }
 
-// The ASN pass. Separate from OfferGeoIpForAllRows rather than folded into
-// it, because the two databases are independent: either may be loaded without
-// the other, and a row must be able to carry a country with no ASN or an ASN with
-// no country.
-//
-// It also has to run even when the COUNTRY database is absent - which is the
-// case that would otherwise silently do nothing, since the country function
-// returns early when its own database is not loaded.
-void MainWindow::OfferAsnForAllRows() {
-    if (!asnGeo_.Loaded()) return;
-    std::unordered_set<std::wstring> seen;
-    seen.reserve(store_.Rows().size());
-    for (const Connection& r : store_.Rows()) {
-        if (r.remoteAddress.empty()) continue;
-        if (!seen.insert(r.remoteAddress).second) continue;
-        AsnInfo info;
-        if (r.family == AF_INET) {
-            in_addr v4 = {};
-            if (::InetPtonW(AF_INET, r.remoteAddress.c_str(), &v4) != 1)
-                continue;
-            info = asnGeo_.LookupAsnV4(ntohl(v4.S_un.S_addr));
-        } else {
-            IN6_ADDR v6 = {};
-            if (::InetPtonW(AF_INET6, r.remoteAddress.c_str(), &v6) != 1)
-                continue;
-            info = asnGeo_.LookupAsnV6(reinterpret_cast<const unsigned char*>(&v6));
-        }
-        // Written even when empty: that clears a stale AS number when the file is
-        // reloaded with different contents, exactly as the CLI path does.
-        store_.SetAsn(r.remoteAddress, info.number, info.org);
-    }
-}
 
 void MainWindow::OnRefreshResult(RefreshResult* payload) {
     if (payload == nullptr) return;
@@ -2053,20 +1634,12 @@ void MainWindow::RunAlerts() {
     UpdateStatusBar(lastError_);
 }
 
-// One balloon per alert, whichever source it came from.
+// One balloon per alert, whichever source it came from. Without an icon there
+// is nowhere to put a balloon, so the alert lands in the status bar instead -
+// which is why this branch exists rather than a silent drop.
 void MainWindow::RaiseAlert(const Alert& a) {
-    if (trayIconShown_) {
-        // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for the
-        // duration of the call; szInfo is cleared first so a shorter previous message
-        // cannot leave its tail behind.
-        ::ZeroMemory(&trayNid_.szInfo, sizeof(trayNid_.szInfo));
-        ::ZeroMemory(&trayNid_.szInfoTitle, sizeof(trayNid_.szInfoTitle));
-        ::wcsncpy_s(trayNid_.szInfo, a.text.c_str(), _TRUNCATE);
-        ::wcsncpy_s(trayNid_.szInfoTitle, a.title.c_str(), _TRUNCATE);
-        trayNid_.uFlags = NIF_INFO;
-        trayNid_.dwInfoFlags = NIIF_WARNING;
-        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
-        trayNid_.uFlags = 0;
+    if (tray_.IsShown()) {
+        tray_.Balloon(a.title, a.text, NIIF_WARNING);
     } else {
         if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
         alertHint_ += a.title;
@@ -2104,7 +1677,7 @@ void MainWindow::UpdateEmptyState() {
     // A country-bearing column with no database behind it. Both databases count,
     // because either fills the cell.
     const bool countryShown = (visibleCols_ & (1u << COL_COUNTRY)) != 0;
-    if (countryShown && !geo_.Loaded() && !asnGeo_.Loaded()) {
+    if (countryShown && !enrich_.CountryLoaded() && !enrich_.AsnLoaded()) {
         emptyStateHint_ = L"no GeoIP database loaded - pick one in View > GeoIP "
                           L"database to fill Country";
         return;
@@ -2128,8 +1701,8 @@ void MainWindow::UpdateEmptyState() {
 void MainWindow::ShowEmptyStateActions() {
     const EmptyStateOffer offer = DecideEmptyState(
         store_.Rows().size(), store_.View().size(),
-        (visibleCols_ & (1u << COL_COUNTRY)) != 0, geo_.Loaded(),
-        asnGeo_.Loaded(), AnyTrafficColVisible(), etw_.Running(),
+        (visibleCols_ & (1u << COL_COUNTRY)) != 0, enrich_.CountryLoaded(),
+        enrich_.AsnLoaded(), AnyTrafficColVisible(), etw_.Running(),
         fallbackFlag_->load(), IsElevated());
 
     // Nothing to offer. The status-bar sentence UpdateEmptyState already sets
@@ -2994,7 +2567,7 @@ void MainWindow::UpdateTrayTip() {
     // identifiable without restoring it. Static text ("WinTCP - TCP/UDP
     // Connections") said nothing about rows, frozen/grouped modes or
     // alerts - the three states a user minimizes over and forgets.
-    if (!trayIconShown_ || hwnd_ == nullptr) return;
+    if (!tray_.IsShown() || hwnd_ == nullptr) return;
     if (!DllAvailable("shell32.dll")) return;
     const RowStats& st = store_.Stats();
     wchar_t tip[128] = {0};
@@ -3009,9 +2582,7 @@ void MainWindow::UpdateTrayTip() {
         // szTip is 128 wchar_t, so the worst case is a shortened suffix.
         ::wcscat_s(tip, extra.c_str());
     }
-    trayNid_.uFlags = NIF_TIP;
-    ::wcscpy_s(trayNid_.szTip, tip);
-    ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+    tray_.SetTip(tip);
 }
 
 void MainWindow::InitTooltips() {
@@ -3499,7 +3070,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         case IDM_VIEW_RESOLVE: {
             dnsEnabled_ = !dnsEnabled_;
-            dns_.SetEnabled(dnsEnabled_);
+            enrich_.SetDnsEnabled(dnsEnabled_);
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_RESOLVE, dnsEnabled_);
             if (dnsEnabled_) OfferDnsForAllRows();
             break;
@@ -3617,13 +3188,14 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
                            0, 0, 0, 0,
                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             break;
-        case IDM_VIEW_TRAY:
-            trayEnabled_ = !trayEnabled_;
-            settings_.trayEnabled = trayEnabled_;
+case IDM_VIEW_TRAY:
+    trayEnabled_ = !trayEnabled_;
+    settings_.trayEnabled = trayEnabled_;
     settings_.trayMinimizeChoice = trayMinimizeChoice_;
-            SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, trayEnabled_);
-            if (trayEnabled_) TrayAdd(); else TrayRemove();
-            break;
+    // SyncTray does the add/remove and the check mark in one place, so the
+    // menu tick and the icon cannot disagree.
+    SyncTray();
+    break;
         case IDM_TRAY_RESTORE:
             ::ShowWindow(hwnd_, SW_RESTORE);
             ::SetForegroundWindow(hwnd_);
@@ -5304,7 +4876,7 @@ PresetView MainWindow::CurrentPresetView() const {
     // It is the same enrichment applied from a second file, and kPresetSourceAll
     // is a four-bit mask - adding a fifth bit would be a schema change to a
     // persisted value for no distinction a user can act on.
-    if (geo_.Loaded() || asnGeo_.Loaded()) sources |= kPresetSourceGeoIp;
+    if (enrich_.CountryLoaded() || enrich_.AsnLoaded()) sources |= kPresetSourceGeoIp;
     // Widget reads stay here (search box, column mask, sort); the ViewState
     // assembly lives in the abstract layer so the CLI builds the same type.
     return CurrentPresetViewFor(CurrentSearchText(), visibleCols_,
@@ -5326,7 +4898,7 @@ void MainWindow::ApplyPresetView(const PresetView& v) {
     const bool wantDns = (v.sources & kPresetSourceHosts) != 0;
     if (wantDns != dnsEnabled_) {
         dnsEnabled_ = wantDns;
-        dns_.SetEnabled(wantDns);
+        enrich_.SetDnsEnabled(wantDns);
     }
     const bool wantTraffic = (v.sources & kPresetSourceEtw) != 0;
     if (wantTraffic) EnsureTrafficCounters();
@@ -5839,7 +5411,7 @@ void MainWindow::ShowAboutBox() {
         s.trafficTimeouts = socketTraffic_->TimeoutCount();
         s.trafficScanFailures = socketTraffic_->ScanFailureCount();
     }
-    s.geoIpLoaded = geo_.Loaded();
+    s.geoIpLoaded = enrich_.CountryLoaded();
     s.presetsAvailable = true;   // the store is in-process; always available
     for (int i = 0; i < COL_COUNT; ++i)
         if ((visibleCols_ & (1u << i)) != 0) ++s.visibleColumnCount;
@@ -5890,7 +5462,7 @@ void MainWindow::LoadGeoIpDatabase() {
     if (!::GetOpenFileNameW(&ofn)) return;   // cancelled: not an error
 
     std::wstring error;
-    if (!geo_.Load(file, &error)) {
+    if (!enrich_.LoadCountry(file, &error)) {
         ::MessageBoxW(hwnd_, error.c_str(), L"GeoIP database not loaded",
                       MB_OK | MB_ICONERROR);
         return;
@@ -5910,6 +5482,9 @@ void MainWindow::LoadGeoIpDatabase() {
 
     // Fill immediately rather than waiting for the next tick, so the Country
     // column appears at once. The user chose a file precisely to see results.
+    // Only the database that was loaded: the ASN pass has its own loader and
+    // its own settings key, and offering the other one here would make this
+    // command do twice what it says.
     OfferGeoIpForAllRows();
     ApplyView();
     UpdateStatusBar(std::wstring());
@@ -5939,7 +5514,7 @@ void MainWindow::LoadAsnDatabase() {
     if (!::GetOpenFileNameW(&ofn)) return;   // cancelled: not an error
 
     std::wstring error;
-    if (!asnGeo_.Load(file, &error)) {
+    if (!enrich_.LoadAsn(file, &error)) {
         ::MessageBoxW(hwnd_, error.c_str(),
                       L"ASN database not loaded (expected GeoLite2-ASN)",
                       MB_OK | MB_ICONERROR);
@@ -5989,13 +5564,13 @@ void MainWindow::SaveSettings() {
     // pure waste: two full registry writes on every exit, and the second
     // overwrote the first regardless.
     ::wcsncpy_s(settings_.geoIpPath,
-                geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
+                enrich_.CountryLoaded() ? enrich_.CountrySourcePath().c_str() : L"",
                 _TRUNCATE);
     // the ASN path is remembered on the same terms - whatever is actually
     // loaded - so a database the user cleared does not come back on the next
     // launch. Same single PersistSettings call below; do not add another.
     ::wcsncpy_s(settings_.asnIpPath,
-                asnGeo_.Loaded() ? asnGeo_.SourcePath().c_str() : L"",
+                enrich_.AsnLoaded() ? enrich_.AsnSourcePath().c_str() : L"",
                 _TRUNCATE);
     PersistSettings("shutdown");
 }
@@ -6264,71 +5839,20 @@ void MainWindow::RefreshSystemColors() {
 }
 
 // ---- tray icon / minimize-to-tray -------------------------------
-
-void MainWindow::TrayAdd() {
-    if (trayIconShown_ || hwnd_ == nullptr) return;
-    // shell32.dll is delay-loaded (kDelayedDlls in WinCaps.cpp) and
-    // Shell_NotifyIconW below would RAISE on a machine without it. Gating
-    // here means "minimize to tray" silently does not appear, which is the
-    // honest degradation: there is no tray to minimize to.
-    if (!DllAvailable("shell32.dll")) return;
-    trayNid_ = {};
-    trayNid_.cbSize = sizeof(trayNid_);
-    trayNid_.hWnd = hwnd_;
-    trayNid_.uID = 1;
-    trayNid_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    trayNid_.uCallbackMessage = WM_APP_TRAY;
-    trayNid_.hIcon = static_cast<HICON>(::LoadImageW(
-        hInstance_, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 16, 16, 0));
-    if (trayNid_.hIcon == nullptr)
-        trayNid_.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
-    ::wcscpy_s(trayNid_.szTip, L"WinTCP - TCP/UDP Connections");
-    trayIconShown_ = ::Shell_NotifyIconW(NIM_ADD, &trayNid_) != FALSE;
-}
-
-void MainWindow::TrayRemove() {
-    if (!trayIconShown_) return;
-    // shell32.dll is delay-loaded (kDelayedDlls in WinCaps.cpp). This gate is
-    // load-bearing even though trayIconShown_ looks like it already implies the
-    // library is there: it does NOT, because on a machine without shell32 the
-    // TrayAdd call below would have raised and left the flag false - so the
-    // invariant holds, and this guard makes that dependency explicit rather
-    // than incidental.
-    if (!DllAvailable("shell32.dll")) return;
-    ::Shell_NotifyIconW(NIM_DELETE, &trayNid_);
-    trayIconShown_ = false;
-}
-
-void MainWindow::ShowTrayMenu() {
-    HMENU menu = ::CreatePopupMenu();
-    if (menu == nullptr) return;
-    ::AppendMenuW(menu, MF_STRING, IDM_TRAY_RESTORE, L"&Open WinTCP");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING | (topMost_ ? MF_CHECKED : 0),
-                  IDM_VIEW_TOPMOST, L"Always on top");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    // this is the item the Block confirmation has always pointed at
-    // ("use Remove All WinTCP Blocks from the tray menu"). It did not exist
-    // until now, so the documented removal path has a handler; the handler
-    // reports "no rules" / "needs elevation" honestly. Always shown - built
-    // directly from the menu, no COM-query gymnastics required.
-    ::AppendMenuW(menu, MF_STRING, IDM_TRAY_UNBLOCK_ALL,
-                  L"Remove All WinTCP Blocks");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
-
-    POINT pt = {};
-    ::GetCursorPos(&pt);
-    // Required so the menu dismisses correctly when the window is hidden.
-    ::SetForegroundWindow(hwnd_);
-    const UINT cmd = ::TrackPopupMenu(
-        menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0,
-        hwnd_, nullptr);
-    ::DestroyMenu(menu);
-    ::PostMessageW(hwnd_, WM_NULL, 0, 0);
-    if (cmd != 0) {
-        ::SendMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(cmd, 0), 0);
+//
+// The tray's plumbing (add/remove/tip/balloon/menu) belongs to TrayIcon;
+// what is left here is WHEN. One call covers both directions so the icon
+// and the menu check cannot disagree - the old code carried a
+// trayEnabled_/trayIconShown_ pair for exactly that reason, and a second
+// truth is the thing it was avoiding.
+void MainWindow::SyncTray() {
+    if (hwnd_ == nullptr) return;
+    if (trayEnabled_) {
+        if (tray_.Add(hwnd_, hInstance_)) UpdateTrayTip();
+    } else {
+        tray_.Remove();
     }
+    SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, trayEnabled_);
 }
 
 MainWindow::MinimizeTarget MainWindow::ResolveMinimize() {
@@ -6391,14 +5915,13 @@ MainWindow::MinimizeTarget MainWindow::ResolveMinimize() {
         trayMinimizeChoice_ = 1;           // remember: tray
         settings_.trayMinimizeChoice = 1;
     }
-    // Enable the tray icon so the chosen behaviour takes effect on the next
-    // minimize and the icon survives this session.
-    trayEnabled_ = true;
-    settings_.trayEnabled = true;
-    settings_.Save();
-    SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, true);
-    TrayAdd();
-    return MinimizeTarget::kTray;
+// Enable the tray icon so the chosen behaviour takes effect on the next
+// minimize and the icon survives this session.
+trayEnabled_ = true;
+settings_.trayEnabled = true;
+settings_.Save();
+SyncTray();
+return MinimizeTarget::kTray;
 }
 
 }  // namespace wintcp

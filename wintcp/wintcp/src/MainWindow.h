@@ -47,21 +47,20 @@
 #include "ProcessTreeView.h"   // the process-tree view mode's fill
 #include "TypeToJump.h"
 #include "SocketTraffic.h"
+#include "TrayIcon.h"          // the notification-area icon
+#include "WorkerSink.h"        // the mailbox the worker threads post into
+#include "RowEnrichment.h"     // DNS / country / ASN
 
 namespace wintcp {
 
-// Private messages posted by worker threads (payload = registered pointer).
-enum : UINT {
-    WM_APP_REFRESH_RESULT = WM_APP + 1,   // RefreshResult*
-    WM_APP_DNS_RESULT     = WM_APP + 2,   // DnsResolver::Result*
-    WM_APP_DNS_STALLED    = WM_APP + 6,   // wParam = stalled count
-    WM_APP_TRAY           = WM_APP + 3,   // tray icon callback
-    // Posted to self when a header drag starts, so the resulting order is read
-    // back AFTER the drag has finished. Posting rather than reading
-    // inside LVN_BEGINDRAG is deliberate: at that point the header still holds
-    // the OLD order, and there is no end-of-drag notification to hook.
-    WM_APP_COLUMNORDER_SYNC = WM_APP + 4,
-};
+// The worker -> UI message ids and the mailbox itself are in WorkerSink.h:
+// the refresh worker and the enrichment subsystem both post through them.
+//
+// Posted to self when a header drag starts, so the resulting order is read
+// back AFTER the drag has finished. Posting rather than reading
+// inside LVN_BEGINDRAG is deliberate: at that point the header still holds
+// the OLD order, and there is no end-of-drag notification to hook.
+constexpr UINT WM_APP_COLUMNORDER_SYNC = WM_APP + 4;
 
 class MainWindow {
 public:
@@ -158,17 +157,19 @@ private:
     bool ThemeIsDark() const;      // system theme is dark (for highlights)
     void RefreshSystemColors();    // WM_THEMECHANGED / WM_SYSCOLORCHANGE
 
-    // Tray icon + minimize-to-tray.
-    void TrayAdd();
-    void TrayRemove();
-    void ShowTrayMenu();
+    // The notification-area icon. The icon's own plumbing (add/remove/tip/
+    // balloon/menu) is TrayIcon's; what is left here is WHEN: the remembered
+    // first-minimize choice and the prompt that asks for it.
+    TrayIcon tray_;
+    // Add the icon now when settings say it should be there; remove it when
+    // they say it should not. One call, both directions, so the menu check and
+    // the icon cannot disagree.
+    void SyncTray();
 
     // on the first minimize while the tray icon is OFF, offer the user a
     // one-shot choice - minimize-to-tray (enable the tray icon) or exit. The
     // choice is remembered in settings_.trayMinimizeChoice so the prompt never
-    // returns. Returns true if the minimize should proceed to the chosen target
-    // (the caller hides or exits accordingly). Returns false if the caller should
-    // let the default minimize-to-taskbar behaviour run.
+    // returns.
     enum class MinimizeTarget { kTaskbar, kTray, kExit };
     MinimizeTarget ResolveMinimize();
 
@@ -385,7 +386,10 @@ private:
 
     ConnectionStore store_;
     RefreshEngine engine_;
-    DnsResolver dns_;
+    // The reverse-DNS resolver, the country database and the ASN database.
+    // All three live in RowEnrichment now - the window offers and reports,
+    // and holds none of them.
+    RowEnrichment enrich_;
     EtwTraffic etw_;                      // per-PID traffic
     // non-admin per-PID traffic. Heap-allocated and never freed: a
     // scan thread wedged in SIO_TCP_INFO can outlive the window, and it holds
@@ -411,21 +415,16 @@ private:
     HANDLE logFile_ = INVALID_HANDLE_VALUE;
     std::wstring logPath_;
 
-    // worker -> UI payload registry. Everything a worker-thread callback
-    // touches lives in this heap block, never in the window: if Stop()
-    // detaches the worker, its late pass still holds a shared_ptr to the
-    // sink, so the callback can run to completion against freed-window-safe
-    // state (a PostMessage to the dead hwnd simply fails and the payload is
-    // deleted). This is what makes the bounded-join detach provably harmless
-    // rather than hopefully so. mutable so the const UiProbe accessor can
-    // read the pending counts.
-    struct WorkerSink {
-        std::mutex m;
-        std::set<RefreshResult*> pendingRefresh;
-        std::set<DnsResolver::Result*> pendingDns;
-        bool shuttingDown = false;
-        HWND hwnd = nullptr;
-    };
+    // worker -> UI payload registry. The sink itself is WorkerSink's own
+    // type now (WorkerSink.h) - it is shared by the refresh worker and the
+    // enrichment subsystem, so it cannot be private to this class.
+    // Everything a worker-thread callback touches lives in that heap block,
+    // never in the window: if Stop() detaches a worker, its late pass still
+    // holds a shared_ptr to the sink, so the callback can run to completion
+    // against freed-window-safe state (a PostMessage to the dead hwnd simply
+    // fails and the payload is deleted). This is what makes the bounded-join
+    // detach provably harmless rather than hopefully so. mutable so the const
+    // UiProbe accessor can read the pending counts.
     mutable std::shared_ptr<WorkerSink> sink_;
     // Lazy owner: created on first use so a window that never starts its
     // workers still destroys cleanly.
@@ -450,12 +449,14 @@ private:
     std::wstring alertHint_;
     size_t suppressedAlerts_ = 0;
     bool topMost_ = false;                 // View > Always on top
+    // View > Tray icon. 'trayIconShown_' was a second truth for the same fact
+    // and lived beside it; TrayIcon::IsShown() is the one that decides
+    // whether the icon is actually there (Add() can fail), so only the
+    // requested state remains here.
     bool trayEnabled_ = false;             // View > Tray icon
-    bool trayIconShown_ = false;
     // remembered first-minimize choice (mirrors settings_.trayMinimizeChoice).
     DWORD trayMinimizeChoice_ = 0;
     bool etwAutoAttempted_ = false;        // at most one implicit ETW start
-    NOTIFYICONDATAW trayNid_ = {};
     HBRUSH hwndBrushWindow_ = nullptr;   // WM_CTLCOLOR* backdrop (system)
     std::wstring lastError_;
     std::wstring lastRefreshTime_;
@@ -549,16 +550,14 @@ private:
     std::uint64_t treeSavedFocus_ = 0;
     int treeSavedTop_ = -1;
 
-    // GeoIP. Loaded lazily from the user-supplied .mmdb; never
-    // downloaded. The module existed and was fully tested but was never
-    // actually consulted, so the Country column was permanently empty - a
-    // 778-line feature wired to nothing.
-    GeoIpDatabase geo_;
-    // The ASN database is a SEPARATE file (GeoLite2-ASN, different record
-    // shape), so it is a second instance rather than a mode of the first. It is
-    // optional and independent: loading one does not disturb the other, and
-    // neither is required for the other to work.
-    GeoIpDatabase asnGeo_;
+    // GeoIP. Both databases live in RowEnrichment now - loaded lazily from
+    // the user-supplied .mmdb, never downloaded. The module existed and was
+    // fully tested but was never actually consulted, so the Country column
+    // was permanently empty - a 778-line feature wired to nothing. The
+    // window asks whether each is loaded (for the status bar, the presets
+    // and the settings line) through the enrichment object, and holds
+    // neither database itself.
+    //
     // The engine is pure; this is its ONLY production caller.
     // It used to have none at all, which is why the alert.* selftests
     // were the only thing exercising it.
