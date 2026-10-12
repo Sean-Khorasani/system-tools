@@ -36,6 +36,7 @@ wintcp/src/ListViewColumns.cpp
 wintcp/src/ConnectionsList.cpp
 wintcp/src/ConnectionsListOwner.cpp
 wintcp/src/AlertMonitor.cpp
+wintcp/src/ViewPresets.cpp
 wintcp/src/TrayIcon.cpp
     wintcp/src/TcpTable.h
     wintcp/src/ProcessInfo.cpp
