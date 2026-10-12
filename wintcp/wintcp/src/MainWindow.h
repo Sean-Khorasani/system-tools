@@ -45,6 +45,7 @@
 #include "Presets.h"
 #include "Bookmarks.h"
 #include "ViewPresets.h"    // the save/load/delete preset dialogs
+#include "BookmarkActions.h"   // the bookmark dialogs + row actions
 #include "ChangeLogWindow.h"
 #include "ProcessTreeView.h"   // the process-tree view mode's fill
 #include "TypeToJump.h"
@@ -454,6 +455,15 @@ bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
         hwnd_,
         [this]() { return CurrentPresetView(); },
         [this](const PresetView& v) { ApplyPresetView(v); }};
+    // The bookmark dialogs and row actions, wired to the list selection and
+    // the re-join-and-repaint that a change to the bookmark set means. The
+    // endpoint is copied before the first prompt in every method, because a
+    // prompt pumps messages and a refresh arriving there reallocates the
+    // store - the access violation that reproduced roughly one run in three.
+    BookmarkActions bookmarks_{
+        hwnd_,
+        [this]() { return list_.SelectedCopy(); },
+        [this]() { RefreshBookmarkMarks(); ApplyView(); }};
     bool topMost_ = false;                 // View > Always on top
     // View > Tray icon. 'trayIconShown_' was a second truth for the same fact
     // and lived beside it; TrayIcon::IsShown() is the one that decides

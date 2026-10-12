@@ -211,6 +211,7 @@
   <ClCompile Include="src\ConnectionsListOwner.cpp" />
   <ClCompile Include="src\AlertMonitor.cpp" />
   <ClCompile Include="src\ViewPresets.cpp" />
+  <ClCompile Include="src\BookmarkActions.cpp" />
   <ClCompile Include="src\TrayIcon.cpp" />
     <ClCompile Include="src\ProcessInfo.cpp" />
     <ClCompile Include="src\Utils.cpp" />
