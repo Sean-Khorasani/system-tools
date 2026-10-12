@@ -41,9 +41,9 @@ enum ColumnId {
     COL_TLS,        // TLS protocol / cipher / SNI / certificate
     COL_COUNTRY,    // GeoIP country of the remote address
     COL_PINNED,     // user bookmark + colour tag
-    // 5.5: the bookmark NOTE, as its own column.
+    // The bookmark NOTE, as its own column.
     //
-    // Why a column and not only a filter. D26 made `note:` searchable and the
+    // Why a column and not only a filter. `note:` is already searchable and the
     // CLI can print the note, but the GUI had no way to SEE one: the note lived
     // in the row and reached the screen only as a tooltip on the Bookmarks
     // column, which meant a note written on the command line was invisible to
@@ -54,7 +54,7 @@ enum ColumnId {
     // Appended, like every column after the original set, so existing persisted
     // column masks keep their meaning.
     COL_NOTE,
-    // G6: the TCP_INFO columns - "ss -i for Windows". Appended for the same
+    // The TCP_INFO columns - "ss -i for Windows". Appended for the same
     // reason as the set above: a new id cannot renumber an existing one, so
     // the persisted column mask keeps its meaning and ColVersion in
     // Settings.cpp grants the new ones.
@@ -70,8 +70,8 @@ enum ColumnId {
     COL_MINRTT,     // minimum RTT ever seen on this connection, ms
     COL_CWND,       // congestion window, bytes
     COL_RETRANS,    // cumulative bytes retransmitted
-    COL_GROUPRATE,  // G5: per-PROCESS bytes/second (a group answer only)
-    // F5.1 / F5.2 / F5.3. Appended for the same reason as every column above: a
+    COL_GROUPRATE,  // per-PROCESS bytes/second (a group answer only)
+    // Appended for the same reason as every column above: a
     // new id cannot renumber an existing one, so a persisted column mask keeps
     // its meaning and the ColVersion migration in Settings.cpp grants them.
     //
@@ -81,9 +81,9 @@ enum ColumnId {
     // em-dashes until the caller asks for the underlying work. A column that is
     // empty on first launch looks broken, which is the same reasoning the ss -i
     // columns use.
-    COL_PPID,       // F5.1: "<ppid> <parent image name>", e.g. "1234 explorer.exe"
-    COL_INTEGRITY,  // F5.2: mandatory integrity level, "+AC" for AppContainer
-    COL_SIGNATURE,  // F5.3: Authenticode verdict
+    COL_PPID,       // "<ppid> <parent image name>", e.g. "1234 explorer.exe"
+    COL_INTEGRITY,  // mandatory integrity level, "+AC" for AppContainer
+    COL_SIGNATURE,  // Authenticode verdict
     COL_COUNT
 };
 
@@ -97,7 +97,7 @@ enum ColumnId {
 //   cap   - a width BUDGET, in display columns, for cells whose final value
 //           is not knowable when the column header is printed: they are
 //           filled by a late enrichment join (dns/traffic) or by the clock
-//           (duration). The aligned header prints before those run (D15),
+    // (duration). The aligned header prints before those run,
 //           so the column takes this fixed width instead of its content's,
 //           and a cell that overflows it truncates with an ellipsis. 0 =
 //           the width is measured from the content (snug).
@@ -278,7 +278,7 @@ static_assert(kColumnSetDefault.count == 10,
 
 // Every buffer that formats a column cell through
 // ConnectionStore::GetColumnText must be at least this many wchar_t.
-// Reviewed 2026-10-01 (A3): ProcessInfo resolves image paths into
+// Reviewed 2026-10-01: ProcessInfo resolves image paths into
 // wchar_t[MAX_PATH * 2] (520 chars), i.e. 8 past this buffer. That is a
 // deliberate display-width decision, not a bug — GetColumnText marks any
 // elision with a visible ellipsis rather than cutting mid-path, so a 520-char

@@ -148,7 +148,7 @@ INT_PTR CALLBACK PromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // `(n + 3) / 4 * 4` at each site.
 constexpr size_t Pad4(size_t bytes) { return (bytes + 3) & ~static_cast<size_t>(3); }
 
-// C7. MakeTemplate used to live in an anonymous namespace, which is right for
+// MakeTemplate used to live in an anonymous namespace, which is right for
 // the layout - nothing outside should build a dialog template - but it made the
 // template arithmetic UNCHECKABLE. The one place it runs is a modal dialog, and
 // the UI harness cannot dismiss one, so every capacity rule in it went

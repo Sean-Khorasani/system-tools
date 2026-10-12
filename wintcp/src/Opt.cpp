@@ -537,7 +537,7 @@ size_t WideToUtf8Opt(const wchar_t* src, size_t srcLen,
 }
 
 // ============================================================================
-// 8. Stream Hexdump Optimization (P0 #1)
+// 8. Stream Hexdump Optimization
 // ============================================================================
 
 std::string FormatStreamHexOpt(const std::string& bytes, size_t bytesPerLine) {
@@ -594,7 +594,7 @@ std::string FormatStreamHexOpt(const std::string& bytes, size_t bytesPerLine) {
 }
 
 // ============================================================================
-// 9. Wide Lowercase Optimization (P0 #2)
+// 9. Wide Lowercase Optimization
 // ============================================================================
 
 std::wstring ToLowerWOpt(const std::wstring& s) {
@@ -631,7 +631,7 @@ std::wstring ToLowerWOpt(const std::wstring& s) {
 }
 
 // ============================================================================
-// 10. GeoIP Big-Endian Field Reads (P0 #3)
+// 10. GeoIP Big-Endian Field Reads
 // ============================================================================
 
 uint32_t ReadU32BEOpt(const unsigned char* p) {
@@ -710,7 +710,7 @@ bool ReadBytesOpt(const unsigned char* p, size_t n, uint64_t* out) {
 }
 
 // ============================================================================
-// 11. TLS Big-Endian Field Reads (P0 #4)
+// 11. TLS Big-Endian Field Reads
 // ============================================================================
 
 uint16_t TlsBe16Opt(const unsigned char* p) {
@@ -736,7 +736,7 @@ uint32_t TlsBe32Opt(const unsigned char* p) {
 }
 
 // ============================================================================
-// 12. TLS Extension Dispatch + SNI Tail Strip (P0 #5)
+// 12. TLS Extension Dispatch + SNI Tail Strip
 // ============================================================================
 
 TlsExtAction ClassifyTlsExtensionOpt(uint16_t type) {
@@ -789,7 +789,7 @@ size_t StripSniTailOpt(char* s, size_t n) {
 }
 
 // ============================================================================
-// 13. Pcap Endian Loads (P0 #6)
+// 13. Pcap Endian Loads
 // ============================================================================
 
 uint16_t Rd16Opt(const unsigned char* p, bool swap) {
@@ -807,7 +807,7 @@ uint32_t Rd32Opt(const unsigned char* p, bool swap) {
 }
 
 // ============================================================================
-// 14. Socket-Sample Join (P0 #7)
+// 14. Socket-Sample Join
 // ============================================================================
 
 namespace {
@@ -877,7 +877,7 @@ int JoinSamplesOpt(std::vector<JoinRow>& rows,
 }
 
 // ============================================================================
-// 15. Long-Needle Substring BMH (P0 #8)
+// 15. Long-Needle Substring BMH
 // ============================================================================
 
 bool FindSubstringLongOpt(const std::wstring& haystack,
@@ -920,7 +920,7 @@ bool FindSubstringLongOpt(const std::wstring& haystack,
 }
 
 // ============================================================================
-// 16. Lower-All Concat (P0 #9)
+// 16. Lower-All Concat
 // ============================================================================
 
 std::wstring BuildLowerAllOpt(const std::wstring* const* fields, size_t count) {
@@ -940,7 +940,7 @@ std::wstring BuildLowerAllOpt(const std::wstring* const* fields, size_t count) {
 }
 
 // ============================================================================
-// 17. Wide String Compare (P0 #10)
+// 17. Wide String Compare
 // ============================================================================
 
 int CompareWideOpt(const wchar_t* a, size_t na, const wchar_t* b,
@@ -979,7 +979,7 @@ int CompareWideOpt(const wchar_t* a, size_t na, const wchar_t* b,
 }
 
 // ============================================================================
-// 18. Connection-Key Hash + Equality (P1 #11)
+// 18. Connection-Key Hash + Equality
 // ============================================================================
 
 size_t HashConnKeyOpt(const unsigned char* bytes, size_t len) {
@@ -1022,7 +1022,7 @@ bool EqualConnKeyOpt(const unsigned char* a, size_t na,
 }
 
 // ============================================================================
-// 19. Batch Rate Computation (P1 #13a)
+// 19. Batch Rate Computation
 // ============================================================================
 
 size_t ComputeBpsBatchOpt(const uint64_t* prevBytes,
@@ -1050,7 +1050,7 @@ size_t ComputeBpsBatchOpt(const uint64_t* prevBytes,
 }
 
 // ============================================================================
-// 20. Per-PID Traffic Sums (P1 #13b)
+// 20. Per-PID Traffic Sums
 // ============================================================================
 
 void SumPidTrafficOpt(PidTrafficRow* rows, size_t n) {
@@ -1090,7 +1090,7 @@ void SumPidTrafficOpt(PidTrafficRow* rows, size_t n) {
 }
 
 // ============================================================================
-// 21. Rate Cell Formatting (P1 #14)
+// 21. Rate Cell Formatting
 // ============================================================================
 
 size_t FormatBpsCellOpt(wchar_t* buf, size_t bufSize, double rxBps,
@@ -1148,7 +1148,7 @@ size_t FormatBpsCellOpt(wchar_t* buf, size_t bufSize, double rxBps,
 }
 
 // ============================================================================
-// 22. MMDB UTF-8 Widen (P1 #16)
+// 22. MMDB UTF-8 Widen
 // ============================================================================
 
 std::wstring WidenUtf8Opt(const unsigned char* p, size_t n) {
@@ -1219,7 +1219,7 @@ std::wstring WidenUtf8Opt(const unsigned char* p, size_t n) {
 }
 
 // ============================================================================
-// 23. Unicast Classification (P1 #17)
+// 23. Unicast Classification
 // ============================================================================
 
 bool IsGlobalUnicastV4Opt(uint32_t a) {
@@ -1296,13 +1296,13 @@ bool IsGlobalUnicastV6Opt(const unsigned char a[16]) {
 }
 
 // ============================================================================
-// 24. Snapshot Pairing, Sort-Merge (P1 #12)
+// 24. Snapshot Pairing, Sort-Merge
 // ============================================================================
 
 namespace {
 
 inline size_t HashSnapKey(const SnapKey& k) {
-    // Same FNV-1a lanes as HashConnKeyOpt (the win from P1 #11),
+    // Same FNV-1a lanes as HashConnKeyOpt,
     // inlined here so the pairing pays no std::hash<string_view>
     // per-key cost.
     uint64_t h = 1469598103934665603ULL;
@@ -1356,7 +1356,7 @@ int PairSnapshotOpt(const SnapKey* prev, size_t nPrev,
 }
 
 // ============================================================================
-// 25. Counted-Key Linear Find (P1 #15)
+// 25. Counted-Key Linear Find
 // ============================================================================
 
 int FindCountedKeyOpt(const CountedKey* keys, size_t nKeys,
@@ -1388,7 +1388,7 @@ int FindCountedKeyOpt(const CountedKey* keys, size_t nKeys,
 }
 
 // ============================================================================
-// 26. Flow-Key Equality + Address Compare (P1 #18)
+// 26. Flow-Key Equality + Address Compare
 // ============================================================================
 
 bool FlowKeyEqualOpt(const FlowKey& a, const FlowKey& b) {
@@ -1434,7 +1434,7 @@ int CmpFlowAddrOpt(const unsigned char* a, const unsigned char* b) {
 }
 
 // ============================================================================
-// 27. Handle-Table Filter (P1 #19)
+// 27. Handle-Table Filter
 // ============================================================================
 
 size_t FilterHandlesOpt(const HandleEntry* entries, size_t n,
@@ -1467,7 +1467,7 @@ size_t FilterHandlesOpt(const HandleEntry* entries, size_t n,
 }
 
 // ============================================================================
-// 28. ETW Event Classifier + Payload (P1 #20)
+// 28. ETW Event Classifier + Payload
 // ============================================================================
 
 TrafficDir ClassifyEventOpt(const unsigned char guid[16], uint16_t id,
@@ -1530,7 +1530,7 @@ bool ParseEventPayloadOpt(const void* data, size_t length, uint32_t* pid,
 }
 
 // ============================================================================
-// 29. JSON String Escape (P2 #21)
+// 29. JSON String Escape
 // ============================================================================
 
 std::string JsonEscapeOpt(const std::wstring& s) {
@@ -1627,7 +1627,7 @@ std::string JsonEscapeOpt(const std::wstring& s) {
 }
 
 // ============================================================================
-// 30. CSV Field Escape (P2 #23)
+// 30. CSV Field Escape
 // ============================================================================
 
 std::string CsvEscapeOpt(const std::string& field) {
@@ -1678,7 +1678,7 @@ std::string CsvEscapeOpt(const std::string& field) {
 }
 
 // ============================================================================
-// 31. Small-Integer Formatting (P2 #25)
+// 31. Small-Integer Formatting
 // ============================================================================
 
 namespace {
@@ -1825,7 +1825,7 @@ size_t FormatDurationOpt(wchar_t* buf, size_t bufSize, uint64_t seconds) {
 }
 
 // ============================================================================
-// 32. IP Address Emitters (P2 #24)
+// 32. IP Address Emitters
 // ============================================================================
 
 std::wstring FormatIpv4Opt(const unsigned char addr[4]) {

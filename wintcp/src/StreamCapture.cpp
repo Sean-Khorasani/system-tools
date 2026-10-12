@@ -113,7 +113,7 @@ int RunTool(const std::wstring& exe, const std::wstring& args) {
 std::wstring SystemToolPath(const wchar_t* name) {
     wchar_t buf[MAX_PATH] = {0};
     const DWORD n = ::GetSystemDirectoryW(buf, MAX_PATH);
-    // This was the house model C10 points at, and it was already right. It now
+    // This was the house model, and it was already right. It now
     // names the shared rule so the two forms cannot drift apart again.
     if (bufferWasTooSmall(n, MAX_PATH)) return name;
     return std::wstring(buf, n) + L"\\" + name;
@@ -121,7 +121,7 @@ std::wstring SystemToolPath(const wchar_t* name) {
 
 std::wstring PktmonPath() { return SystemToolPath(L"pktmon.exe"); }
 
-// 9.2.7: etl2pcap turns pktmon's ETL into the pcapng the parser reads. It ships
+// Etl2pcap turns pktmon's ETL into the pcapng the parser reads. It ships
 // in the same directory, and before this it was named BARE on the conversion
 // command line - so its absence surfaced as a capture that ran, waited, and was
 // then thrown away at the conversion step. Probed up front instead, and invoked
@@ -131,7 +131,7 @@ std::wstring Etl2PcapPath() { return SystemToolPath(L"etl2pcap.exe"); }
 // A temp path in the user's temp dir, created with a distinctive name so a
 // stray file is recognisable. Returns empty on failure.
 //
-// C10. The worst of the four by consequence, because the result is a WRITE
+// The worst of the four by consequence, because the result is a WRITE
 // TARGET. The old test was `== 0`, which detects failure and nothing else.
 // GetTempPathW reports a too-small buffer as the REQUIRED size (measured: 35
 // into an 8-char buffer), so the check passed with dir left empty and the
@@ -200,7 +200,7 @@ std::wstring KeyEndpoint(const unsigned char* addr, uint16_t port, bool v4) {
 // Elevation is delegated to Elevate.cpp, which owns the token logic and the
 // "can this user elevate at all" question. The extra function here would
 // exist only to rename it, so it is gone.
-// 9.2.7: are the capture TOOLS on this machine? Probed once and cached, because
+// Are the capture TOOLS on this machine? Probed once and cached, because
 // the answer cannot change while the process runs and this is on a path the GUI
 // asks about while building menus.
 //
@@ -244,7 +244,7 @@ bool CaptureToolsPresent(std::wstring* whyNot) {
     if (cached == 0 && whyNot != nullptr) *whyNot = cachedWhy;
     return cached == 1;
 }
-// 9.2.7: the capture decision TABLE, split out from the two probes so that the
+// The capture decision TABLE, split out from the two probes so that the
 // order of the probes can be tested at all.
 //
 // WHY A PURE FUNCTION AND NOT JUST A COMMENTED IF-CHAIN. The order of the two
@@ -317,7 +317,7 @@ bool StartCapture(const CaptureTarget& target, unsigned eventFlags,
                  target.remotePort,
                  FormatAddrForFilter(target.localAddr, target.ipV4).c_str());
     std::wstring filt = std::wstring(L"filter add wintcp ") + ports;
-    // 9.3.7: --filter passthrough. Built on the DYNAMIC string, never the fixed
+    // The --filter passthrough. Built on the DYNAMIC string, never the fixed
     // `ports` buffer above: an IPv6 address can be 45 chars and a second
     // -i <ip> would push it past kFilterArgChars, silently truncating the
     // command - the exact failure pktmon's own truncation hides.
@@ -388,7 +388,7 @@ CaptureResult StopCapture(const CaptureTarget& target,
     // etl.c_str(), not etl: a std::wstring passed to a variadic function is
     // bitwise-copied, so its buffer is never read and the path comes out as
     // whatever happened to be on the stack.
-    // Absolute path (9.2.7). The bare name relied on PATH, so a machine where
+    // Absolute path. The bare name relied on PATH, so a machine where
     // pktmon ships but etl2pcap does not would fail HERE, after the capture.
     ::swprintf_s(conv, L"\"%s\" \"%s\" --out \"%s\"", Etl2PcapPath().c_str(),
                  etl.c_str(), pcapng.c_str());
@@ -417,7 +417,7 @@ CaptureResult StopCapture(const CaptureTarget& target,
     // past any reasonable filtered capture and safely below the 2 GB/4 GB
     // cliffs further down (vector size, DWORD read length); the number and the
     // user-facing prose below come from this one constant so they cannot
-    // disagree about the limit. B4: dev constant — memory policy, not a knob.
+    // disagree about the limit. Dev constant — memory policy, not a knob.
     constexpr LONGLONG kMaxCaptureBytes = 512ll * 1024 * 1024;
     LARGE_INTEGER size = {};
     ::GetFileSizeEx(f, &size);

@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-#include "IniFile.h"   // 9.2.10: the portable wintcp.ini
+#include "IniFile.h"   // the portable wintcp.ini
 #include "Opt.h"       // ReadUtf8File (Utf8ToWide lives in Utils.h)
 #include "Utils.h"
 
@@ -17,7 +17,7 @@ namespace {
 
 const wchar_t* kKeyPath = L"Software\\WinTCP";
 
-// Registry value names (A5). One constant per value, used by Load and Save
+// Registry value names. One constant per value, used by Load and Save
 // alike: a rename or typo in either direction used to compile cleanly and
 // silently stop persisting that field. The Bookmarks kVal* group is the model.
 const wchar_t* kValWinX = L"WinX";
@@ -30,7 +30,7 @@ const wchar_t* kValAutoRefresh = L"AutoRefresh";
 const wchar_t* kValResolveHosts = L"ResolveHosts";
 const wchar_t* kValTopMost = L"TopMost";
     const wchar_t* kValTrayEnabled = L"TrayEnabled";
-    // 9.4.6: first-minimize prompt choice (DWORD: 0=never, 1=tray, 2=exit).
+    // first-minimize prompt choice (DWORD: 0=never, 1=tray, 2=exit).
     const wchar_t* kValTrayMinimizeChoice = L"TrayMinimizeChoice";
 const wchar_t* kValTrafficEnabled = L"TrafficEnabled";
 const wchar_t* kValSortCol = L"SortCol";
@@ -43,11 +43,11 @@ const wchar_t* kValFilter = L"Filter";
 const wchar_t* kValLogEnabled = L"LogEnabled";
 const wchar_t* kValLogPath = L"LogPath";
 const wchar_t* kValLastExportDir = L"LastExportDir";
-    // 9.1.5: the picked .mmdb survives a relaunch (gui.md's admitted gap).
+    // the picked .mmdb survives a relaunch (gui.md's admitted gap).
     const wchar_t* kValGeoIpPath = L"GeoIpPath";
-// F5.4: the ASN database path.
+// the ASN database path.
 const wchar_t* kValAsnIpPath = L"AsnIpPath";
-// 9.2.11: alerting. One value per setting so a missing key leaves the engine
+// Alerting. One value per setting so a missing key leaves the engine
 //'s own default in place, which is what makes an older Settings store load clean.
 const wchar_t* kValAlertEnabled = L"AlertEnabled";
 const wchar_t* kValAlertBpsWarn = L"AlertBpsWarn";
@@ -98,9 +98,9 @@ bool SetSz(HKEY key, const wchar_t* name, const wchar_t* value) {
 // At wintcp namespace scope, NOT in the anonymous namespace above: this is the
 // shared policy that Bookmarks.cpp and Presets.cpp call, so it needs external
 // linkage. An internal-linkage copy would have let those two keep their own
-// versions, which is the C6 problem itself.
+// versions, which is the problem itself.
 //
-// The shared trust rules for a registry string (C6). Every field in this file
+// The shared trust rules for a registry string. Every field in this file
 // goes through here too, which is the point: Settings used to trust a bare
 // `type == REG_SZ` while Bookmarks and Presets each enforced a much stricter
 // set of checks on the SAME registry, so a hand-edited value could be refused
@@ -228,7 +228,7 @@ bool Settings::Load() {
     if (GetDword(root, kKeyPath, kValResolveHosts, v)) resolveHosts = (v != 0);
     if (GetDword(root, kKeyPath, kValTopMost, v)) topMost = (v != 0);
     if (GetDword(root, kKeyPath, kValTrayEnabled, v)) trayEnabled = (v != 0);
-    // 9.4.6: the choice is a small enum (0/1/2); any out-of-range DWORD read
+    // the choice is a small enum (0/1/2); any out-of-range DWORD read
     // silently leaves the default (0), which re-triggers the prompt - the safe
     // fall-back rather than guessing the user's intent.
     if (GetDword(root, kKeyPath, kValTrayMinimizeChoice, v)) {
@@ -255,7 +255,7 @@ bool Settings::Load() {
         colVisible |= (1u << COL_DURATION);
         colVisible |= (1u << COL_PINNED);
     }
-    // Version 4 added G6's four `ss -i` columns and G5's per-process rate.
+    // Version 4 added the four `ss -i` columns and the per-process rate.
     //
     // NOT made visible by default, deliberately, and this is the opposite
     // decision to versions 1-3: CPU %, Traffic, Duration and Bookmark are
@@ -270,14 +270,14 @@ bool Settings::Load() {
     // frozen past versions, not a tunable. Only the CURRENT version is a
     // constant, because it is the one future code must keep in step.
     //
-    // Version 5 (F5.1/F5.2/F5.3) added Parent, Integrity and Signature, and
+    // Version 5 added Parent, Integrity and Signature, and
     // follows version 4's precedent exactly: the bits are NOT granted. All
     // three are opt-in for the same class of reason - a parent id, a trust
     // level and a signature verdict are audit columns, and an upgrade that
     // switched them on would put three more columns on screen for everyone to
     // ask about. The bump alone is deliberate.
     if (colVersion < kCurrentColVersion) {
-        // Bump the version and nothing else. The G6/G5 columns are intentionally
+        // Bump the version and nothing else. The four diagnostic columns are intentionally
         // NOT added to colVisible - see above - and leaving this block empty but
         // present keeps the migration sequence readable, so the next column
         // added has an obvious place to go. The version bump alone is what
@@ -336,13 +336,13 @@ bool Settings::Load() {
     if (!GetSz(root, kKeyPath, kValGeoIpPath, geoIpPath,
                sizeof(geoIpPath) / sizeof(geoIpPath[0])))
         geoIpPath[0] = L'\0';
-    // F5.4. Same shape, same failure handling: an absent or unreadable value
+    // Same shape, same failure handling: an absent or unreadable value
     // leaves the path empty, which is the same 'nothing picked yet' state.
     if (!GetSz(root, kKeyPath, kValAsnIpPath, asnIpPath,
                sizeof(asnIpPath) / sizeof(asnIpPath[0])))
         asnIpPath[0] = L'\0';
 
-    // 9.2.11 / F5.6. Every value is optional; an absent one leaves the field at the
+    // Every value is optional; an absent one leaves the field at the
     // engine's default, so a half-written store loads as "whatever was there" rather
     // than failing the whole settings read.
     DWORD alertDw = 0;
@@ -366,7 +366,7 @@ bool Settings::Load() {
     return true;
 }
 
-// ---- 9.2.10: the portable `wintcp.ini` ---------------------------------------
+// ---- the portable `wintcp.ini` ----------------------------------------------
 //
 // Applied BEFORE Load() so the registry always wins. See the header for why
 // that ordering is the one that cannot surprise anyone.
@@ -480,7 +480,7 @@ bool Settings::Save() const {
     ok &= SetDword(key, kValSortCol, static_cast<DWORD>(sortCol));
     ok &= SetDword(key, kValSortAsc, sortAsc ? 1 : 0);
     ok &= SetDword(key, kValColVisible, colVisible);
-    // The G6/G5 columns stay hidden: see the version-4 migration in Load.
+    // The diagnostic columns stay hidden: see the version-4 migration in Load.
     ok &= SetDword(key, kValColVersion, kCurrentColVersion);
     ok &= SetDword(key, kValLogEnabled, logEnabled ? 1 : 0);
     if (colWidthsValid) {

@@ -83,7 +83,7 @@ private:
     struct Line {
         enum Kind { SectionHeader, SectionNote, FieldRow, FieldValue,
                     Connection, Blank,
-                    // 9.4.1: a tab-bar slot. Painted in the fixed header region
+                    // a tab-bar slot. Painted in the fixed header region
                     // (does not scroll), unlike every other line which is part
                     // of the scrolled body. `text` is the tab label; `section`
                     // carries the DetailTab ordinal so OnPaint can distinguish
@@ -121,11 +121,11 @@ private:
     void OnCommand(WORD id);
     void Layout(int cx, int cy);
     void OnPaint();
-    // 9.4.1: factored row painter. `withLeaders` is false for the pinned header
+    // factored row painter. `withLeaders` is false for the pinned header
     // (the title/tab bar never draw a dotted leader); `fieldInSection` drives
     // the alternating-row shading and is advanced by the body loop in OnPaint.
     // `textRight` is the value column's right edge: the body passes a
-    // scrollbar-aware edge (G8) so text stops clear of the native control,
+    // scrollbar-aware edge so text stops clear of the native control,
     // the header passes the full client edge.
     void PaintLine(HDC mem, const Line& l, int y, int lh, int cx, int m,
                    int ruleX, bool withLeaders, int textRight,
@@ -171,7 +171,7 @@ private:
 
     // Rendered lines, in logical units; totalContentHeight_ is their sum.
     std::vector<Line> lines_;
-    // G36: all three scroll facts are PHYSICAL pixels (S()-scaled at the
+    // all three scroll facts are PHYSICAL pixels (S()-scaled at the
     // window's own DPI). totalContentHeight_ used to sum logical heights
     // while viewHeight_ was physical, so the thumb, the clamp and the
     // click math disagreed off-96dpi. Line::height stays logical (it is a
@@ -179,7 +179,7 @@ private:
     int totalContentHeight_ = 0;
     int scrollPos_ = 0;                  // in physical pixels
     int viewHeight_ = 0;                 // scrollable body height, physical
-    // The body's vertical scrollbar (G8). A real SCROLLBAR child, so the
+    // The body's vertical scrollbar. A real SCROLLBAR child, so the
     // thumb, track, hover/press states and keyboard paging are the
     // system's - the hand-drawn thumb it replaces had none of those and
     // lived inset from the edge it scrolled.
@@ -190,7 +190,7 @@ private:
     int headerHeight_ = 0;
 
     HFONT font_ = nullptr;               // borrowed from MainWindow
-    // G33: the three derived faces are FontCache entries, borrowed like
+    // the three derived faces are FontCache entries, borrowed like
     // font_ itself - never DeleteObject here (see the destructor). The
     // cache owns every handle; deleting one would break every other
     // window holding it.

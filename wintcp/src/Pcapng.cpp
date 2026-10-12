@@ -170,7 +170,7 @@ const wchar_t* PcapngLinkTypeName(uint16_t linkType) {
 // address's first byte has its high nibble in 0-7 and so can masquerade as
 // "IPv6 version 6" - verified against a real pktmon capture, where naive
 // version-nibble probing mis-parsed 16488 good packets and rejected the
-// 8752 that it should have kept. See todo.md 3.0.
+    // 8752 that it should have kept.
 static bool FindIpOffset(const unsigned char* pkt, size_t len, uint16_t linkType,
                          size_t* off) {
     if (pkt == nullptr || len < 1) return false;

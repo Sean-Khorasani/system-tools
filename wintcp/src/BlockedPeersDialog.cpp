@@ -20,7 +20,7 @@ namespace {
 // has no entry in the .rc - the same reasoning as PromptDialog's ids.
 enum : int {
     kIdList = 2000,
-    // 9.5.5: enable/disable join the editor's actions. They are NOT aliases
+    // enable/disable join the editor's actions. They are NOT aliases
     // for delete: a disabled rule stays installed with its identity, so
     // "turn this off for an hour" is one step rather than delete-then-rederive.
     kIdDelete = IDOK + 1,
@@ -54,9 +54,9 @@ struct BlockedPeersState {
     // disabled or every rule removed. The close paths report
     // kChanged only when this is set, so dismissing the viewer
     // without touching anything reports kClosed - a refresh of
-    // the main table is earned, not assumed (G22).
+    // the main table is earned, not assumed.
     bool dirty = false;
-    // G14: click-to-sort state. Column, then direction; a second click on
+    // click-to-sort state. Column, then direction; a second click on
     // the same header flips the direction, a click elsewhere re-sorts
     // ascending. Name order is the default, matching the ledger.
     int sortCol = kBlockedColRule;
@@ -237,7 +237,7 @@ std::vector<BYTE> MakeTemplate(const wchar_t* title) {
     memcpy(p, kFont, (sizeof(kFont) / sizeof(wchar_t)) * sizeof(wchar_t));
     p += fontBytes;
 
-    // G14: a report view, not a plain list box - Rule / Remote / Status
+    // a report view, not a plain list box - Rule / Remote / Status
     // columns with a header and click-to-sort, so state is a sortable
     // column instead of a "[disabled]" text suffix. Single-select: every
     // action below acts on exactly one rule.
@@ -247,7 +247,7 @@ std::vector<BYTE> MakeTemplate(const wchar_t* title) {
                             L"SysListView32", nullptr)) {
         return std::vector<BYTE>();
     }
-    // Two button rows at the new readable size (G14: the old 76x16
+    // Two button rows at the new readable size (the old 76x16
     // buttons were barely tappable). Row 1: the lifecycle actions.
     // Row 2: Remove all and Close.
     if (!WriteItem(&p, end,
@@ -312,7 +312,7 @@ int SelectedRuleIndex(HWND list) {
 }
 
 // Enable the per-rule actions only when there is a rule to act on. The
-// empty list carries a placeholder row (G35) that is not a rule, so the
+// empty list carries a placeholder row that is not a rule, so the
 // buttons must not invite acting on it.
 void SyncActionButtons(HWND dlg, bool haveRules) {
     if (dlg == nullptr) return;
@@ -388,7 +388,7 @@ void FillItems(HWND list, BlockedPeersState* st,
     ::SendMessageW(list, WM_SETREDRAW, FALSE, 0);
     ::SendMessageW(list, LVM_DELETEALLITEMS, 0, 0);
     if (st->rules.empty()) {
-        // G35: an empty viewer names its next action instead of sitting
+        // an empty viewer names its next action instead of sitting
         // blank. Blocking a connection is what adds the first row, so
         // the placeholder points there.
         LVITEMW it = {};
@@ -456,7 +456,7 @@ void FillItems(HWND list, BlockedPeersState* st,
 // action, so the manager shows what the firewall holds rather than what the
 // dialog believed when it opened.
 //
-// 9.5.5: an action that closed the modal was a reader with extra buttons. The
+// an action that closed the modal was a reader with extra buttons. The
 // point of an editor is that you change one thing and SEE the result, so this
 // spends the cost of a re-list and keeps the selection on the same rule when
 // it still exists.
@@ -531,7 +531,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
         case WM_NOTIFY: {
-            // G14: header clicks sort. The notification arrives from the
+            // header clicks sort. The notification arrives from the
             // list's header with the list's own id, so anything else is
             // left to the default handler.
             auto* nm = reinterpret_cast<LPNMHDR>(lp);
@@ -547,7 +547,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const int id = LOWORD(wp);
             const int code = HIWORD(wp);
             if (id == kIdClose || id == IDCANCEL) {
-                // G22: dismissing the viewer is not a change. Only
+                // dismissing the viewer is not a change. Only
                 // report kChanged when a rule was actually added to
                 // or removed from the blocked set - otherwise the
                 // caller refreshes the main table for nothing.
@@ -561,7 +561,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             HWND list = GetDlgItem(hwnd, kIdList);
             const int sel = SelectedRuleIndex(list);
             if (id == kIdDelete || id == kIdEnable || id == kIdDisable) {
-                // The empty list's placeholder row (G35) is not a rule,
+                // The empty list's placeholder row is not a rule,
                 // and a click with no selection is not an action either.
                 // Each refusal names its own cause so neither reads as a
                 // broken button.
@@ -585,7 +585,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     // Deleting a rule is not reversible from
                     // here: the rule is gone and the peer can
                     // connect again, so it is confirmed by name
-                    // before it runs (G18). Enable and disable
+                    // before it runs. Enable and disable
                     // are reversible and need no confirm.
                     std::wstring prompt =
                         L"Delete the block on \"" + name +
@@ -612,7 +612,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                   L"WinTCP", MB_OK | MB_ICONERROR);
                     return TRUE;
                 }
-                st->dirty = true;   // a rule was changed (G22)
+                st->dirty = true;   // a rule was changed
                 // Stay open and re-read. A manager that closes after every
                 // action is three actions per change.
                 ReloadRules(list, st);
@@ -626,7 +626,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 // Removing every rule at once unblocks every peer
                 // this application blocked, so it is confirmed
-                // before it runs (G18).
+                // before it runs.
                 if (::MessageBoxW(hwnd,
                                   L"Remove EVERY blocked rule?\r\n\r\n"
                                   L"This unblocks all previously "
@@ -643,7 +643,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         L"WinTCP", MB_OK | MB_ICONERROR);
                     return TRUE;
                 }
-                st->dirty = true;   // every rule was removed (G22)
+                st->dirty = true;   // every rule was removed
                 ReloadRules(list, st);
                 return TRUE;
             }
@@ -664,7 +664,7 @@ INT_PTR CALLBACK BlockedPeersProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 // The single-column row text from the old list-box layout. NOT what the
 // dialog shows any more - the report view paints Rule/Remote/Status cells
-// (BlockedPeersCellText), which is the G14 fix. It stays exported because
+// (BlockedPeersCellText). It stays exported because
 // the selftest pins it: a truncation capacity is untestable through a modal
 // the UI harness cannot dismiss, so what is tested is what ships as a
 // unit-tested helper rather than nothing.
@@ -685,7 +685,7 @@ int BlockedPeersControlCount() {
     return kControlCount;
 }
 
-// One cell of the report view (G14). The columns render the same fields
+// One cell of the report view. The columns render the same fields
 // the single-line row text renders, split so each is sortable: the name
 // identifies, Remote scopes ("any" when the rule carries no scope), and
 // Status states - with the two warning states as column values rather

@@ -21,7 +21,7 @@ This page covers the desktop application. For the command-line mode see the [CLI
 - [Traffic counters in the GUI](#traffic-counters-in-the-gui)
 - [GeoIP in the window](#geoip-in-the-window)
 - [Blocked peers](#blocked-peers)
-- [Alerts (F5.6)](#alerts-f56)
+- [Alerts](#alerts)
 - [Windows integration](#windows-integration)
 - [Settings and reset](#settings-and-reset)
 - [Process tree](#process-tree)
@@ -51,7 +51,7 @@ Rows keep a stable identity across refreshes, so changes are visible rather than
 | Green | New row. |
 | Yellow | The TCP state changed (for example `ESTABLISHED` → `TIME_WAIT`). |
 | Red | The row vanished **this** refresh. It flashes red for one cycle. |
-| Grey "ghost" | A retained closed socket (F5.7). After the red flash it lingers as a grey ghost so the table keeps a short history of what closed; up to 500 sockets are kept, the oldest dropped first, with their final byte counters frozen at the moment of death. |
+| Grey "ghost" | A retained closed socket. After the red flash it lingers as a grey ghost so the table keeps a short history of what closed; up to 500 sockets are kept, the oldest dropped first, with their final byte counters frozen at the moment of death. |
 
 The identity of a row is **endpoint + PID**. State is not part of the identity, so a state change updates the same row instead of replacing it. Duplicates pair up in order rather than collapsing, which matters in practice: every browser binds its own socket to mDNS port 5353, so a busy desktop has dozens of rows that share one key. See [Architecture](architecture.md#row-identity-and-diffing) for why this matters.
 
@@ -177,7 +177,7 @@ Fields are laid out as a **two-column table**, one row per field:
 - Long values are elided rather than wrapped; a visibly shortened value beats a silent cut. Copy the value to the clipboard to get all of it.
 - The body scrolls on a **native scrollbar** (arrows, paging, thumb-drag, Home/End all work), and the keyboard scrolls too: `Up`/`Down` step a line, `PageUp`/`PageDown` a page, `Home`/`End` jump. Tabs switch with `Ctrl`+`Tab` / `Ctrl`+`Shift`+`Tab` (or the `Left`/`Right` arrows when the window itself has focus); section headers and tabs show a hand cursor. The window's accessible name is the plain-text model, so screen readers announce the same text **Copy** puts on the clipboard.
 
-Two layout faults were fixed on 2026-10-05, both of which had been reported as "the window doesn't split correctly":
+Two layout faults were fixed on 2026-10-05, both of which surface as "the window doesn't split correctly":
 
 - Each field used to be **two** stacked rows - the label, then the value indented beneath it - so a section cost 34 px of captions and read as text rather than as a table. It is now one row per field.
 - The body painted down to the **full client height** rather than to the bottom of the content region, so the last visible fields were drawn behind *Copy* / *Open file location* / *Close*. The click and hover handlers had the same missing bound, so a click in the button row could toggle a section hidden behind it.
@@ -330,7 +330,7 @@ The ASN appears in the same `Country` cell as `US · AS15169 Google LLC`, becaus
 
 Its path persists on exactly the same terms as the country one, in its own `HKCU\Software\WinTCP` value: pick it once and it reloads silently, and a file that has moved fails quietly rather than nagging at every launch.
 
-## Alerts (F5.6)
+## Alerts
 
 Threshold alerting is **off until you turn it on**, and that is the point: a
 network viewer that pops a balloon every time a connection crosses a line is one
@@ -348,8 +348,8 @@ that does nothing is worse than no alert.
 
 - **DPI.** Per-Monitor V2 DPI awareness via the manifest, 9 pt Segoe UI. Widths and fonts are recomputed on `WM_DPICHANGED`.
 - **Theme.** There is no dark-mode toggle. The list, status bar and filter box are painted from the live system colors (`GetSysColor`) and repaint on `WM_SYSCOLORCHANGE` and `WM_THEMECHANGED`, so light, dark and high-contrast schemes work without a restart. One shared palette header (`Theme.h`) derives every self-painted surface: the Details bands, the charts background/grid and the dark substitutes (`0x202020`/`0xF0F0F0`) are single spellings now, not per-window copies.
-- **High contrast (9.4.9).** Every window probes `HighContrastActive()` from the same header (`SPI_GETHIGHCONTRAST`) and bypasses its dark palette when it is set, deriving every colour from `GetSysColor` so the scheme's own values win. `MainWindow::ThemeIsDark` short-circuits to `false` under HC; Details, Charts, Change log and the process tree all repaint on `WM_SYSCOLORCHANGE` without a restart. The shared dark substitutes are never applied on top of an HC palette, and the charts' fixed series colours yield to the system's highlight pair under HC.
-- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; single-click (double-click works too) restores, and the first hide explains that once per run with a balloon. The tray tip names what the window holds — rows shown / total, plus grouped, frozen and alert states — instead of a fixed title. A balloon fires on a new listener via `ShowTrayBalloon` (Alerts.cpp), though the alert loop itself is not yet wired into the live refresh. **First-run minimize prompt (9.4.6):** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
+- **High contrast.** Every window probes `HighContrastActive()` from the same header (`SPI_GETHIGHCONTRAST`) and bypasses its dark palette when it is set, deriving every colour from `GetSysColor` so the scheme's own values win. `MainWindow::ThemeIsDark` short-circuits to `false` under HC; Details, Charts, Change log and the process tree all repaint on `WM_SYSCOLORCHANGE` without a restart. The shared dark substitutes are never applied on top of an HC palette, and the charts' fixed series colours yield to the system's highlight pair under HC.
+- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; single-click (double-click works too) restores, and the first hide explains that once per run with a balloon. The tray tip names what the window holds — rows shown / total, plus grouped, frozen and alert states — instead of a fixed title. A balloon fires on a new listener via `ShowTrayBalloon` (Alerts.cpp), though the alert loop itself is not yet wired into the live refresh. **First-run minimize prompt:** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
 - **Always on top** can be toggled from the menu or the tray.
 
 ## Settings and reset

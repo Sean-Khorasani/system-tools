@@ -38,13 +38,13 @@
 #include "Elevate.h"
 #include "EtwTraffic.h"
 #include "GeoIp.h"
-#include "ExposureScore.h"   // 9.5.5: the exposure badge
+#include "ExposureScore.h"   // the exposure badge
 #include "RefreshEngine.h"
 #include "Settings.h"
 #include "Presets.h"
 #include "Bookmarks.h"
 #include "ChangeLogWindow.h"
-#include "ProcessTreeView.h"   // Roadmap: the process-tree view mode's fill
+#include "ProcessTreeView.h"   // the process-tree view mode's fill
 #include "TypeToJump.h"
 #include "SocketTraffic.h"
 
@@ -54,10 +54,10 @@ namespace wintcp {
 enum : UINT {
     WM_APP_REFRESH_RESULT = WM_APP + 1,   // RefreshResult*
     WM_APP_DNS_RESULT     = WM_APP + 2,   // DnsResolver::Result*
-    WM_APP_DNS_STALLED    = WM_APP + 6,   // wParam = stalled count (9.2.8)
+    WM_APP_DNS_STALLED    = WM_APP + 6,   // wParam = stalled count
     WM_APP_TRAY           = WM_APP + 3,   // tray icon callback
     // Posted to self when a header drag starts, so the resulting order is read
-    // back AFTER the drag has finished (7.1). Posting rather than reading
+    // back AFTER the drag has finished. Posting rather than reading
     // inside LVN_BEGINDRAG is deliberate: at that point the header still holds
     // the OLD order, and there is no end-of-drag notification to hook.
     WM_APP_COLUMNORDER_SYNC = WM_APP + 4,
@@ -92,7 +92,7 @@ public:
     // nullptr if the op name is not recognised.
     const wchar_t* UiProbe(const wchar_t* op, const wchar_t* arg) const;
 
-    // 5.3: direct access to the change-log window for the UI harness.
+    // direct access to the change-log window for the UI harness.
     //
     // Not a UiProbe op, because UiProbe is deliberately a string-keyed READ
     // interface: it answers questions about state and performs no actions. The
@@ -118,8 +118,8 @@ private:
     void OnSize(int cx, int cy);
     void OnCommand(WORD id, WORD notifyCode, HWND ctl);
     void OnNotify(NMHDR* hdr, LPARAM lParam);
-    void SyncColumnOrderFromHeader();   // 7.1: persist header drag-reorder
-    bool OnTypeJumpChar(wchar_t ch);    // 7.2: type-a-few-letters navigation
+    void SyncColumnOrderFromHeader();   // persist header drag-reorder
+    bool OnTypeJumpChar(wchar_t ch);    // type-a-few-letters navigation
     void OnTimer(UINT_PTR timerId);
     // R8: refresh watchdog, run from the 1 s status tick. Declares the view
     // stale and restarts the worker past the threshold, switches auto-refresh
@@ -134,7 +134,7 @@ private:
 
     void CreateControls();
     void LayoutControls(int cx, int cy);
-    void RebuildColumns();                 // apply visibility + widths (tasks 16)
+    void RebuildColumns();                 // apply visibility + widths
     void HarvestColumnWidths();            // physical -> logical (96-dpi) units
     void InitFilterControls();
     void StartWorker();                    
@@ -163,7 +163,7 @@ private:
     void TrayRemove();
     void ShowTrayMenu();
 
-    // 9.4.6: on the first minimize while the tray icon is OFF, offer the user a
+    // on the first minimize while the tray icon is OFF, offer the user a
     // one-shot choice - minimize-to-tray (enable the tray icon) or exit. The
     // choice is remembered in settings_.trayMinimizeChoice so the prompt never
     // returns. Returns true if the minimize should proceed to the chosen target
@@ -174,11 +174,11 @@ private:
 
     // Reverse-DNS plumbing.
     void OfferDnsForAllRows();
-    void OfferGeoIpForAllRows();           // 4.3: fill Country from the MMDB
-    void LoadGeoIpDatabase();              // 4.3: pick a .mmdb, load, refresh
-    void OfferAsnForAllRows();             // F5.4: fill the ASN half of Country
-    void LoadAsnDatabase();                // F5.4: pick a GeoLite2-ASN .mmdb
-    // 9.4.4 column profiles and F5.11 quick filters. Both are one-click named
+    void OfferGeoIpForAllRows();           // fill Country from the MMDB
+    void LoadGeoIpDatabase();              // pick a .mmdb, load, refresh
+    void OfferAsnForAllRows();             // fill the ASN half of Country
+    void LoadAsnDatabase();                // pick a GeoLite2-ASN .mmdb
+    // column profiles and quick filters. Both are one-click named
     // sets, so both live here as a pair of apply-and-sync helpers rather than as
     // five and six near-identical command handlers.
     void ApplyColumnProfile(int profileId);
@@ -186,10 +186,10 @@ private:
     void ApplyQuickFilter(int filterId);
     void SyncColumnProfileChecks();        // View > Column profile ticks
     void SyncQuickFilterChecks();          // Filter menu ticks
-    void UpdateEmptyState();               // 9.4.2: the empty-column infobar
-    void ShowEmptyStateActions();          // 9.4.2: ...with buttons for it
-    void RunAlerts();                    // F5.6: evaluate + balloon
-    void RaiseAlert(const wintcp::Alert& a);   // F5.6: one balloon per alert
+    void UpdateEmptyState();               // the empty-column infobar
+    void ShowEmptyStateActions();          // ...with buttons for it
+    void RunAlerts();                    // evaluate + balloon
+    void RaiseAlert(const wintcp::Alert& a);   // one balloon per alert
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
     void ApplyViewWith(const std::vector<std::uint64_t>& ids,
@@ -200,14 +200,14 @@ private:
                           std::uint64_t focusedId, int topIdx);
     void UpdateSortIndicator();            
     void UpdateStatusBar(const std::wstring& errorText);
-    void UpdateCaption();               // G27: the state-carrying title
-    void SyncGroupHeader();             // G27: "Process (N groups)" header
-    void UpdateExposure();                   // 9.5.5: the exposure badge
-    void UpdateTrayTip();               // G26: rows/frozen/grouped/alerts tip
-    void InitTooltips();                // G31: control-bar tips
-    void UpdateStatusTips();            // G31: every status pane gets a tip
-    void ResetLayout();                 // G28: defaults + persist + rebuild
-    // Roadmap: the process-tree view mode. Toggle swaps the tree control in
+    void UpdateCaption();               // the state-carrying title
+    void SyncGroupHeader();             // "Process (N groups)" header
+    void UpdateExposure();                   // the exposure badge
+    void UpdateTrayTip();               // rows/frozen/grouped/alerts tip
+    void InitTooltips();                // control-bar tips
+    void UpdateStatusTips();            // every status pane gets a tip
+    void ResetLayout();                 // defaults + persist + rebuild
+    // the process-tree view mode. Toggle swaps the tree control in
     // where the list view is; RebuildTree refills it from the store's rows
     // (the same rows the list would show, by value).
     void ToggleTreeMode();
@@ -244,29 +244,29 @@ private:
     void CopySelectionToClipboard(bool copyAll);
     void KillSelectedProcess();            // PID-reuse verification
     void ShowDetailsOfSelectedRow();       // modeless details window
-    // REMOVED 2026-10-05 (todo.md 8.7 G2). The capability moved to the CLI as
+    // REMOVED 2026-10-05. The capability moved to the CLI as
     // `capture --text` / `capture --out`.
     // void FollowSelectedStream();        // pktmon + hex view
-    void OpenSelectedFileLocation();      // 4.6: ShellExecute "explore"
-    // REMOVED 2026-10-05 (todo.md 8.7 G1): the `properties` shell verb cannot
+    void OpenSelectedFileLocation();      // ShellExecute "explore"
+    // REMOVED 2026-10-05: the `properties` shell verb cannot
     // be invoked with a bare path, so this action never worked.
-    // void ShowSelectedProcessProperties(); // 4.6: ShellExecute "properties"
-    void BlockSelectedConnection();       // 4.4: firewall block
-    void RemoveAllWinTcpBlocks();         // D30: tray - every WinTCP rule at once
+    // void ShowSelectedProcessProperties(); // ShellExecute "properties"
+    void BlockSelectedConnection();       // firewall block
+    void RemoveAllWinTcpBlocks();         // tray - every WinTCP rule at once
     // sectioned builder + silent live-update while open.
     DetailModel BuildDetails(const Connection& c) const;
     void RefreshDetailsWindow();           // no-op unless details visible
     void ShowAboutBox();
     void ShowShortcutsSheet();
 
-    // 5.2 presets + 5.3 bookmarks, wired to the File and Process menus.
+    // presets + bookmarks, wired to the File and Process menus.
     PresetView CurrentPresetView() const;
     void ApplyPresetView(const PresetView& v);
     void SavePreset();
     void LoadPreset();
     void DeletePreset();
     void ShowBookmarksList();
-    void RefreshBookmarkMarks();            // 5.3: registry -> row model
+    void RefreshBookmarkMarks();            // registry -> row model
     void BookmarkSelectedConnection();
     void EditSelectedBookmarkNote();
     void ToggleColumn(int columnId);       
@@ -282,7 +282,7 @@ private:
 
     // Settings: loaded in OnCreate, saved in OnDestroy.
     //
-    // C8: this used to call Settings::Save() TWICE and discard the bool both
+    // this used to call Settings::Save() TWICE and discard the bool both
     // times. The first call was dead work - it ran before the GeoIP path was
     // written into settings_, so the file it wrote could not have been
     // complete - and the second overwrote it. Every exit therefore did two full
@@ -331,7 +331,7 @@ private:
     //
     // Why this exists: a refresh arriving during a modal loop replaces rows_
     // and frees the row the pointer referred to, so a handler that kept
-    // `const Connection* c` across a MessageBox read freed memory. D29 was
+    // `const Connection* c` across a MessageBox read freed memory. This was
     // fixed at three such sites individually; the fix did not stick because
     // the safe pattern was not the easy one. This makes it the easy one: one
     // call, and the lifetime hazard is closed by construction rather than by
@@ -347,8 +347,8 @@ private:
     int ColToVisible(int columnId) const;       // -1 when hidden
 
     // The index in the shell's system image list for a
-    // process image, or -1 when the shell has none (roadmap
-    // G9). Queries the shell by path, so an .exe shows its
+    // process image, or -1 when the shell has none.
+    // Queries the shell by path, so an .exe shows its
     // own icon rather than a generic one.
     int ProcessIconIndex(const std::wstring& path) const;
 
@@ -365,21 +365,21 @@ private:
     HWND hwndStateCbo_ = nullptr;
     HWND hwndSearchEdit_ = nullptr;
     // The shell's system small-icon list, attached to the list so
-    // each row can carry its process's icon (roadmap G9). Owned by
+    // each row can carry its process's icon. Owned by
     // the shell, not by us: it is never destroyed here, only
     // attached and left for the list to release. Null until the
     // shell image list is first resolved.
     HIMAGELIST iconImageList_ = nullptr;
-    // G31: one tooltip control for the whole control bar. Created once in
+    // one tooltip control for the whole control bar. Created once in
     // CreateControls; tools are added there and never removed, because the
     // bar's children live as long as the window.
     HWND hwndTip_ = nullptr;
-    // G25: a refresh has been requested but no result has arrived yet. Set
+    // a refresh has been requested but no result has arrived yet. Set
     // in Refresh(), cleared in OnRefreshResult on every path (success,
     // error, frozen-early-out), so a slow enum/DNS stall reads as
     // "Refreshing..." instead of looking idle.
     bool refreshInFlight_ = false;
-    // G26: the first-hide balloon ("where did the window go, click to
+    // the first-hide balloon ("where did the window go, click to
     // restore") shows once per process, not once per minimize.
     bool trayHideBalloonShown_ = false;
 
@@ -402,7 +402,7 @@ private:
     DetailsDialog details_;
     ChartsWindow charts_;                    // performance graphs
     DWORD detailsPid_ = 0;                   // PID the details window shows
-    DetailModel detailsModel_;               // last content shown (7.18)
+    DetailModel detailsModel_;               // last content shown
     bool detailsExitedNoted_ = false;        // exit note shown once
     Settings settings_;
     std::vector<FilterClause> filterProgram_;
@@ -433,26 +433,26 @@ private:
 
     bool reportErrorsNextResult_ = false;
     bool dnsEnabled_ = false;              // View > Resolve hostnames
-    std::wstring dnsStalledHint_;         // 9.2.8 status-bar hint on stalls
-    // 9.4.2. Same shape and same lifetime as dnsStalledHint_ - derived from live
+    std::wstring dnsStalledHint_;         // status-bar hint on stalls
+    // Same shape and same lifetime as dnsStalledHint_ - derived from live
     // state each second, never stored across a refresh - because a stored hint
     // outlives the condition that produced it.
     std::wstring emptyStateHint_;
-    // 9.5.5: the exposure badge's one-line summary. Empty on a healthy
+    // the exposure badge's one-line summary. Empty on a healthy
     // machine, so the status bar stays quiet by default. Recomputed from the
     // snapshot every pass, like every other message on this bar.
     std::wstring exposureLine_;
-    // 9.5.5: which rows the badge decided were exposed, so the reason can be
+    // which rows the badge decided were exposed, so the reason can be
     // shown without re-walking the store. Keyed on row id.
     std::wstring exposureDetail_;
-    // F5.6: the alert fallback when there is no tray icon, and the count of
+    // the alert fallback when there is no tray icon, and the count of
     // alerts currently suppressed by the engine's latch.
     std::wstring alertHint_;
     size_t suppressedAlerts_ = 0;
     bool topMost_ = false;                 // View > Always on top
     bool trayEnabled_ = false;             // View > Tray icon
     bool trayIconShown_ = false;
-    // 9.4.6: remembered first-minimize choice (mirrors settings_.trayMinimizeChoice).
+    // remembered first-minimize choice (mirrors settings_.trayMinimizeChoice).
     DWORD trayMinimizeChoice_ = 0;
     bool etwAutoAttempted_ = false;        // at most one implicit ETW start
     NOTIFYICONDATAW trayNid_ = {};
@@ -481,7 +481,7 @@ private:
     UINT32 visibleCols_ = 0;               // bitmask over ColumnId
     int colWidths_[COL_COUNT] = {};
     std::vector<int> visToCol_;            // visible index -> ColumnId
-    // The user's column order (7.1): a permutation over ALL ColumnIds, seeded
+    // The user's column order: a permutation over ALL ColumnIds, seeded
     // from kDisplayOrder and rewritten by OnColumnDrag. A vector, not an array,
     // so erase/insert cannot leave a stale tail.
     //
@@ -493,38 +493,38 @@ private:
     // the optimiser hoisted and merged the two identical loops.
     std::vector<int> colOrder_ = std::vector<int>(COL_COUNT, 0);
 
-    // 7.4: keep the selection across auto-refresh ticks. On by default -
+    // keep the selection across auto-refresh ticks. On by default -
     // a row the user is inspecting must not jump to the top of the list every
     // two seconds - but on a busy machine the tracked row can end up far down
     // the view, so it is a toggle rather than a hard-coded behaviour.
     bool preserveSelection_ = true;
 
-    // 7.2 type-to-jump state.
+    // type-to-jump state.
     TypeToJump typeToJump_;
 
-    // 5.5 freeze. When set, auto-refresh keeps sampling but the list is not
+    // freeze. When set, auto-refresh keeps sampling but the list is not
     // replaced, so the user can read a table without it changing under them.
     bool frozen_ = false;
     ULONGLONG frozenAt_ = 0;
 
-    // 5.1 group rows by process. Changes the SHAPE of the list only; the
+    // group rows by process. Changes the SHAPE of the list only; the
     // underlying rows are untouched, so toggling it off restores the flat
     // list exactly.
     bool groupByProcess_ = false;
 
-    // Roadmap: the process-tree VIEW MODE. Not another window - a tree
-    // control where the list view is, which is what the roadmap asked for
+    // the process-tree VIEW MODE. Not another window - a tree
+    // control where the list view is, which is what was asked for
     // and what Task Manager's Processes tab is. A separate detached window
     // answering the same question is a second answer, so the toggle swaps
     // the two controls in place instead of adding a third surface.
     bool treeMode_ = false;
 
-    // 5.4 change-log window. Fed from the SAME drain the file writer uses -
+    // change-log window. Fed from the SAME drain the file writer uses -
     // TakeChangeEvents is destructive, so there is exactly one drain and both
     // consumers get the batch. See WriteChangeLog().
     ChangeLogWindow changeLog_;
 
-    // Roadmap: the tree control that REPLACES the list in tree mode, over
+    // the tree control that REPLACES the list in tree mode, over
     // the same rows (ProcessTreeFill). Hidden until the mode is on; the
     // list is hidden while it is.
     HWND hwndTree_ = nullptr;
@@ -535,6 +535,11 @@ private:
     std::vector<ProcessTreeNode> treeProcs_;
     // The summary the status bar shows in place of the selection count.
     std::wstring treeSummary_;
+    // The last fill's counts: items drawn, and the processes they were drawn
+    // from. A check compares the tree with the second number rather than with
+    // a fresh enumeration, because the machine changes between two of those.
+    size_t treeItemsAtFill_ = 0;
+    size_t treeEnumeratedAtFill_ = 0;
     // The list's selection and scroll as they were when tree mode was
     // switched ON, restored when it is switched off: a view mode is a lens,
     // not a state destructor, and the person who toggled back expects to
@@ -544,17 +549,17 @@ private:
     std::uint64_t treeSavedFocus_ = 0;
     int treeSavedTop_ = -1;
 
-    // 4.3 GeoIP. Loaded lazily from the user-supplied .mmdb; never
+    // GeoIP. Loaded lazily from the user-supplied .mmdb; never
     // downloaded. The module existed and was fully tested but was never
     // actually consulted, so the Country column was permanently empty - a
     // 778-line feature wired to nothing.
     GeoIpDatabase geo_;
-    // F5.4. The ASN database is a SEPARATE file (GeoLite2-ASN, different record
+    // The ASN database is a SEPARATE file (GeoLite2-ASN, different record
     // shape), so it is a second instance rather than a mode of the first. It is
     // optional and independent: loading one does not disturb the other, and
     // neither is required for the other to work.
     GeoIpDatabase asnGeo_;
-    // F5.6. The engine is pure; this is its ONLY production caller.
+    // The engine is pure; this is its ONLY production caller.
     // It used to have none at all, which is why the alert.* selftests
     // were the only thing exercising it.
     AlertEngine alertEngine_;

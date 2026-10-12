@@ -8,7 +8,7 @@
 // whose LinkType is the non-standard value 6, which is not a valid
 // LINKTYPE_* constant. Standard readers reject or mis-parse the file. The
 // packet bytes themselves start at the IP header with no Ethernet preamble,
-// so "link type 6" here means "strip nothing". See todo.md 3.0 fact 4.
+// so "link type 6" here means "strip nothing".
 //
 // Deliberately supported: the block types pktmon actually emits (SHB, IDB,
 // EPB, SPB) plus a graceful skip of anything unknown, so a future pktmon
@@ -75,7 +75,7 @@ struct PcapngParse {
     // pktmon's own per-flow records, which `etl2pcap` interleaves with real
     // packets. They carry a 16-byte synthetic header instead of an Ethernet
     // header and are correctly discarded; counted so the UI can report
-    // "N packets + M flow records" rather than a bare number. See todo.md 3.0.
+    // "N packets + M flow records" rather than a bare number.
     size_t flowRecords = 0;
     // The link type from the first IDB, or kLinkAuto when the file has none.
     // Used for display and diagnostics; parsing itself is per-packet.

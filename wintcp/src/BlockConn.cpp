@@ -47,7 +47,7 @@ namespace wintcp {
 
 // Defined here rather than in the anonymous namespace, because BlockConn.h
 // declares it extern and every rule this module creates - the existing
-// connection blocks and the 9.5.5 general rules - has to be NAMEable from
+// connection blocks and the general rules - has to be NAMEable from
 // the public half of this file. Keeping it in an anonymous namespace would
 // shadow the declaration and give the public code a different object.
 const wchar_t* const kRuleNamePrefix = L"WinTCP block: ";
@@ -676,7 +676,7 @@ void RemoveRuleQuiet(INetFwRules* rules, const std::wstring& name) {
 }
 
 // ========================================================================
-// 9.5.5 - the general firewall rule
+// The general firewall rule
 // ========================================================================
 //
 // A second writer beside EnsureRule, deliberately: BlockConnection's two rules
@@ -723,7 +723,7 @@ std::wstring FwRuleNameToken(const std::wstring& value) {
 }  // namespace
 
 // ========================================================================
-// 9.5.5 - the general firewall rule (public)
+// The general firewall rule (public)
 // ========================================================================
 //
 // Deliberately NOT in the anonymous namespace: these are the definitions the
@@ -1338,7 +1338,7 @@ bool IsConnectionBlocked(const BlockRequest& req) {
 // without a ledger a new run would have no way to know what it left behind.
 
 std::wstring LedgerKey() {
-    // C10. Two changes, both needed.
+    // Two changes, both needed.
     //
     // The buffer is grown to MAX_PATH * 2, which is what CrashDump.cpp already
     // uses for the same variable - a deep %APPDATA% is the only way to reach
@@ -1365,15 +1365,15 @@ std::wstring LedgerKey() {
 // name, so the format needs no escaping.
 std::mutex g_ledgerLock;
 
-// R3 caps. kLedgerMaxLineBytes lives in BlockConn.h so the selftest that pins
+// Caps. kLedgerMaxLineBytes lives in BlockConn.h so the selftest that pins
 // the boundary cannot drift from the parser. A real ledger is one short line
 // per blocked peer, so tens of rules is a few KB. 4 MiB is tens of thousands
 // of such lines - far past any plausible use, and a hard bound on what a
-// corrupt or planted file can make this process allocate. Before R3 the read
+// corrupt or planted file can make this process allocate. Previously the read
 // was an append loop with no bound at all.
 constexpr size_t kLedgerMaxFileBytes = 4u * 1024u * 1024u;
 
-// R3: strict UTF-8 -> UTF-16, which Utf8ToWide() (Utils.cpp) is NOT. It calls
+// Strict UTF-8 -> UTF-16, which Utf8ToWide() (Utils.cpp) is NOT. It calls
 // MultiByteToWideChar with flags 0, and with CP_UTF8 that makes the function
 // substitute U+FFFD for a bad byte and report SUCCESS. That is fine for
 // display and wrong here: a corrupted line would silently become a rule name
@@ -1462,7 +1462,7 @@ bool ParseLedgerBytes(const char* data, size_t len,
     return true;
 }
 
-// R3: reads the ledger. An ABSENT file is an empty ledger (no error). A file
+// Reads the ledger. An ABSENT file is an empty ledger (no error). A file
 // that exists but cannot be trusted - over the size cap, or a line the parser
 // refuses - returns an EMPTY vector and sets *error. Callers must treat a
 // non-empty *error as "do not write": writing an empty ledger over a real one
@@ -1476,7 +1476,7 @@ std::vector<std::wstring> ReadLedger(std::wstring* error) {
     HANDLE f = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return pairs;
-    // R3: bound the read before allocating anything. The old loop appended
+    // Bound the read before allocating anything. The old loop appended
     // until ReadFile returned 0, so a corrupt or planted multi-gigabyte file
     // was unbounded memory growth in a process that only ever wanted a few KB.
     LARGE_INTEGER fileSize = {};
@@ -1572,7 +1572,7 @@ void LedgerRemember(const BlockRequest& req) {
     std::lock_guard<std::mutex> lock(g_ledgerLock);
     std::wstring readErr;
     std::vector<std::wstring> pairs = ReadLedger(&readErr);
-    // R3: never write over a ledger we could not read. Doing so would replace
+    // Never write over a ledger we could not read. Doing so would replace
     // a file this app still depends on with one short line, losing the record
     // of every other rule it owns. Same handling as a failed WriteLedger
     // below, which has always been ignored here: the block itself is installed
@@ -1594,7 +1594,7 @@ void LedgerForget(const BlockRequest& req) {
     std::lock_guard<std::mutex> lock(g_ledgerLock);
     std::wstring readErr;
     std::vector<std::wstring> pairs = ReadLedger(&readErr);
-    if (!readErr.empty()) return;   // R3: as above - never rewrite what we cannot read
+    if (!readErr.empty()) return;   // as above - never rewrite what we cannot read
     const auto it = std::find(pairs.begin(), pairs.end(), pair);
     if (it == pairs.end()) return;
     pairs.erase(it);
@@ -1607,7 +1607,7 @@ int CountWinTcpRules(std::wstring* error) {
     std::wstring ignored;
     if (!session.Open(&ignored)) {
         // A firewall we cannot open is a count we cannot make, not a count of
-        // zero - the same distinction R3 makes about the ledger. Reported on
+        // zero - the same distinction made about the ledger. Reported on
         // the error channel so `blocks` can say so.
         SetError(error, L"cannot open the Windows Firewall policy: " + ignored);
         return 0;
@@ -1616,7 +1616,7 @@ int CountWinTcpRules(std::wstring* error) {
 
     std::lock_guard<std::mutex> lock(g_ledgerLock);
     int count = 0;
-    // R3: a ledger we could not read counts as 0, and that is honest rather
+    // A ledger we could not read counts as 0, and that is honest rather
     // than a silent wrong answer - the caller is "how many WinTCP rules are
     // installed", and RemoveAllWinTcpRules, which shares this ledger, will
     // surface the read failure by name if the user goes on to remove them.
@@ -1652,7 +1652,7 @@ bool RemoveAllWinTcpRules(std::wstring* error) {
     std::wstring pairsErr;
     std::vector<std::wstring> pairs = ReadLedger(&pairsErr);
     if (!pairsErr.empty()) {
-        // R3: a ledger we could not read with confidence. Returning false here
+        // A ledger we could not read with confidence. Returning false here
         // is the whole point of the error channel: the loop below would find
         // nothing, report success, and then WriteLedger({}) - erasing the
         // record of every rule still installed in the firewall, which is the
@@ -1730,7 +1730,7 @@ bool BlankLedgerName(const std::wstring& line, const std::wstring& name,
     return touched;
 }
 
-// ---- 9.2.9: the firewall viewer's engine half --------------------------------
+// ---- the firewall viewer's engine half --------------------------------------
 //
 // Everything the viewer shows comes from the rule itself once it is in hand -
 // enabled, direction, action, addresses and ports - so a rule the user edited

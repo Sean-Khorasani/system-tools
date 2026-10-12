@@ -1,9 +1,9 @@
 // EmptyStateActions.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.4.2 - the buttons half of empty states.
+// The buttons half of empty states.
 //
 // MainWindow::UpdateEmptyState already says the reason (one actionable
-// sentence per case, NO ROWS > DATABASE > TRAFFIC). The ticket also wants
+// sentence per case, NO ROWS > DATABASE > TRAFFIC). The empty state also
 // BUTTONS alongside it: [Run as admin], [Clear], [Edit], [Pick .mmdb].
 //
 // This is the decision half, pure and tested, so the wiring in MainWindow is a

@@ -1,6 +1,6 @@
 // BookmarkFile.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.2.10 - bookmark export and import.
+// bookmark export and import.
 //
 // Bookmarks live in HKCU, which is the wrong shape for the three things a
 // user actually wants to do with them: move them to another machine, keep

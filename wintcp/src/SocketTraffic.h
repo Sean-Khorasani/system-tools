@@ -66,7 +66,7 @@ struct SocketSample {
     UINT localPort = 0;
     std::wstring remoteAddress;
     UINT remotePort = 0;
-    // G6: TCP congestion state, in MILLISECONDS for the two RTT fields. Zero
+    // TCP congestion state, in MILLISECONDS for the two RTT fields. Zero
     // means "the kernel reported nothing", never "zero latency" - the
     // distinction is preserved per-field in TcpInfoExtras and copied here.
     unsigned rttMs = 0;
@@ -152,8 +152,8 @@ public:
     // silence. On a machine with no uncooperative socket this is never reached
     // and the pass ends when the queue is drained; on a machine with one, the
     // pass ends as soon as everything that could be read has been.
-    // B4 verdict: stays a dev constant, no CLI/config knob. These numbers are
-    // measurements of THIS machine class (see D2), not preferences: a flag
+    // Verdict: stays a dev constant, no CLI/config knob. These numbers are
+    // measurements of THIS machine class, not preferences: a flag
     // would invite cargo-cult tuning, and a pathological host is
     // d2probe-plus-rebuild territory, documented in d2probe.bat.
     static const int kScanTimeoutMs = 4000;
@@ -174,7 +174,7 @@ public:
     // stall, so its size decides whether anything behind a stall gets read at
     // all, and --selftest pins that it stays above the observed stall count.
     //
-    // WHY A POOL AND NOT ONE. Measured on this machine (D2; reproduced by
+    // WHY A POOL AND NOT ONE. Measured on this machine (reproduced by
     // temp/d2probe.cpp, which walks this host's sockets one at a time and
     // times every call):
     //
@@ -186,7 +186,7 @@ public:
     //
     // The call is neither deadlocked nor cancellable - it STALLS. A walk that
     // issued it inline ended at the first stall, and every socket behind it in
-    // the table went unread that pass. That is D2.
+    // the table went unread that pass. That is the problem this fixes.
     //
     // WHY NOT ONE THREAD PER SOCKET, the obvious answer. Measured too: 4,278
     // concurrent SIO_TCP_INFO calls left 2,265 of them unfinished after 90 s.
@@ -230,7 +230,7 @@ public:
     // never has a "first seen" to fall back on.
     std::vector<SocketAge> Ages(const std::vector<DWORD>& pids) const;
 
-    // G6: per-socket TCP congestion state (RTT, min RTT, cwnd, retransmits),
+    // Per-socket TCP congestion state (RTT, min RTT, cwnd, retransmits),
     // from the same TCP_INFO_v0 reading as Ages() and Bytes().
     //
     // A separate call rather than widening SocketBytes for the same reason
@@ -276,14 +276,14 @@ public:
     // those checks as coverage of the increment.
     unsigned ScanFailureCount() const;
 
-    // ---- D2: what the scan could not measure, and said so ----
+    // ---- what the scan could not measure, and said so ----
 
     // How many DISTINCT sockets this process has given up on because
     // SIO_TCP_INFO did not return.
     //
-    // This is the exact-reporting half of D2, and it exists so a consumer can
+    // This is the exact-reporting half, and it exists so a consumer can
     // tell the two things that look identical in a cell: a connection that
-    // moved zero bytes, and a connection that was never measured. Before D2
+    // moved zero bytes, and a connection that was never measured. Previously
     // the tool had no way to express the second, so a partial scan was
     // indistinguishable from an idle one.
     unsigned UnreadableCount() const;
@@ -328,7 +328,7 @@ private:
         UINT localPort = 0;
         std::wstring remoteAddress;
         UINT remotePort = 0;
-        // G6, in MILLISECONDS - see the TcpInfoExtras comment in the .cpp for
+        // In MILLISECONDS - see the TcpInfoExtras comment in the .cpp for
         // why the conversion happens at the read boundary rather than here.
         unsigned rttMs = 0;
         unsigned minRttMs = 0;
@@ -361,7 +361,7 @@ private:
         // be started without threading a reference through every frame.
         std::vector<DWORD> pids;
 
-        // ---- the work queue (D2) ----
+        // ---- the work queue ----
         // The handles worth reading, decided WITHOUT issuing an ioctl. Walking
         // the handle table is pure bookkeeping and cannot block; it is the
         // SIO_TCP_INFO behind each entry that can. Separating the two is what
@@ -381,7 +381,7 @@ private:
         // pass whose own workers have all exited must not block on one an
         // earlier pass left wedged inside SIO_TCP_INFO - those belong to a
         // scratch that pass already abandoned and they can still run for
-        // minutes (D2 measured 28 s and >90 s). Counting the global total
+        // minutes (measured 28 s and >90 s). Counting the global total
         // here is what made `list --traffic --watch ... --count N` hang for
         // ever: pass 1 wedges its pool, pass 2 has nothing left to read, and
         // pass 2 then waits on pass 1's stuck threads with no deadline.
@@ -498,7 +498,7 @@ private:
     // is separate from timeouts_ and what it does and does not prove.
     mutable std::atomic<unsigned> scanFailures_{0};
 
-    // C9. Owns ONE pass's scratch, and frees it only when no worker of that
+    // Owns ONE pass's scratch, and frees it only when no worker of that
     // pass can still be reading it.
     //
     // WHY NOT A PLAIN unique_ptr, which is the obvious thing and would be

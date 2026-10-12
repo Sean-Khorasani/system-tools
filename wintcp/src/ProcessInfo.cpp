@@ -16,7 +16,7 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 
-// todo.md 8.8 G5: per-thread enumeration. tlhelp32.h already supplies
+// Per-thread enumeration. tlhelp32.h already supplies
 // THREADENTRY32 / Thread32First / Thread32Next; <condition_variable> and
 // <thread> are for the private refresher that keeps the ~48 ms snapshot off the
 // UI thread (see ProcessInfo.h for the measurement that forces it).
@@ -24,7 +24,7 @@
 #include <mutex>
 #include <thread>
 
-// F5.3: WinVerifyTrust and the file-info wrapper. softpub.h supplies
+// WinVerifyTrust and the file-info wrapper. softpub.h supplies
 // WINTRUST_ACTION_GENERIC_VERIFY_V2, wintrust.h the entry point.
 #include <softpub.h>
 #include <wintrust.h>
@@ -51,7 +51,7 @@ std::wstring BaseName(const std::wstring& path) {
     return path.substr(pos + 1);
 }
 
-// F5.3: turn a WinVerifyTrust LONG into one of the five states. The
+// Turn a WinVerifyTrust LONG into one of the five states. The
 // distinction that matters is NOSIGNATURE vs everything else: an unsigned
 // binary is the normal case for most of what runs and is NOT a finding, so it
 // gets its own state instead of being folded into "invalid".
@@ -79,7 +79,7 @@ constexpr DWORD kRidHigh = 12288;
 constexpr DWORD kRidSystem = 16384;
 constexpr DWORD kRidProtected = 28672;
 
-// F5.3: a cheap fingerprint of the FILE, so a path whose contents were
+// A cheap fingerprint of the FILE, so a path whose contents were
 // replaced is re-verified rather than inheriting the old verdict. A path is
 // not a stable identity for a file - which is why Windows ships versioned
 // side-by-side directories and why "same path" cannot mean "same binary".
@@ -100,13 +100,13 @@ bool SameStamp(const ImageStamp& a, const ImageStamp& b) {
     return a.valid && b.valid && a.size == b.size && a.write == b.write;
 }
 
-// F5.2: what a process token says about its integrity.
+// What a process token says about its integrity.
 struct IntegrityReading {
     IntegrityLevel level = kIntegrityUnknown;
     bool appContainer = false;
 };
 
-// F5.2. TOKEN_QUERY is the only access this needs, which is why an unelevated
+// TOKEN_QUERY is the only access this needs, which is why an unelevated
 // WinTCP can usually still read the answer - the token is opened for reading
 // only, never asked for anything the caller does not already hold on its own
 // process.
@@ -223,7 +223,7 @@ void ProcessResolver::Clear() {
     cache_.clear();
     snapshot_.clear();
     snapshotBuilt_ = false;
-    // F5.3. signatureCache_ is deliberately NOT cleared: it is keyed by path
+    // signatureCache_ is deliberately NOT cleared: it is keyed by path
     // and carries the file stamp each verdict was taken against, so a stale
     // entry is detected and re-verified on the next hit rather than trusted.
     // Dropping it would only buy re-verification work.
@@ -241,7 +241,7 @@ void ProcessResolver::BuildSnapshotIfNeeded() {
         do {
             SnapEntry se;
             se.name = pe.szExeFile;
-            // F5.1. th32ParentProcessID comes free on the entry already being
+            // th32ParentProcessID comes free on the entry already being
             // walked, so the parent costs nothing beyond this snapshot. The
             // alternative - NtQueryInformationProcess(ProcessBasicInformation)
             // per PID - is one kernel round trip per process per refresh to
@@ -317,7 +317,7 @@ void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
             e.create = cr;
             e.createKnown = true;
         }
-        // F5.2. Read while the handle is open rather than reopening it: this
+        // Read while the handle is open rather than reopening it: this
         // is the only handle the function has, and OpenProcessToken needs one.
         // A failure is silent by construction - ReadIntegrity answers
         // kIntegrityUnknown and the column shows the em-dash that every other
@@ -328,7 +328,7 @@ void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
         ::CloseHandle(h);
     }
 
-    // F5.1. The snapshot is taken at most once per batch, and is now wanted for
+    // The snapshot is taken at most once per batch, and is now wanted for
     // EVERY pid rather than only for a name that fell through - because the
     // parent is part of what a row shows. It is still one CreateToolhelp32Snapshot
     // per refresh, which is the cost this design already budgets for; the
@@ -369,7 +369,7 @@ void ProcessResolver::ResolveOne(DWORD pid, Entry& e) {
         }
     }
 
-    // F5.3. LAST, because it needs the resolved image path, and only when the
+    // LAST, because it needs the resolved image path, and only when the
     // caller opted in. A row whose path never resolved stays kSigUnchecked,
     // which renders as the em-dash - not as "unsigned", because an image
     // WinTCP could not find is not an image it has cleared.
@@ -464,7 +464,7 @@ const ProcessResolver::Entry* ProcessResolver::ResolvePid(DWORD pid) {
 }
 
 void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
-    // The snapshot is rebuilt at most once per batch. Since F5.1 every pid
+    // The snapshot is rebuilt at most once per batch. Every pid
     // wants it, not only a name lookup that missed - the cost is still one
     // CreateToolhelp32Snapshot per refresh, and BuildSnapshotIfNeeded is what
     // keeps it to exactly one even though ResolveOne asks for every pid.
@@ -482,9 +482,9 @@ void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
     // most rows repeat a pid already resolved earlier in the same batch: the
     // per-row form scaled its kernel traffic with ROWS, this scales it with
     // DISTINCT PIDS. Bench stage [E] measures that difference directly
-    // (before: 142.9 ms/op over 50000 rows; after: see todo.md).
+    // (before: 142.9 ms/op over 50000 rows).
     //
-    // F5.3 leans on this harder than anything else here: without it every ROW
+    // Verification leans on this harder than anything else here: without it every ROW
     // of a process would call WinVerifyTrust for the same image, which is the
     // difference between one chain build per process and one per connection.
     //
@@ -504,7 +504,7 @@ void ProcessResolver::ResolveBatch(std::vector<Connection>& rows) {
         c.processPath = e.path;
         c.processCreate = e.create;
         c.processCreateKnown = e.createKnown;
-        // F5.1 / F5.2 / F5.3. Copied rather than pointed at, exactly like every
+        // Copied rather than pointed at, exactly like every
         // other piece of resolved metadata: the row outlives the entry whenever
         // the process dies and its cache slot is erased.
         c.ppid = e.ppid;
@@ -662,7 +662,7 @@ bool PostCloseToProcessWindows(DWORD pid) {
     return ctx.posted > 0;
 }
 
-// ---- per-thread enumeration (todo.md 8.8 G5) -------------------------------
+// ---- per-thread enumeration ------------------------------------------------
 //
 // The design here is driven by one measured number rather than a guess, so it
 // is worth stating plainly - the function below looks over-engineered otherwise:

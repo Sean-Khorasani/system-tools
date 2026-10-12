@@ -32,7 +32,7 @@
 #include <utility>
 #include <vector>
 
-// F5.15. The nominal point size of the app's body text, in one place so the three
+// The nominal point size of the app's body text, in one place so the three
 // windows that used to hard-code 9 in their own LOGFONT cannot drift.
 constexpr int kBodyPtSize = 9;
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // PID -> process name / path / creation-time resolution with a persistent,
 // creation-time-validated cache, plus service-name and command
-// line queries (tasks 17 / 20).
+// line queries.
 
 #pragma once
 
@@ -47,7 +47,7 @@ struct ProcessRecord {
 // the engine's own node rule already excludes it.
 std::vector<ProcessRecord> EnumerateProcesses();
 
-// F5.2: a process's integrity level, from TokenIntegrityLevel's mandatory
+// A process's integrity level, from TokenIntegrityLevel's mandatory
 // label. The RID is what the label encodes (S-1-16-<rid>), and naming the
 // levels rather than printing RIDs is the point: 12288 tells a reader nothing,
 // "High" tells them whether the process could have written to HKLM.
@@ -62,7 +62,7 @@ enum IntegrityLevel : unsigned {
     kIntegrityCount
 };
 
-// F5.3: the Authenticode verdict for an image, from WinVerifyTrust.
+// The Authenticode verdict for an image, from WinVerifyTrust.
 //
 // kSigUnsigned is deliberately NOT the same as kSigInvalid. "Unsigned" is the
 // honest answer for most of what runs (a script host, a portable binary) and is
@@ -87,7 +87,7 @@ const wchar_t* SignatureLabel(SignatureState state);
 // the RID -> name mapping is pure policy and must not depend on a live token.
 IntegrityLevel IntegrityFromRid(DWORD rid);
 
-// F5.3: the FILE fingerprint a cached signature verdict was taken against.
+// The FILE fingerprint a cached signature verdict was taken against.
 // Present in this header only because it appears in the resolver's private
 // cache type below; it carries no behaviour of its own.
 //
@@ -118,7 +118,7 @@ public:
 
     void Clear();
 
-    // F5.3. Authenticode verification is OPT-IN and off by default, because
+    // Authenticode verification is OPT-IN and off by default, because
     // it cannot be anything else: WinVerifyTrust opens the file, builds a
     // certificate chain and may consult a revocation endpoint over the
     // network. That is tens to hundreds of milliseconds per image, which
@@ -144,14 +144,13 @@ private:
         std::wstring path;
         FILETIME create = {};
         bool createKnown = false;
-        // F5.1. The parent, from the same Toolhelp snapshot that can supply a
+        // The parent, from the same Toolhelp snapshot that can supply a
         // name. ppidKnown is separate because the two fail independently: a
         // name can come from a snapshot carrying no PPID for a just-created
         // process, and a PPID can be readable while the name is not.
         DWORD ppid = 0;
         bool ppidKnown = false;
         std::wstring parentName;   // "" when the parent is not in the snapshot
-        // F5.2 / F5.3.
         IntegrityLevel integrity = kIntegrityUnknown;
         // An AppContainer process runs at Low integrity by default, so the
         // level alone does not reveal that it is sandboxed. The two are kept
@@ -163,7 +162,7 @@ private:
 
     // What ONE Toolhelp pass tells us about a process. Both fields come from the
     // same PROCESSENTRY32W, so carrying them together means the parent costs no
-    // extra kernel call - which is the whole reason F5.1 reads the snapshot
+    // extra kernel call - which is the whole reason this reads the snapshot
     // rather than NtQueryInformationProcess per PID.
     struct SnapEntry {
         std::wstring name;
@@ -173,7 +172,7 @@ private:
     void BuildSnapshotIfNeeded();
     void ResolveOne(DWORD pid, Entry& e);
 
-    // F5.3. The SignatureState for one image path, together with the stamp it was
+    // The SignatureState for one image path, together with the stamp it was
     // taken against. Keyed by path, not by PID - see the note on
     // SetVerifySignatures.
     SignatureState SignatureForPath(const std::wstring& path);
@@ -190,7 +189,7 @@ private:
     std::unordered_map<DWORD, Entry> cache_;
     std::unordered_map<DWORD, SnapEntry> snapshot_;   // one per batch
     bool snapshotBuilt_ = false;
-    // F5.3: path -> (verdict, the file stamp the verdict is valid for). A hit
+    // path -> (verdict, the file stamp the verdict is valid for). A hit
     // whose stamp no longer matches the file on disk is re-verified.
     std::unordered_map<std::wstring, std::pair<SignatureState, ImageStamp>>
         signatureCache_;
@@ -202,7 +201,7 @@ private:
 // column is optional decoration). Needs advapi32.
 void QueryServiceNames(std::map<DWORD, std::wstring>& out);
 
-// ---- per-thread facts (todo.md 8.8 G5) ------------------------------------
+// ---- per-thread facts --------------------------------------------------
 //
 // Why this exists at all, since the request that led here was for a "Thread
 // COLUMN": a per-connection thread cannot be had. MIB_TCPROW_OWNER_PID - the row

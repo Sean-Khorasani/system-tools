@@ -28,7 +28,7 @@
 #include "Columns.h"   // ColumnId, COL_COUNT, kMaxColumnText
 #include "ColumnsWin.h"  // kDefaultVisibleCols (needs windows.h for UINT32)
 #include "Connection.h"
-#include "Grouping.h"  // 5.1: ProcessGroup, GroupRow
+#include "Grouping.h"  // ProcessGroup, GroupRow
 
 namespace wintcp {
 
@@ -97,12 +97,12 @@ enum class FilterField {
     Process, Path, State, Proto, Host, Service,
     Cpu, Mem, Disk, Rx, Tx, Net,
     Duration, Speed, Tls, Country, Asn, Note,
-    // G6. Rtt/MinRtt/Cwnd/Retrans are thresholds in MILLISECONDS / bytes,
+    // Rtt/MinRtt/Cwnd/Retrans are thresholds in MILLISECONDS / bytes,
     // matching what the columns show - the microseconds the kernel reports are
     // converted at the sampler boundary (see SocketTcpInfo), so a filter and a
     // displayed cell can never disagree about the unit.
     Rtt, MinRtt, Cwnd, Retrans,
-    // F5.1/F5.2/F5.3. Per-PROCESS facts joined onto every row of that process,
+    // Per-PROCESS facts joined onto every row of that process,
     // so they filter exactly like the Process column they sit beside rather
     // than needing a separate process view of their own.
     Ppid, Parent, Integrity, Signature
@@ -154,7 +154,7 @@ bool MatchFilter(const Connection& c, const std::vector<FilterClause>& prog);
 
 std::wstring FormatDuration(ULONGLONG seconds);   // "1d 4h" / "2h 17m" / "8m 03s"
 
-// G6: an RTT in milliseconds, formatted the way `ss -i` prints it.
+// An RTT in milliseconds, formatted the way `ss -i` prints it.
 //
 // A dedicated helper rather than reusing FormatBytes or FormatDuration,
 // because both are wrong here in a way that is easy to miss: FormatBytes would
@@ -167,7 +167,7 @@ std::wstring FormatRttMs(unsigned ms);
 // "↓ 1.2 MB/s  ↑ 340 B/s", or "idle" when both directions are under half a
 // byte per second, or "—" when the rate is unknown.
 //
-// G5's reason for existing as its own function: the per-connection Speed cell
+// The reason for existing as its own function: the per-connection Speed cell
 // and the per-PROCESS Speed cell are the same SHAPE and must render
 // identically, and two copies of a three-branch format string will drift. A
 // shared helper is the only way the two columns stay comparable at a glance -
@@ -301,15 +301,15 @@ public:
     size_t CountForPid(DWORD pid) const;
     const RowStats& Stats() const { return stats_; }
 
-    // F5.7: cap on how long a vanished socket is kept as a retained (grey)
+    // cap on how long a vanished socket is kept as a retained (grey)
     // ghost, so the table does not grow without bound on a busy host.
     static constexpr size_t kMaxRetainedGhosts = 500;
     // The snapshot tick most recently installed by ReplaceSnapshot. The view
     // uses it to flash a just-vanished socket red for one refresh and keep older
-    // ones as grey ghosts (F5.7).
+    // ones as grey ghosts.
     ULONGLONG SnapshotTick() const { return lastSnapshotTick_; }
 
-    // 5.1: group the view by process. Rebuilds the view so each entry is one
+    // group the view by process. Rebuilds the view so each entry is one
     // process rather than one connection; the underlying rows are untouched,
     // so SetGrouped(false) restores the flat view exactly.
     //
@@ -365,16 +365,16 @@ public:
     // Async updates applied between refreshes.
     bool SetHostname(const std::wstring& addr, const std::wstring& host);
     // Join a GeoIP country code onto every row sharing this remote address
-    // (4.3). Like SetHostname it updates the lower-case key so the text
+    // Like SetHostname it updates the lower-case key so the text
     // filter can search a value the column is displaying.
     bool SetCountry(const std::wstring& addr, const std::wstring& country);
-    // F5.4: join an autonomous system onto every row sharing this remote address.
+    // Join an autonomous system onto every row sharing this remote address.
     // number == 0 with an empty org means "no ASN", and CLEARS a previous answer
     // - unlike SetCountry, which skips an empty code on the CLI path.
     bool SetAsn(const std::wstring& addr, uint32_t number,
                 const std::wstring& org);
 
-    // 5.3: mark rows whose remote endpoint is bookmarked and apply its colour
+    // mark rows whose remote endpoint is bookmarked and apply its colour
     // tag and note. The match is on address AND remote port, because that pair
     // is the bookmark's identity ("what survives a reconnect") - matching on
     // the address alone flagged the wrong conversation (measured: a bookmark on
@@ -407,12 +407,12 @@ public:
     // (the mDNS case) get the same true counters rather than an invented split.
     int ApplySocketBytes(const std::vector<SocketBytes>& bytes);
 
-    // G6: join per-socket TCP_INFO congestion state (RTT, min RTT, congestion
+    // join per-socket TCP_INFO congestion state (RTT, min RTT, congestion
     // window, retransmitted bytes, TCP-timestamp support) onto the rows.
     //
     // Same 4-tuple matching and same first-row-wins rule as ApplySocketBytes,
     // for the same reason: these are per-SOCKET facts and duplicate 4-tuples
-    // exist (see D20). The two are separate calls rather than one merged join
+    // exist. The two are separate calls rather than one merged join
     // because they come from separate samplers' outputs and a caller may want
     // bytes without asking for congestion state.
     //
@@ -434,7 +434,7 @@ public:
     // Rows whose counters came from a per-PID source are skipped by design -
     // see Connection::perRowBytes. Returns how many rows now have a known rate.
     //
-    // Also runs ComputeGroupRates(), which fills the per-PROCESS rate (G5) from
+    // Also runs ComputeGroupRates(), which fills the per-PROCESS rate from
     // the same per-socket counters. It is a separate pass rather than inline
     // because a process's rate needs the SUM over all of its rows, and no single
     // row can know that while the loop is still walking them.
@@ -466,7 +466,7 @@ public:
                            int column, bool ascending);
 
 private:
-    // G5: the per-process rate, summing each PID's socket-counted rows.
+    // the per-process rate, summing each PID's socket-counted rows.
     // Called by ComputeRates() after the per-connection pass; separate because
     // it needs a whole process's worth of rows before any one row's rate is
     // knowable. See the definition for why the sum is the only honest answer.
@@ -477,7 +477,7 @@ private:
     // scanned all rows, which is O(pids x rows) per refresh on the UI
     // thread - ~35M iterations for 700 PIDs and 50k rows.
     void RebuildIndexes();
-    // F5.7: bound the retained-ghost history; evict the oldest beyond
+    // bound the retained-ghost history; evict the oldest beyond
     // kMaxRetainedGhosts. Operates on the merged vector in place.
     void TrimRetainedGhosts(std::vector<Connection>& rows);
 
@@ -486,7 +486,7 @@ private:
     std::vector<RowChange> changes_;
     std::unordered_map<DWORD, std::vector<size_t>> pidRows_;
     std::unordered_map<std::wstring, std::vector<size_t>> addrRows_;
-    // 5.1 grouping. flatIndex_ is the filtered+sorted row list;
+    // grouping. flatIndex_ is the filtered+sorted row list;
     // viewIndex_ is what the list actually displays, which is the same thing
     // ungrouped and one-entry-per-process grouped.
     std::vector<size_t> flatIndex_;
@@ -497,7 +497,7 @@ private:
     int sortColumn_ = COL_PID;
     bool sortAsc_ = true;
     std::uint64_t nextId_ = 1;
-    ULONGLONG lastSnapshotTick_ = 0;     // F5.7: for SnapshotTick()
+    ULONGLONG lastSnapshotTick_ = 0;     // for SnapshotTick()
 };
 
 }  // namespace wintcp

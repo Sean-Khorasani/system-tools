@@ -3,7 +3,7 @@
 // See Alerts.h.
 
 #include "Alerts.h"
-#include "Utils.h"   // kBytesPerKB/MB/GB shared unit ladder (A6)
+#include "Utils.h"   // kBytesPerKB/MB/GB shared unit ladder
 
 #include <iphlpapi.h>   // MIB_TCP_STATE_LISTEN
 #include <tcpmib.h>
@@ -55,7 +55,7 @@ std::wstring FormatBps(double bps) {
     return buf;
 }
 
-// F5.6. Substring on the process image, exact on the address.
+// Substring on the process image, exact on the address.
 //
 // The asymmetry is deliberate. An address is a precise token - "203.0.113.9" either
 // appears or it does not - while a process name is typed by a human who may write
@@ -75,7 +75,7 @@ bool AlertRule::Matches(const Connection& c) const {
     return true;
 }
 
-// F5.6. Two passes, and they have to be separate: "which rules match NOW" is a pure
+// Two passes, and they have to be separate: "which rules match NOW" is a pure
 // question about this snapshot, and "did anything change" is a question about the
 // previous one. Doing them in one pass is what makes this kind of loop fire twice.
 std::vector<Alert> AlertEngine::EvaluateRules(
@@ -286,7 +286,7 @@ bool ShowTrayBalloon(NOTIFYICONDATAW* nid, const std::wstring& title,
 }
 
 // ---------------------------------------------------------------------------
-// F5.6: the rule store
+// the rule store
 // ---------------------------------------------------------------------------
 // One value per rule, keyed by the rule's name. The alternative - one packed blob
 // under a single value - would make deleting one rule a read-modify-write of all of

@@ -1,6 +1,6 @@
 // BuildInfo.h
 // SPDX-License-Identifier: Apache-2.0
-// Build summary (7.5) and the keyboard-shortcut sheet (7.6).
+// Build summary and the keyboard-shortcut sheet.
 //
 // Both are text assembled from live state rather than hard-coded strings,
 // which is the whole point: a shortcut sheet that is written out by hand goes
@@ -45,7 +45,7 @@ const std::vector<Shortcut>& AllShortcuts();
 // keys line up in a proportional font.
 std::wstring ShortcutsText();
 
-// The About box body (7.5): version, build configuration, and the capability
+// The About box body: version, build configuration, and the capability
 // state of THIS run. 'elevated' and each capability flag are passed in rather
 // than probed here, so the caller decides what counts as "this run" and the
 // function stays free of side effects.
@@ -62,7 +62,7 @@ struct BuildSummary {
     int visibleColumnCount = 0;
     int totalColumnCount = 0;
     size_t rowCount = 0;
-    // R7: this process's own handle and GDI counts.
+    // This process's own handle and GDI counts.
     //
     // 'resourceCountsKnown' gates ONLY the handle count, because that is the
     // only one of the three whose success the API can report - GetProcess-
@@ -85,7 +85,7 @@ struct BuildSummary {
     // rather than printed as "0 of 23".
     bool columnCountKnown = true;
 
-    // 9.2.4: what the traffic scan could not measure, counted. Both are 0 on
+    // What the traffic scan could not measure, counted. Both are 0 on
     // a healthy machine and both mean the traffic columns are incomplete for a
     // REASON, which is the point: a blank traffic cell is otherwise
     // indistinguishable from a connection that genuinely moved no bytes.

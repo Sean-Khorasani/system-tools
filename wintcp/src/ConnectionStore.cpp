@@ -14,9 +14,9 @@
 #include "TcpTable.h"
 #include "Utils.h"
 #include "DnsResolver.h"
-#include "GeoIp.h"   // F5.11: IsPrivateAddrV4/V6   // kPendingHost sentinel for COL_HOST cell rendering
+#include "GeoIp.h"   // IsPrivateAddrV4/V6   // kPendingHost sentinel for COL_HOST cell rendering
 #include "Opt.h"
-// F5.1/F5.2/F5.3: the column cells below need the integrity and signature
+// the column cells below need the integrity and signature
 // LABELS, and those are defined next to the enums they describe rather than in
 // a presentation header - so the labels and the states cannot drift apart.
 #include "ProcessInfo.h"
@@ -185,18 +185,18 @@ constexpr FilterKeyword kFilterKeywords[] = {
     {FilterField::Tls,      L"ssl"},
     {FilterField::Country,  L"country"},
     {FilterField::Country,  L"geo"},
-    // F5.4. `asn` is the whole name; the alias is there because "as" and "autonomous"
+    // `asn` is the whole name; the alias is there because "as" and "autonomous"
     // are what people type, and a filter that silently matches nothing is worse
     // than one that accepts a second spelling. No "asn:" - the vocabulary policy
     // rejects a colon, and every other field drops it too.
     {FilterField::Asn,      L"asn"},
     {FilterField::Asn,      L"autonomous-system"},
-    // D26: the bookmark note is joined onto the row, so it is a real,
+    // the bookmark note is joined onto the row, so it is a real,
     // searchable field. `note:` previously did not exist as a field name at
     // all, so `note:corp` degraded to a substring search for the literal text
     // "note:corp" and could never match anything.
     {FilterField::Note,     L"note"},
-    // G6, `ss -i` field names. `rtt` and `minrtt` are MILLISECONDS, which is
+    // `ss -i` field names. `rtt` and `minrtt` are MILLISECONDS, which is
     // what the columns show and what `ss -i` prints - the kernel's RttUs is
     // converted at the sampler boundary, so a filter threshold and the cell
     // beside it are always the same unit.
@@ -211,7 +211,7 @@ constexpr FilterKeyword kFilterKeywords[] = {
     {FilterField::Cwnd,     L"window"},
     {FilterField::Retrans,  L"retrans"},
     {FilterField::Retrans,  L"retransmits"},
-    // F5.1/F5.2/F5.3. `ppid` is also the column's underlying number, so
+    // `ppid` is also the column's underlying number, so
     // `ppid:1234` is an exact threshold rather than a substring; `parent` is the
     // image name beside it. `signed` is an alias of `signature` because the
     // question people actually ask is "is it signed", not "what is its
@@ -550,7 +550,7 @@ std::wstring FormatDuration(ULONGLONG seconds) {
 }
 
 // Shared by COL_BANDWIDTH (per connection) and COL_GROUPRATE (per process).
-// G5's reason for the extraction is in the header: two rate columns that must
+// The reason for the extraction is in the header: two rate columns that must
 // render identically, in one place so they cannot drift.
 std::wstring FormatBpsCell(double rxBps, double txBps, bool known) {
     if (!known) return L"—";
@@ -565,7 +565,7 @@ std::wstring FormatBpsCell(double rxBps, double txBps, bool known) {
     return buf;
 }
 
-// G6: milliseconds, the way `ss -i` prints an RTT.
+// Milliseconds, the way `ss -i` prints an RTT.
 //
 // Three rules, each of which is a decision rather than a formatting habit:
 //
@@ -793,7 +793,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
             cl.hi = hi;
         } else if (cl.field == FilterField::Asn && !value.empty() &&
                    ParseNumberRange(value, lo, hi)) {
-            // F5.4. A bare number is the AS NUMBER as a threshold, so `asn:15169`
+            // A bare number is the AS NUMBER as a threshold, so `asn:15169`
             // and the range `asn:15169-20000` behave like every other numeric
             // field. Anything else falls through to the text clause below and
             // matches the "AS<n> <org>" cell as a substring, which is what makes
@@ -822,7 +822,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
                     ((cl.field == FilterField::Cwnd ||
                       cl.field == FilterField::Retrans) &&
                      ParseStatRange(value, false, &lo, &hi)))) {
-            // G6: a threshold in the units the column shows - ms for the RTTs,
+            // A threshold in the units the column shows - ms for the RTTs,
             // bytes for cwnd and retransmits. `rtt:100` is "100 ms or worse".
             // The two time fields are deliberately NOT routed through
             // ParseStatRange: that would make `rtt:1M` mean 1 megabyte of
@@ -890,7 +890,7 @@ bool ParseFilter(const std::wstring& text, std::vector<FilterClause>& out) {
     return true;
 }
 
-// F5.11: is this endpoint on a non-routable range? One helper for both families,
+// Is this endpoint on a non-routable range? One helper for both families,
 // so a v6 row is not answered by the v4 predicate - which would call every
 // IPv4-mapped address public.
 bool AddrIsPrivate(const IN_ADDR& v4, const IN6_ADDR& v6, bool isV6) {
@@ -931,7 +931,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // OTHER numeric field is not defined: return false rather than
             // falling back to ports, which made "pid:1-2" match any connection
             // using a port in 1..2.
-            // F5.4. A row with no ASN is UNKNOWN, and unknown never matches a
+            // A row with no ASN is UNKNOWN, and unknown never matches a
             // threshold. Without this case the clause would fall through to the
             // text path below with an empty needle, and Has() returns true for
             // an empty needle - so `asn:1-4294967295` would select the entire
@@ -956,7 +956,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
     wchar_t tmp[kTmpTextChars] = {0};
     const std::wstring* hay = nullptr;
     switch (f) {
-        // F5.11. `local:private` / `remote:private` and their `global` inverses.
+        // `local:private` / `remote:private` and their `global` inverses.
         //
         // They live in the Any case because `local:` and `remote:` are consumed as
         // DIRECTION prefixes before the field is resolved (see the StartsWithCi pair
@@ -1006,11 +1006,11 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
         case FilterField::State:   hay = &c.lowerState;  break;
         case FilterField::Proto:   hay = &c.lowerProto;  break;
         case FilterField::Pid:     hay = &c.pidText;     break;
-        // F5.1. `parent` searches the parent's IMAGE NAME. It is in the hay
+        // `parent` searches the parent's IMAGE NAME. It is in the hay
         // switch rather than a case of its own because, like Process, it is a
         // precomputed lowercase string and needs no formatting.
         case FilterField::Parent:  hay = &c.lowerParent; break;
-        // F5.1. `ppid` is a NUMBER, so it formats on demand exactly like the
+        // `ppid` is a NUMBER, so it formats on demand exactly like the
         // ports do - including the same reuse of `tmp`, since that buffer is
         // already what this switch formats digits into.
         case FilterField::Ppid:
@@ -1114,7 +1114,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
         case FilterField::MinRtt:
         case FilterField::Cwnd:
         case FilterField::Retrans: {
-            // G6. An UNKNOWN value matches nothing, never everything - the same
+            // An UNKNOWN value matches nothing, never everything - the same
             // rule as `duration:` above, and for the same reason: a row the
             // kernel could not measure must not be selected by a query about a
             // measurement. `rtt:` alone therefore means "has an RTT reading",
@@ -1178,7 +1178,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             // the whole point of writing one.
             if (cl.text.empty()) return !c.lowerNote.empty();
             return Has(c.lowerNote, cl.text);
-        // F5.2. The level is a WORD, so it is matched as the text the column
+        // The level is a WORD, so it is matched as the text the column
         // prints - `integrity:high`, `integrity:system` - and never as the RID,
         // because "12288" is not an answer to any question a reader asks. The
         // bare form means "has a readable level", which is how `note:` and
@@ -1207,7 +1207,7 @@ bool MatchClause(const Connection& c, const FilterClause& cl) {
             if (c.appContainer) cell += L"+ac";
             return cell.find(cl.text) != std::wstring::npos;
         }
-        // F5.3. Same shape: match the printed verdict, and let the bare form ask
+        // Same shape: match the printed verdict, and let the bare form ask
         // the question worth asking - `signed:` alone means "WinTCP actually
         // verified this image", which is NOT the same as "the verdict was good".
         // A row whose image was never checked matches neither, because
@@ -1258,7 +1258,7 @@ void ConnectionStore::FinalizeRow(Connection& c) {
     c.lowerHost    = ToLowerW(c.hostname);
     c.lowerState   = ToLowerW(c.stateLabel);
     c.lowerProto   = ToLowerW(c.protoLabel);
-    // F5.1. Precomputed here for the same reason every other lower* field is:
+    // Precomputed here for the same reason every other lower* field is:
     // MatchClause runs per row per clause, and ToLowerW allocates a fresh
     // string every time - doing it once per refresh instead of once per
     // keystroke is the whole reason this row of fields exists.
@@ -1361,7 +1361,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             f.lastSampleTick = p.lastSampleTick;
             f.lastRxBytes = p.lastRxBytes;
             f.lastTxBytes = p.lastTxBytes;
-            // G5: the two rate accumulators are carried separately, and the
+            // the two rate accumulators are carried separately, and the
             // PREVIOUS tick's sample point is what both need - the previous
             // per-Socket counters (above, for the row's own rate) and the
             // previous GROUP total (for the process rate). Sharing one
@@ -1372,7 +1372,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
             f.lastGroupRxBytes = p.lastGroupRxBytes;
             f.lastGroupTxBytes = p.lastGroupTxBytes;
             f.lastGroupTick = p.lastGroupTick;
-            // G6: congestion state is per-Socket and absolute (not a delta), so
+            // congestion state is per-Socket and absolute (not a delta), so
             // there is no previous sample to carry - the fresh join simply
             // overwrites it each tick. The CUMULATIVE parts are protected from
             // going backwards inside ApplySocketTcpInfo, which is where the
@@ -1393,7 +1393,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
         merged.push_back(std::move(f));
     }
 
-    // F5.7: retain vanished sockets instead of dropping them after one cycle.
+    // Vanished sockets are retained instead of dropped after one cycle.
     // A socket that vanishes THIS refresh emits exactly one DISAPPEAR event and
     // becomes a grey ghost; on later refreshes it is carried forward silently (no
     // event), so a stable snapshot neither re-fires DISAPPEAR nor recreates the
@@ -1428,7 +1428,7 @@ void ConnectionStore::ReplaceSnapshot(std::vector<Connection> fresh) {
     RebuildIndexes();
 }
 
-// F5.7: keep at most kMaxRetainedGhosts grey ghosts, evicting the oldest. The
+// Keep at most kMaxRetainedGhosts grey ghosts, evicting the oldest. The
 // order is by deathTick (earliest-vanished leaves first); id breaks ties for
 // sockets that vanished in the same snapshot, so the eviction is stable.
 void ConnectionStore::TrimRetainedGhosts(std::vector<Connection>& rows) {
@@ -1512,7 +1512,7 @@ int ConnectionStore::ComputeRates() {
     return known;
 }
 
-// G5: the per-PROCESS rate, summed over the process's Sockets.
+// The per-PROCESS rate, summed over the process's Sockets.
 //
 // WHY A SEPARATE PASS AND NOT A DIVISION. The obvious way to get "how fast is
 // this process moving bytes" from a per-PID total is to divide it by the
@@ -1523,8 +1523,8 @@ int ConnectionStore::ComputeRates() {
 // `perRowBytes` was introduced to forbid. The same honesty rule applies here,
 // and the sum is the only honest answer available from per-Socket readings.
 //
-// WHY THE SUM IS TRUSTWORTHY, and where D20 comes in. Summing is only correct
-// if each Socket is counted exactly once. Before D20 the row key omitted the
+// WHY THE SUM IS TRUSTWORTHY. Summing is only correct
+// if each Socket is counted exactly once. The row key once omitted the
 // PID, so 86 mDNS rows collapsed onto 10 identities and a per-key queue was
 // needed to pair duplicates 1:1 - without that work a process holding several
 // Sockets on the same endpoint would either double-count its own bytes or lose
@@ -1672,7 +1672,7 @@ void ConnectionStore::SetView(const ViewQuery& q) {
     RebuildView();
 }
 
-// 5.1. Collapses the filtered+sorted flat list into one entry per process
+// Collapses the filtered+sorted flat list into one entry per process
 // when grouping is on. The flat list is kept, so turning grouping off
 // restores the previous view exactly rather than re-deriving it - the rows
 // were never consumed to build the groups.
@@ -1748,7 +1748,7 @@ size_t ConnectionStore::CountForPid(DWORD pid) const {
     return n;
 }
 
-// 5.3. Join the bookmark store onto the rows: mar. every row whose remote
+// Join the bookmark store onto the rows: mar. every row whose remote
 // endpoint is bookmarked, and set its colour tag and note.
 //
 // Called after the snapshot and after any add/remove, not per-row. It reads
@@ -1801,7 +1801,7 @@ void ConnectionStore::JoinBookmarks(const std::vector<BookmarkMark>& known) {
         // Stored as unsigned on the row, and kTagNone is the anonymous enum's
         // 0, so an unbookmarked row needs no separate "unknown" state.
         r.tag = marked ? hit->tag : static_cast<unsigned>(kTagNone);
-        // D26: the note used to live only in the registry, where the table
+        // the note used to live only in the registry, where the table
         // could not see it and no filter could reach it. Carrying it on the
         // row is what makes `note:` and the note-bearing columns work.
         r.note = marked ? hit->note : std::wstring();
@@ -1840,7 +1840,7 @@ bool ConnectionStore::SetCountry(const std::wstring& addr,
     return changed;
 }
 
-// F5.4. Joins by remote address exactly as SetCountry does - one ASN belongs to
+// Joins by remote address exactly as SetCountry does - one ASN belongs to
 // one network, and a process with twenty connections to it gets the same answer
 // on all twenty rows.
 //
@@ -1947,11 +1947,11 @@ int ConnectionStore::ApplySocketBytes(const std::vector<SocketBytes>& bytes) {
     return updated;
 }
 
-// G6: join TCP_INFO congestion state onto the rows.
+// Join TCP_INFO congestion state onto the rows.
 //
 // SAME MATCHING AS ApplySocketBytes, and for the same reason: these are
-// per-sOCKET facts, so two rows that genuinely share a 4-tuple (the mDNS case
-// D20 fixed) must not both claim the same reading. The first row to match wins
+// per-sOCKET facts, so two rows that genuinely share a 4-tuple must not
+// both claim the same reading. The first row to match wins
 // and the Socket is then marked claimed, so the second row is left blanket rather
 // than given a duplicate - which is the honest answer, since we genuinely
 // cannot tell which of the two Sockets the reading came from.
@@ -2091,7 +2091,7 @@ const wchar_t* ConnectionStore::ColumnTitle(int column) {
         case COL_DISK:    return L"Disk I/O";
         case COL_DURATION: return L"Duration";
         case COL_BANDWIDTH: return L"Speed";
-        // G6. The headers are the `ss -i` field names in lower case, because
+        // The headers are the `ss -i` field names in lower case, because
         // that is what someone comparing the two will be looking for. `RTT` is
         // rendered as "RTT" and not "Rtt" purely because it is an initialism;
         // the CLI COLUMN NAMES (what you type) are lower case separately, so
@@ -2149,7 +2149,7 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
         case COL_PROCESS: set(c.processName.empty() ? L"—" : c.processName); break;
         case COL_SERVICE: set(c.serviceName); break;
         case COL_HOST:
-            // 9.2.8: empty hostname = no PTR record (render em-dash);
+            // an empty hostname = no PTR record (render em-dash);
             // the pending sentinel = a lookup still in flight (render
             // "pending" so a stale name is distinguishable from a missing
             // one rather than looking like an empty cell).
@@ -2200,14 +2200,14 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             set(FormatBpsCell(c.rxBps, c.txBps, c.bpsKnown));
             break;
         case COL_GROUPRATE:
-            // G5. Same SHAPE as COL_BANDWIDTH and the same helper, different
+            // Same SHAPE as COL_BANDWIDTH and the same helper, different
             // source: this is the PROCESS's rate, summed over its Sockets. It is
             // populated on flat rows too - where it is the truth and makes the
             // column useful ungrouped - and on a grouped row the group renderer
             // supplies it (see GroupColumnText).
             set(FormatBpsCell(c.groupRxBps, c.groupTxBps, c.groupBpsKnown));
             break;
-        // G6. Each of these is gated on ITS OWN known flag, never on a shared
+        // Each of these is gated on ITS OWN known flag, never on a shared
         // one: the kernel populates them independently, so a Socket with TCP
         // timestamps off still has a real congestion window. Gating all four on
         // a single flag would show four dashes for a row that has three good
@@ -2239,8 +2239,8 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             break;
         case COL_TLS:      set(TlsSummary(c.tls)); break;
         case COL_COUNTRY:
-            // F5.4. The ASN rides in the Country column rather than taking a
-            // 33rd one: 9.1.1 froze the table at 32 columns, and the decision
+            // The ASN rides in the Country column rather than taking a
+            // 33rd one: the table is frozen at 32 columns, and the decision
             // recorded for a feature in this position was to reuse the slot.
             //
             // The two are separated by a middle dot and only when BOTH are known,
@@ -2271,7 +2271,7 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             // exist - showing one would imply it could.
             set(c.note.empty() ? L"—" : c.note);
             break;
-        // F5.1. "<ppid> <parent image name>". The name is omitted when the
+        // "<ppid> <parent image name>". The name is omitted when the
         // snapshot did not contain the parent, which is NOT the same as having
         // no parent - so the number still prints on its own, because collapsing
         // the cell to a dash would tell a reader "this process has no parent",
@@ -2288,7 +2288,7 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
                              c.parentName.c_str());
             }
             break;
-        // F5.2. The level, plus "+AC" when the process is AppContainer. Shown
+        // The level, plus "+AC" when the process is AppContainer. Shown
         // WITH the level rather than instead of it: a sandboxed process still
         // has an integrity level, and replacing it with the marker would lose
         // the answer to "how much is it trusted".
@@ -2303,7 +2303,7 @@ void ConnectionStore::GetColumnText(const Connection& c, int column,
             set(s);
             break;
         }
-        // F5.3. Unchecked renders as the dash like every other unreadable
+        // Unchecked renders as the dash like every other unreadable
         // reading. That is the honest default: WinTCP has not looked at this
         // image, which is different from having looked and found nothing.
         case COL_SIGNATURE:
@@ -2401,7 +2401,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             }
             break;
         }
-        // G6: unknown LAST, for every one of these, li.e every other measured
+        // unknown LAST, for every one of these, li.e every other measured
         // column - so `--sort rtt --asc` puts the genuinely fastest connection
         // at the top instead of the em-dashes. Within the known rows the value
         // is what sorts, which for RTT means ascending is "fastest first" and
@@ -2459,7 +2459,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             break;
         }
                 case COL_COUNTRY:
-            // F5.4. Compare what the column PRINTS, so the sort order matches the
+            // Compare what the column PRINTS, so the sort order matches the
             // screen: country first, then the ASN as a tiebreak. Without the
             // tiebreak, rows sharing a country - which is most of a table once the
             // database is loaded - sort arbitrarily against their own ASN.
@@ -2507,7 +2507,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             else if (na) cmp = CmpStr(a.lowerNote, b.lowerNote);
             break;
         }
-        // F5.1. Sorts by the NUMBER, not by the cell text. The cell is
+        // Sorts by the NUMBER, not by the cell text. The cell is
         // "<ppid> <name>", so a string sort would order "1000 svchost.exe"
         // before "900 wininit.exe" by the leading digit run only by accident -
         // and would order "12 a.exe" after "12.exe" for reasons that have
@@ -2523,7 +2523,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             }
             break;
         }
-        // F5.2. Orders by the enum, which is already in trust order
+        // Orders by the enum, which is already in trust order
         // (Untrusted < Low < Medium < High < System < Protected), so sorting
         // ascending on the column puts the least trusted first - the direction
         // a reader wants when auditing. Unknown is last.
@@ -2536,7 +2536,7 @@ int ConnectionStore::CompareRows(const Connection& a, const Connection& b,
             else if (ka) cmp = CmpInt(a.integrity, b.integrity);
             break;
         }
-        // F5.3. Orders by the enum (Unchecked < Valid < Invalid < Unsigned <
+        // Orders by the enum (Unchecked < Valid < Invalid < Unsigned <
         // Error), then puts the AppContainer-ish detail aside - there is none
         // here, the state is the whole answer. A reviewer sorting descending
         // gets the BAD SIG rows first, which is the point of the highlight.

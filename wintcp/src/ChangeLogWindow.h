@@ -69,7 +69,7 @@ public:
     // a small number for a virtual ListView to repaint - only the ~20
     // visible rows are ever asked for. Anything larger is mostly scroll-back
     // nobody reads, and the change log file already holds everything.
-    // B4: dev constant, no --history knob. The CSV file is the archive; the
+    // Dev constant, no --history knob. The CSV file is the archive; the
     // window is a rolling view, and 5000 events is 20-30 min of history.
     static constexpr size_t kMaxEvents = 5000;
 
@@ -98,12 +98,12 @@ public:
     // whether or not it is paused; the cap holds in every case.
     void AppendEvents(const std::vector<RowChange>& events);
 
-    // ---- 5.3: the GUI half of `--event appear,disappear,state` --------------
+    // ---- the GUI half of `--event appear,disappear,state` ---------------------
     //
-    // The CLI has had this since D25: `--event` selects which change kinds a
+    // The CLI has had this: `--event` selects which change kinds a
     // `--changes` feed prints, applied before the row filter so the two compose.
     // The GUI's change log had no way to express it, so the two front ends
-    // disagreed about what the tool could do - which is exactly the drift 5.3
+    // disagreed about what the tool could do - which is exactly the drift this
     // exists to police.
     //
     // The invariant that makes this a SURFACE and not a port: the GUI renders
@@ -205,7 +205,7 @@ private:
                                          DWORD_PTR refData);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
-    // 'lParam' carries the control HWND for a notification. 5.3 needs it: the
+    // 'lParam' carries the control HWND for a notification. The
     // all-kinds-off guard has to put back the EXACT box the user clicked, and
     // identifying which one from the id alone would mean three identical
     // branches or a re-read of all three.
@@ -246,7 +246,7 @@ private:
     HWND hwndList_ = nullptr;
     HWND hwndPause_ = nullptr;
     HWND hwndClear_ = nullptr;
-    // 5.3: the three kind checkboxes. Borrowed handles, like every other child
+    // The three kind checkboxes. Borrowed handles, like every other child
     // here - the window owns them and this class only reads their state.
     HWND hwndEvAppear_ = nullptr;
     HWND hwndEvDisappear_ = nullptr;
@@ -258,14 +258,14 @@ private:
 
     std::vector<Entry> events_;       // capped at kMaxEvents, oldest first
     unsigned long long dropped_ = 0;  // evicted by the cap since last Clear()
-    // G30: the receipt of a fallback copy-all ("copied all N rows"). Shown
+    // The receipt of a fallback copy-all ("copied all N rows"). Shown
     // in the status line until new data arrives, so the count is visible
     // without a modal per copy.
     std::wstring copyNote_;
 
     bool paused_ = false;
     bool follow_ = true;
-    // 5.3: which change kinds are displayed. All true by default, so the log
+    // Which change kinds are displayed. All true by default, so the log
     // shows everything it always did until someone narrows it.
     bool evAppear_ = true;
     bool evDisappear_ = true;

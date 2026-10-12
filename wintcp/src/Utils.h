@@ -21,7 +21,7 @@
 
 namespace wintcp {
 
-// Binary unit ladder (A6). One definition shared by FormatBytes (Utils.cpp),
+// Binary unit ladder. One definition shared by FormatBytes (Utils.cpp),
 // FormatBps (Alerts.cpp) and every future formatter: two spellings of 1024.0
 // in two files disagreed about nothing yet, which is exactly when to unify —
 // after the first divergence it is a bug hunt, not a rename.
@@ -114,11 +114,11 @@ std::wstring Utf8ToWide(const char* s);
 // so this header needs no socket headers.
 std::wstring Ipv6ScopeSuffix(const unsigned char raw[16], unsigned scopeId);
 
-// Run fn() with worker-thread containment (R2). Returns "" when fn()
+// Run fn() with worker-thread containment. Returns "" when fn()
 // completes; otherwise a one-line UTF-8 description of the escaped exception.
 // An uncaught exception in a std::thread or CreateThread worker calls
 // std::terminate and takes the whole process down with no artefact — not even
-// R1's minidump names the worker. Every long-lived worker wraps its unit of
+// a minidump names the worker. Every long-lived worker wraps its unit of
 // work in this and degrades through its own error channel instead of dying.
 // Never throws itself: the handler's own allocations are guarded, because a
 // worker that is already dying must not die from the error path too.
@@ -189,7 +189,7 @@ UINT QueryDpiForWindow(HWND hwnd);
 // otherwise false with 'error' set, and the caller reports it.
 bool ShowFileInExplorer(const std::wstring& path, std::wstring* error);
 
-// G21: expose a plain-text summary as a window's accessible name through
+// Expose a plain-text summary as a window's accessible name through
 // the Dynamic Annotation API (IAccPropServices), so screen readers and
 // UIA agents can read owner-drawn content (Details body, Charts values)
 // that no pixel scraping would recover. Best-effort and silent: when the
@@ -198,7 +198,7 @@ bool ShowFileInExplorer(const std::wstring& path, std::wstring* error);
 // the full text without pre-truncating.
 void SetAccessibleName(HWND hwnd, const std::wstring& name);
 
-// ---- C10: did a Win32 string read fit? ---------------------------------
+// ---- did a Win32 string read fit? ---------------------------------------
 //
 // A family of Win32 calls fills a caller-supplied buffer and signals trouble in
 // the RETURN VALUE, never through GetLastError:

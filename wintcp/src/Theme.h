@@ -1,7 +1,7 @@
 // Theme.h
 // SPDX-License-Identifier: Apache-2.0
 //
-// The one shared system-theme palette (roadmap G12/G23).
+// The one shared system-theme palette.
 //
 // Every window that paints its own colours used to pick its own:
 // MainWindow derived from GetSysColor, DetailsDialog substituted a
@@ -76,7 +76,7 @@ inline SystemPalette LivePalette() {
     return p;
 }
 
-// The shared dark substitutes (G12). Every self-painting window used to
+// The shared dark substitutes. Every self-painting window used to
 // carry its own copy of 0x202020/0xF0F0F0 plus its own dim/header/grid -
 // identical values, three spellings, so a tweak to one never reached the
 // others. One spelling now: a dark window reads these, a light or

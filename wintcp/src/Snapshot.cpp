@@ -61,7 +61,7 @@ bool SnapshotSource::Build(const SnapshotOptions& options, Snapshot* out) {
     if (!EnumerateEndpoints(out->rows, out->error)) return false;
 
     if (options.resolveProcesses) {
-        // F5.3 is configured by SnapshotSource::SetVerifySignatures, NOT here.
+        // Signature verification is configured by SnapshotSource::SetVerifySignatures, NOT here.
         //
         // It was briefly read from SnapshotOptions as well, and having two ways
         // to say the same thing was immediately a bug: CmdListInto set the

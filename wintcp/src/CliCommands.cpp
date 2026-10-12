@@ -17,8 +17,8 @@
 #include "BuildInfo.h"
 #include "Commands.h"
 #include "ConnectionStore.h"
-#include "CrashDump.h"   // CrashForTest (hidden `crashtest` verb, R1)
-#include "Settings.h"   // kDefaultRefreshSec (B2: shared cadence value)
+#include "CrashDump.h"   // CrashForTest (hidden `crashtest` verb)
+#include "Settings.h"   // kDefaultRefreshSec (shared cadence value)
 #include "Elevate.h"
 #include "Snapshot.h"
 #include "SocketTraffic.h"
@@ -177,9 +177,9 @@ const CommandHelp kCommandHelps[] = {
       "                tls is reserved: nothing populates it - use `capture --text`\r\n"
       "                to capture the handshake; see the note in the CLI reference.\r\n"
      "                Applies to every shape, json included.\r\n"
-     // B6: the CLI has no saved column default and no widths. That is the
-     // joint consequence of B2 (CLI stays hive-independent) and B3 (no config
-     // file): there is nowhere to save one TO. So every run starts at the
+     // the CLI has no saved column default and no widths. That is the
+     // joint consequence of the CLI staying hive-independent and there being no
+     // config file: there is nowhere to save one TO. So every run starts at the
      // frozen default set, and wide values elide with an ellipsis past their
      // width budget (cells hold 512 chars max). Said here so nobody files
      // "my columns did not stick" as a bug.
@@ -455,7 +455,7 @@ const CommandHelp kCommandHelps[] = {
       "a script keeps its number, and stderr says why it must not be trusted.\r\n"
       "Treat that as \"unknown\", never as \"you have no blocks\".\r\n"
       "\r\n"
-      "--list (9.2.9) prints the rules themselves instead of the count. Each\r\n"
+            "--list prints the rules themselves instead of the count. Each\r\n"
       "row is the rule the firewall reports, not what the ledger remembers, so\r\n"
       "a rule the user edited in netsh or WF.msc is shown as it actually is -\r\n"
       "including a rule that is DISABLED or no longer a block, which is spelled\r\n"
@@ -756,17 +756,17 @@ t == L"--rule-name" || t == L"--rule-address" ||
            t == L"--rule-process" || t == L"--rule-format" ||
             t == L"--bps-critical" || t == L"--connections" ||
             t == L"--dir" ||
-            // 9.5.5: the six that give `block --rule` its scope. The three
+            // the six that give `block --rule` its scope. The three
             // booleans (--rule, --inbound, --allow) are deliberately NOT here,
             // matching the alert group's note above - a boolean that consumed
             // a value would swallow the next argument.
             t == L"--proto" || t == L"--local-ports" ||
             t == L"--remote-ports" || t == L"--process" || t == L"--rule-label" ||
-            // 9.2.10: the file a verb reads.
+            // the file a verb reads.
             t == L"--in";
 }
 
-// D25: "appear", "disappear", "state", in any case, comma-separated, in any
+// "appear", "disappear", "state", in any case, comma-separated, in any
 // order. An empty value means "all three", which is what `--event` alone does.
 // Returns false for an unrecognised name, and the caller reports the accepted
 // list - guessing would silently drop a kind the user asked for.
@@ -822,13 +822,13 @@ bool PrintCommandHelp(const std::wstring& cmd) {
 
 struct Args {
     std::wstring filter;
-    // 9.2.10: the file a verb reads, beside 'out' which it writes.
+    // the file a verb reads, beside 'out' which it writes.
     std::wstring in;
-    // 9.2.9: `blocks --list` lists the rules the count counts. Deliberately
+    // `blocks --list` lists the rules the count counts. Deliberately
     // NOT a sub-verb: "blocks" stays one verb with one meaning, and a script
     // that runs it with no switches keeps the count byte for byte.
     bool list = false;
-    // 9.5.5: `block --rule ...` writes one policy rule instead of deriving
+    // `block --rule ...` writes one policy rule instead of deriving
     // two rules from a live row. Direction, action, protocol, address, ports
     // and process all come from switches, so a rule the user STATES can be
     // expressed rather than only a reaction to a row.
@@ -857,7 +857,7 @@ struct Args {
     std::wstring columns;
     unsigned limit = 0;
     bool watch = false;
-    // B2: the VALUE is shared with the GUI cadence (kDefaultRefreshSec), the
+    // the VALUE is shared with the GUI cadence (kDefaultRefreshSec), the
     // SOURCE is deliberately not the registry. A CLI that read HKCU would
     // behave differently per user hive, elevation and machine — poison for
     // scripts — so `--watch` with no seconds means 2 s everywhere, always.
@@ -866,7 +866,7 @@ struct Args {
     bool yes = false;
     bool dryRun = false;
     bool force = false;
-    // 9.3.6: kill's WM_CLOSE-only mode. `--force` shares `force` with
+    // kill's WM_CLOSE-only mode. `--force` shares `force` with
     // export/capture - the word means "don't ask / don't wait" in both.
     bool closeOnly = false;
     std::wstring out;
@@ -880,15 +880,15 @@ struct Args {
     std::wstring note;
     std::wstring name;
     std::wstring db;
-    // F5.4: the ASN database is a different file from the country one.
+    // the ASN database is a different file from the country one.
     std::wstring asnDb;
-    // 9.2.11 / F5.6. Tri-state: -1 means "not supplied". Rates are bytes/sec.
+    // Tri-state: -1 means "not supplied". Rates are bytes/sec.
     long long alertBpsWarn = -1, alertBpsCritical = -1, alertConnWarn = -1;
     int alertEnable = -1;                 // -1 unset, 0 off, 1 on
     int alertOnListener = -1, alertOnConnection = -1;
     int alertOnRst = -1, alertOnClosed = -1;
     std::wstring alertFmtW;
-    // F5.6: alert rule sub-command. --rule-address/--rule-process/"--rule-name"
+    // The alert rule sub-command. --rule-address/--rule-process/"--rule-name"
     // are how `alert rule add` builds one.
     std::wstring alertRuleAction;
     std::wstring alertRuleName;
@@ -901,8 +901,8 @@ struct Args {
     std::wstring sub;     // bookmark/preset/geoip subverb
     bool quiet = false;   // list/ps: no output, rc answers
     unsigned secs = kCaptureSecsDefault;   // recording window; range in Commands.h
-    // capture: the CLI replacement for the removed GUI Follow TCP stream
-    // (todo.md 8.7 G2). `--out` is NOT re-declared here - it already exists as
+    // capture: the CLI replacement for the removed GUI Follow TCP stream.
+    // `--out` is NOT re-declared here - it already exists as
     // `out` for list/export, means the same thing (a file to write), and giving
     // one switch two homes is how a reader ends up with two different defaults.
     bool captureText = false;
@@ -911,17 +911,17 @@ struct Args {
     unsigned captureFlags = kCaptureFlagsDefault;   // parsed via ParseCaptureFlags
     bool traffic = false; // list/details: per-PID byte totals (bounded scan)
     bool dns = false;     // list/details: reverse-DNS the printed rows
-    // 9.2.8: per-lookup budget (ms) for --dns-timeout. 0 = not given (the
+    // per-lookup budget (ms) for --dns-timeout. 0 = not given (the
     // resolver default applies). Valid range 1..60000 (see parser).
     unsigned dnsTimeoutMs = 0;
-    // F5.3: verify each process image with WinVerifyTrust. OFF by default and
+    // verify each process image with WinVerifyTrust. OFF by default and
     // opt-in for a measured reason: WinVerifyTrust builds a certificate chain
     // and would otherwise be paid for every process on every refresh. Cached per
     // image path, so the cost is once per distinct binary, not once per row.
     bool signatures = false;   // list/details: Authenticode verdicts
     bool changes = false; // list --watch: deltas only
     bool verbose = false; // version: add diagnostic detail
-    // D25: which change kinds to print, as a bitmask of RowChangeKind. The
+    // which change kinds to print, as a bitmask of RowChangeKind. The
     // default is all three. Before this there was NO way to select a kind, so
     // the "what opened while I was away" question - the single most valuable
     // use of an event feed - could not be asked. `--filter event:appear` did
@@ -930,7 +930,7 @@ struct Args {
     // nothing while exiting 0.
     unsigned eventMask = 0x7u;   // appear | disappear | state
     bool hasEvent = false;
-    // D24: every switch literally TYPED on this command line. The verb
+    // every switch literally TYPED on this command line. The verb
     // allow-list reads this, because a defaulted flag and an asked-for flag
     // are indistinguishable in the fields above (every boolean switch defaults
     // to false) and only the second is an error on the wrong verb.
@@ -939,7 +939,7 @@ struct Args {
 
 bool ParseUint(const std::wstring& t, unsigned* out) {
     if (t.empty()) return false;
-    // R6. The accumulator is unsigned long and the cap is 4e9, which reads as
+    // The accumulator is unsigned long and the cap is 4e9, which reads as
     // if the overflow were impossible - but unsigned long is 32 bits on MSVC
     // even in an x64 build (verified: machine 8664, PE32+), so acc*10 wraps
     // modulo 2^32 and the check below runs on the WRAPPED value.
@@ -987,7 +987,7 @@ std::vector<int> ParseColumns(const std::wstring& csv) {
     return std::vector<int>();
 }
 
-// 9.3.3/D33: nearest-known-name suggestion for a token the parser has just
+// nearest-known-name suggestion for a token the parser has just
 // rejected. Defined beside kSwitchNames below; declared here because the
 // parser is the first place a typo is seen.
 std::string SuggestSwitchName(const std::wstring& typed);
@@ -996,7 +996,7 @@ std::string SuggestSwitchName(const std::wstring& typed);
 std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
     for (int i = pos; i < argc; ++i) {
         std::wstring t = argv[i] != nullptr ? argv[i] : L"";
-        // D24: remember that this switch was actually TYPED, before it is
+        // remember that this switch was actually TYPED, before it is
         // consumed. A default value is not evidence of intent: --group and
         // --dns and --quiet all default to false, so "the flag is set" cannot
         // distinguish "asked for" from "defaulted", and the verb allow-list
@@ -1007,7 +1007,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             *out = argv[++i] != nullptr ? argv[i] : L"";
             return true;
         };
-        // 9.2.11: the numeric counterpart. Rejects a non-number rather than
+        // the numeric counterpart. Rejects a non-number rather than
         // silently storing 0, because 0 DISABLES an alert and a typo that
         // reads as a disabled threshold makes the feature look broken for no
         // visible reason.
@@ -1057,7 +1057,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
                 ++i;
             }
         } else if (t == L"--interval") {
-            // 9.2.3: alias for --watch; same range (1..3600), same parsing shape.
+            // alias for --watch; same range (1..3600), same parsing shape.
             a->watch = true;
             if (i + 1 < argc && argv[i + 1] != nullptr &&
                 argv[i + 1][0] != L'-') {
@@ -1084,7 +1084,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
         } else if (t == L"--out") {
             if (!need(&a->out)) return "missing value for --out";
         } else if (t == L"--in") {
-            // 9.2.10: the file a verb READS, beside --out which it writes. Only
+            // the file a verb READS, beside --out which it writes. Only
             // `bookmark import` accepts it (kVerbSwitches), so typing it
             // elsewhere is refused rather than ignored.
             if (!need(&a->in)) return "missing value for --in";
@@ -1161,11 +1161,11 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
         } else if (t == L"--asn-db") {
             if (!need(&a->asnDb)) return "missing value for --asn-db";
         } else if (t == L"--list") {
-            // 9.2.9: `blocks --list`. Only `blocks` accepts it (kVerbSwitches),
+            // `blocks --list`. Only `blocks` accepts it (kVerbSwitches),
             // so this cannot be typed at a verb that would ignore it.
             a->list = true;
         } else if (t == L"--rule") {
-            // 9.5.5: write one policy rule rather than reacting to a live row.
+            // write one policy rule rather than reacting to a live row.
             // Only `block` accepts it, per kVerbSwitches.
             a->rule = true;
         } else if (t == L"--inbound") {
@@ -1236,7 +1236,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
     } else if (t == L"--dns") {
         a->dns = true;
     } else if (t == L"--dns-timeout") {
-        // 9.2.8: per-lookup budget (ms) for --dns. 1..60000; 0 is rejected (the
+        // per-lookup budget (ms) for --dns. 1..60000; 0 is rejected (the
         // default lives in DnsResolver::kDnsTimeoutDefault, but a user typing a
         // number wants a number). Parsed here, the same place --limit/--watch
         // are, so a typo is refused before any lookup runs.
@@ -1247,7 +1247,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
             return "bad --dns-timeout (need 1..60000)";
         a->dnsTimeoutMs = val;
     } else if (t == L"--signatures") {
-            // F5.3. No value: the only question is whether to pay for the
+            // No value: the only question is whether to pay for the
             // verification. A threshold for "how trusted is it" would be a
             // second, differently-worded way of asking the same thing, and the
             // `signed:` filter already covers "give me the good ones".
@@ -1273,7 +1273,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
         } else if (t == L"--quiet" || t == L"-q") {
             a->quiet = true;
         } else if (t == L"--close") {
-            // 9.3.6: kill --close = WM_CLOSE only, never forced.
+            // kill --close = WM_CLOSE only, never forced.
             a->closeOnly = true;
         } else if (t == L"--secs") {
             std::wstring v;
@@ -1282,7 +1282,7 @@ std::string ParseSwitches(int argc, wchar_t** argv, int pos, Args* a) {
                 a->secs > kCaptureSecsMax)
                 return RangeErr("--secs", kCaptureSecsMin, kCaptureSecsMax);
         } else if (!t.empty() && t[0] == L'-') {
-            // 9.3.3/D33: a near-miss switch gets its correction inline.
+            // a near-miss switch gets its correction inline.
             const std::string sugg = SuggestSwitchName(t);
             return "unknown switch: " + WideToUtf8(t) +
                    (sugg.empty() ? std::string()
@@ -1327,7 +1327,7 @@ ListOptions ToListOptions(const Args& a) {
     o.geoIpPath = a.db;
     o.asnIpPath = a.asnDb;
     o.changes = a.changes;
-    // F5.3. Carried on ListOptions rather than applied at the parse site,
+    // Carried on ListOptions rather than applied at the parse site,
     // because the SnapshotSource owns the resolver and is created further down;
     // ListOptions is what survives from here to the pass that builds the rows.
     o.signatures = a.signatures;
@@ -1369,7 +1369,7 @@ std::string InferExportFormat(const std::wstring& path) {
     return "";
 }
 
-// D24. Per-verb switch allow-lists.
+// Per-verb switch allow-lists.
 //
 // The switch parser is global, so before this every verb accepted every
 // switch and silently dropped the ones it did not use. Measured, all rc 0 and
@@ -1397,15 +1397,15 @@ const wchar_t* const kSwitchNames[] = {
     L"--select", L"--pid", L"--address", L"--port", L"--tag", L"--note",
     L"--name", L"--db", L"--asn-db", L"--secs", L"--traffic", L"--dns", L"--changes",
     L"--signatures",
-     // 9.2.9: lists the rules the `blocks` count counts.
+     // lists the rules the `blocks` count counts.
      L"--list",
-     // 9.2.10: the file a verb reads, beside --out which it writes.
+     // the file a verb reads, beside --out which it writes.
      L"--in",
      L"--text", L"--bin", L"--dir",
      L"--event", L"--yes", L"-y", L"--dry-run", L"--force", L"--close",
      L"--dns-timeout",
      L"--dns-timeout",
-     // 9.2.11 / F5.6. Eleven of these are booleans and deliberately do NOT
+     // Eleven of these are booleans and deliberately do NOT
      // appear in TakesValue.
      L"--enable", L"--disable", L"--on-listener", L"--off-listener",
      L"--on-connection", L"--off-connection", L"--on-rst", L"--off-rst",
@@ -1413,7 +1413,7 @@ const wchar_t* const kSwitchNames[] = {
      L"--rule-name", L"--rule-address", L"--rule-process",
      L"--rule-format", L"--rule-on-new", L"--rule-off-new",
      L"--rule-on-close", L"--rule-off-close", L"--rule-on-threshold",
-     // 9.5.5: `block --rule ...` scopes one policy rule. Only `block` accepts
+     // `block --rule ...` scopes one policy rule. Only `block` accepts
      // them (kVerbSwitches), so the global list is for the switch-name check
      // and the "did you mean" suggestion, not for which verbs take what.
      L"--rule", L"--inbound", L"--allow", L"--proto",
@@ -1422,7 +1422,7 @@ const wchar_t* const kSwitchNames[] = {
 constexpr size_t kSwitchNameCount =
     sizeof(kSwitchNames) / sizeof(kSwitchNames[0]);
 
-// 9.3.3/D33: bounded Levenshtein for "did you mean". Fixed rows, a 64-char
+// Bounded Levenshtein for "did you mean". Fixed rows, a 64-char
 // cap (every switch and command name is far shorter); beyond the cap the
 // answer is "far" rather than an allocation. ASCII case-fold only: every
 // candidate is ASCII, and the parser's own matching is case-insensitive.
@@ -1509,7 +1509,7 @@ struct VerbSwitches {
 
 const VerbSwitches kVerbSwitches[] = {
     {L"list",
-     // --out/--force: 9.3.4, the table written to a file instead of stdout;
+     // --out/--force: the table written to a file instead of stdout;
      // --force only exists because --out refuses an existing path.
      L"--filter --sort --asc --desc --group --format --columns --limit "
       L"--quiet --watch --interval --count --traffic --dns --dns-timeout --db --asn-db --changes --event "
@@ -1531,13 +1531,13 @@ const VerbSwitches kVerbSwitches[] = {
     {L"sys", nullptr},    // alias: same as stat
     {L"details", L"--select --traffic --dns --dns-timeout --db --asn-db --signatures"},
      {L"kill",
-      // 9.3.6: --close (ask only) and --force (terminate at once); the
+      // --close (ask only) and --force (terminate at once); the
       // default stays the documented hybrid.
       L"--pid --select --yes --dry-run --close --force"},
      {L"killtree", L"--pid --yes --dry-run --close --force"},
     {L"close", L"--select --yes --dry-run"},
      {L"block",
-      // 9.5.5: `--rule` takes the six scope switches. They are only listed
+      // `--rule` takes the six scope switches. They are only listed
       // here, so typing them at another verb is refused rather than ignored -
       // `block --rule` and `kill --rule` must not read the same way.
       // `--address` and `--port` are already here for the unit tests' sake
@@ -1545,19 +1545,19 @@ const VerbSwitches kVerbSwitches[] = {
       L"--select --yes --dry-run --rule --inbound --allow --proto --address "
       L"--port --local-ports --remote-ports --process --rule-label"},
     {L"unblock", L"--address --port --yes --dry-run"},
-     {L"blocks", L"--list --format"},   // 9.2.9: count, or list the rules
+     {L"blocks", L"--list --format"},   // count, or list the rules
        {L"capture", L"--select --filter --secs --yes --dry-run --text --bin --dir --flags --out --force"},
     {L"follow", nullptr},  // alias: same as capture
      {L"bookmark",
-      // 9.2.10: --out/--in/--yes/--force for the export and import subverbs.
+      // --out/--in/--yes/--force for the export and import subverbs.
       L"--address --port --tag --note --format --out --in --yes --force"},
      {L"preset",
-      // 9.2.10: --out/--in/--yes for the export and import subverbs.
+      // --out/--in/--yes for the export and import subverbs.
       L"--name --filter --sort --asc --desc --force --format --columns "
       L"--limit --traffic --dns --db --asn-db --group --out --in --yes"},
     {L"export",
      // --limit is LISTED even though it is refused further down. That is
-     // deliberate: the generic D24 message ("this switch is not one of this
+     // deliberate: the generic message ("this switch is not one of this
      // command's") is the wrong thing to say about it, because export has a
      // considered opinion - an export always writes the whole view, so a file
      // cannot hold a subset and misreport its own row count. Listing it lets
@@ -1566,14 +1566,14 @@ const VerbSwitches kVerbSwitches[] = {
       L"--traffic --dns --dns-timeout --db --asn-db --quiet --limit --force"},
     {L"geoip", L"--db"},
     {L"version", L"verbose"},  // --verbose adds diagnostic detail
-    // F5.4: --asn-db so `doctor` can diagnose the second database, which until now
+    // --asn-db so `doctor` can diagnose the second database, which until now
     // it silently refused. An asn: filter that matches nothing had no way to ask
     // whether the file it was given was even an ASN database.
     {L"doctor", L"--verbose --format --db --asn-db"},
-    // 9.2.11 / F5.6. Takes switches because it IS the surface that sets them.
+    // Takes switches because it IS the surface that sets them.
     {L"alert", L"--enable --disable --bps-warn --bps-critical --connections on-listener off-listener on-connection off-connection on-rst off-rst on-closed off-closed --alert-format --rule-name --rule-address --rule-process --rule-format --rule-on-new --rule-off-new --rule-on-close --rule-off-close --rule-on-threshold"},
     {L"help", L""},       // takes no switches
-    // Hidden test verb for R1: raises a real access violation so that
+    // Hidden test verb: raises a real access violation so that
     // wintcp\tests\cli.bat can assert the crash filter writes a minidump.
     // Deliberately absent from help, from the documentation and from
     // wintcp\tests\examples.txt - it is a fuse box, not a feature, and
@@ -1631,7 +1631,7 @@ bool CheckVerbSwitches(const Args& a, const std::wstring& verb,
         // An unknown COMMAND, not an unknown switch: point at the overview.
         // The switch-level errors below carry their own "try help <verb>",
         // and this is the one case where there is no verb to point at.
-        // 9.3.3/D33: a near-miss spelling is corrected, not just refused.
+        // a near-miss spelling is corrected, not just refused.
         if (err != nullptr) {
             const std::string sugg = SuggestCommandName(verb);
             *err = WideToUtf8(verb) + ": unknown command.\r\n" +
@@ -1650,7 +1650,7 @@ bool CheckVerbSwitches(const Args& a, const std::wstring& verb,
         if (a.given.find(name) == a.given.end()) continue;  // not typed here
         if (SwitchAllowed(allowed, name)) continue;
         if (err != nullptr) {
-            // 9.3.3: name the allowed set so a typo is debuggable, not just
+            // name the allowed set so a typo is debuggable, not just
             // refused. The full list is short and the verb owns it above.
             std::string hint;
             if (allowed != nullptr && *allowed != L'\0')
@@ -1677,7 +1677,7 @@ BOOL WINAPI CmdCtrlHandler(DWORD type) {
     return FALSE;
 }
 
-// 9.2.3: --watch without --count runs until Ctrl+C - right for a terminal,
+// --watch without --count runs until Ctrl+C - right for a terminal,
 // a trap for a redirected script. Warn once, on stderr, only when stdout is
 // NOT a console: an interactive user watching output scroll needs no
 // warning; a pipeline filling a disk does.
@@ -1735,7 +1735,7 @@ int RunChangesLoop(const Args& a, const ListOptions& opt) {
     unsigned n = 0;
     int rc = 0;
     bool first = true;
-    WarnUnboundedWatch(a);   // 9.2.3: same contract as RunPollLoop
+    WarnUnboundedWatch(a);   // same contract as RunPollLoop
     for (;;) {
         std::wstring err;
         if (!BuildStoreSnapshot(source, store, /*procStats=*/false,
@@ -1781,7 +1781,7 @@ int RunChangesLoop(const Args& a, const ListOptions& opt) {
 
 }  // namespace
 
-// The streaming write for D15: runs DURING a command, straight to stdout
+// The streaming write that runs DURING a command, straight to stdout
 // (or its redirect), so a table's header lands before the slow enrichment
 // joins finish. Deliberately the same writer Emit uses for the rows - one
 // handle, one byte stream, order preserved.
@@ -1813,7 +1813,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         }
         if (PrintCommandHelp(topic)) return 0;
         {
-            // 9.3.3/D33: a near-miss topic gets its correction.
+            // a near-miss topic gets its correction.
             const std::string sugg = SuggestCommandName(topic);
             WriteErr("unknown command: '" + WideToUtf8(topic) + "'." +
                      (sugg.empty() ? std::string()
@@ -1852,7 +1852,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
                  "'.\r\n");
         return 2;
     }
-    // D24: a switch this verb does not act on is an argument error, not
+    // a switch this verb does not act on is an argument error, not
     // something to swallow. Placed right after parsing so every verb below
     // inherits it, and BEFORE any work is done - nothing is enumerated, no
     // file is written and no registry key is touched before the command line
@@ -1867,9 +1867,9 @@ int RunCliCommand(int argc, wchar_t** argv) {
         }
     }
     if (cmd == L"version") {
-        // 9.2.4: --verbose adds diagnostic detail for troubleshooting.
+        // --verbose adds diagnostic detail for troubleshooting.
         const bool verbose = a.verbose;
-        // D23. Two real bugs in one place, both about the summary claiming
+        // Two real bugs in one place, both about the summary claiming
         // things this process did not check.
         //
         // 1. `elevated` was IsElevatedInstance(), which tests for the RELAUNCH
@@ -1911,7 +1911,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         {
             SocketTrafficSampler probe;
             s.trafficFallback = !s.elevated && probe.Supported();
-            // 9.2.4: this probe sampler never ran a pass, so it has no opinion
+            // this probe sampler never ran a pass, so it has no opinion
             // about gaps - and reporting "0" here would claim the CLI checked
             // and found nothing. The counters belong to the process-lifetime
             // sampler the --traffic verbs actually use, which is a different
@@ -1924,7 +1924,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
                 s.trafficScanFailures = live->ScanFailureCount();
             }
         }
-        // R7: read the OS counters, do not track them ourselves. Both calls take
+        // read the OS counters, do not track them ourselves. Both calls take
         // the current process and are one syscall each - no new infrastructure,
         // and nothing to keep in sync with reality.
         //
@@ -1968,7 +1968,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return r.exitCode;
     }
     if (cmd == L"crashtest") {
-        // R1 fuse box. Not reachable from help, the README or any script
+        // A fuse box. Not reachable from help, the README or any script
         // but golden's; see CrashDump.h. This one verb STAYS in the product,
         // unlike selftest/bench: it exists so a system test can crash the
         // shipped binary and prove the crash filter writes a minidump. The
@@ -1994,7 +1994,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
             return 2;
         }
         ListOptions opt = ToListOptions(a);
-        // 9.3.4: --out writes ONE rendered snapshot to a file. Each refusal
+        // --out writes ONE rendered snapshot to a file. Each refusal
         // names its own contradiction instead of picking a side for the
         // user: a watch would overwrite the file every tick, a change
         // stream is not a table, and a quiet run renders nothing.
@@ -2015,7 +2015,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
                 return 2;
             }
         }
-        // 9.2.2: --quiet turns the exit code into the ONLY answer, so a
+        // --quiet turns the exit code into the ONLY answer, so a
         // quiet run whose filter asks an enrichment question its switches
         // left unanswerable would answer "no match" (1) as a fact. Refuse
         // instead (exit 2), naming the switch. The advisory text stays
@@ -2030,10 +2030,10 @@ int RunCliCommand(int argc, wchar_t** argv) {
                 return 2;
             }
         }
-        // D15: the CLI's list verb prints its fixed column header as soon
+        // the CLI's list verb prints its fixed column header as soon
         // as the snapshot exists, not after the enrichment joins; json has
         // no header line, --quiet prints nothing (zero bytes, always).
-        // 9.3.4: with --out nothing streams to stdout, so the header stays
+        // with --out nothing streams to stdout, so the header stays
         // in r.out and lands in the file.
         opt.streamHeader = !opt.quiet && opt.format != "json" && a.out.empty();
         if (opt.changes) {
@@ -2090,7 +2090,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
                 Emit(r);
                 return r.exitCode;
             }
-            // 9.3.4: same file rules as export --out. Refuse an existing
+            // same file rules as export --out. Refuse an existing
             // path without --force (an --out that overwrites by default is
             // how a script loses yesterday's data); BOM for csv/tsv/table,
             // never for json/jsonl - both verbs share
@@ -2181,7 +2181,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return r.exitCode;
     }
     if (cmd == L"kill") {
-        // 9.3.6: the two modes are exclusions, not preferences. Accepting
+        // the two modes are exclusions, not preferences. Accepting
         // both and picking one silently would be the swallowed-switch bug.
         if (a.closeOnly && a.force) {
             WriteErr("kill: --close (never force) and --force (never ask) "
@@ -2215,7 +2215,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return killed.exitCode;
     }
     if (cmd == L"killtree") {
-        // 9.5.6: the whole tree under a PID. One verb rather than a --tree
+        // the whole tree under a PID. One verb rather than a --tree
         // switch on `kill`, because the two have different contracts: `kill`
         // is all-or-nothing (it refuses before doing anything if the target
         // cannot be ended), while a tree is best-effort by design - it ends
@@ -2251,7 +2251,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
     }
     if (cmd == L"block") {
         if (a.rule) {
-            // 9.5.5: a stated rule. Mutually exclusive with --select, checked
+            // a stated rule. Mutually exclusive with --select, checked
             // here rather than by the engine so the message names the conflict
             // instead of reporting a bad rule.
             if (!a.select.empty()) {
@@ -2336,7 +2336,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
             Emit(r);
             return r.exitCode;
         }
-        // 9.2.10: the file. `export` writes it and `import` reads it, and both
+        // the file. `export` writes it and `import` reads it, and both
         // go through the same codec so a file this tool writes is a file it can
         // read back - pinned by a round-trip test in Bench.cpp.
         if (sub == L"export") {
@@ -2414,7 +2414,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
                 WriteErr("preset apply: --name N is required.\r\n");
                 return 2;
             }
-            // D24: the user's own output switches are layered over the saved
+            // the user's own output switches are layered over the saved
             // view instead of being silently dropped. `--limit 2` and
             // `--columns pid,remote` now mean what they say (before: the whole
             // table in the preset's default columns, rc 0).
@@ -2430,7 +2430,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
             Emit(r);
             return r.exitCode;
         }
-        // 9.2.10: the file, beside bookmark's.
+        // the file, beside bookmark's.
         if (sub == L"export") {
             const CommandResult r = CmdPresetExport(a.out, a.force);
             Emit(r);
@@ -2449,7 +2449,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
             WriteErr("export: --out FILE is required.\r\n");
             return 2;
         }
-        // D24. --limit is refused, NOT silently dropped. CmdExport deliberately
+        // --limit is refused, NOT silently dropped. CmdExport deliberately
         // exports the whole view, because a file that quietly holds 5 of 300
         // rows while the tool reports success is a lie about the machine.
         // Accepting the switch and ignoring it made that lie invisible; a
@@ -2514,9 +2514,9 @@ int RunCliCommand(int argc, wchar_t** argv) {
         af.onClosed = a.alertOnClosed > 0;
         af.format = WideToUtf8(a.alertFmtW);
         const CommandResult r = CmdAlert(af);
-        // F5.6: `alert rule <add|list|remove>`. The sub-command arrives as the
+        // The alert rule sub-command. The sub-command arrives as the
         // first non-switch argument, same shape as `geoip lookup` uses.
-        // F5.6: `alert rule <add|list|remove>`. Two positional slots already
+        // Two positional slots already
         // exist - the subverb, then `geoip lookup`'s address - and this needs
         // exactly two: `rule`, then the action. No new parser grammar.
         if (ToLowerW(a.sub) == L"rule" && !a.ip.empty()) {
@@ -2600,7 +2600,7 @@ int RunCliCommand(int argc, wchar_t** argv) {
         return r.exitCode;
     }
     {
-        // 9.3.3/D33: near-miss command names are corrected here too - this
+        // near-miss command names are corrected here too - this
         // is the path `nonsense` takes (no --help token, parse succeeds).
         const std::string sugg = SuggestCommandName(argv[1]);
         WriteErr("unknown command: '" + WideToUtf8(argv[1]) + "'." +

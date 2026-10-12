@@ -1,6 +1,6 @@
 // BlockedPeersDialog.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.2.9 - View > Blocked peers...
+// View > Blocked peers...
 //
 // A modal that lists the firewall rules `blocks` counts, with per-rule delete
 // and "remove all". The rules come from ListBlockedRules (BlockConn.h), which
@@ -61,7 +61,7 @@ BlockedPeersChoice ShowBlockedPeersDialog(HWND owner, std::wstring* failure);
 // is labelled, never shown as though it were protection.
 std::wstring BlockedPeersRowText(const BlockedRule& rule);
 
-// Columns of the report view (G14): the rule name, the remote scope it
+// Columns of the report view: the rule name, the remote scope it
 // blocks, and its state. The state column replaces the old "[disabled]" /
 // "[not a block]" text suffixes, so state is a sortable column instead of
 // a substring embedded in a string.

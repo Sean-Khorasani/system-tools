@@ -67,7 +67,7 @@ std::vector<ProcessGroup> GroupByProcess(const std::vector<GroupRow>& rows) {
         if (r.trafficRx > g.trafficRx) g.trafficRx = r.trafficRx;
         if (r.trafficTx > g.trafficTx) g.trafficTx = r.trafficTx;
 
-        // G5, and the same MAXIMUM-not-sum rule for the same reason: every row
+        // and the same MAXIMUM-not-sum rule for the same reason: every row
         // of a PID carries the identical process rate (ComputeGroupRates writes
         // it to all of them), so the maximum is that value. Summing would report
         // a process's rate multiplied by its connection count - which for a
@@ -116,7 +116,7 @@ bool GroupColumnText(const ProcessGroup& g, int columnId, wchar_t* out,
 
     switch (columnId) {
         case COL_PROCESS:
-            // 9.4.5: the grouped header carries its member count so the row
+            // the grouped header carries its member count so the row
             // reads "chrome.exe (14)" at a glance, matching the freeze banner's
             // "chrome.exe (14)" shape. ghosts count toward it - they are the
             // process's vanished connections, still part of the group until
@@ -172,12 +172,12 @@ bool ColumnIsPerConnectionOnly(int columnId) {
         case COL_HOST:
         case COL_TLS:
         case COL_COUNTRY:
-        // 5.5: a note is written against ONE remote endpoint (that is what a
+        // a note is written against ONE remote endpoint (that is what a
             // bookmark is keyed on), so a group of several connections has no
             // single note. Same shape as the host column beside it, and it must
             // be in this set for the same reason: a grouped CSV whose Note
             // header promises the group's note while the cells carry one
-            // arbitrary member's is the D27 bug all over again.
+            // arbitrary member's is the bug all over again.
             case COL_NOTE:
             return true;
         default:

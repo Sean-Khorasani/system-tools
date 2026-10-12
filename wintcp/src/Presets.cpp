@@ -9,7 +9,7 @@
 // and refused unless its type, its length and its NUL all make sense.
 
 #include "Presets.h"
-#include "Settings.h"   // RegReadBoundedString (C6: the one string-read policy)
+#include "Settings.h"   // RegReadBoundedString (the one string-read policy)
 
 #include <algorithm>
 #include <cwchar>
@@ -90,7 +90,7 @@ bool ReadSubKeyName(HKEY key, DWORD index, std::wstring* out) {
 // a whole number of wchar_t, a length over the cap, or data whose last wchar
 // is not a NUL (a half-written string). Callers treat every one of those as
 // "this preset is not loadable".
-// Trust rules live in Settings::RegReadBoundedString (C6): this was a
+// Trust rules live in Settings::RegReadBoundedString: this was a
 // byte-identical clone of the same copy in Bookmarks.cpp.
 bool ReadString(HKEY key, const wchar_t* name, size_t maxChars,
                 std::wstring* out) {

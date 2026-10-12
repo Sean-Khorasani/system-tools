@@ -1,10 +1,10 @@
 // ExposureScore.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.5.5 - the exposure badge's decision half.
+// the exposure badge's decision half.
 //
 // The badge answers one question: is there a listening socket reachable from
-// somewhere other than this machine? Recipe 24 names the red case - a
-// listener on 0.0.0.0:443 owned by System and unsigned - and that is the case
+// somewhere other than this machine? The red case - a
+// listener on 0.0.0.0:443 owned by System and unsigned - is the case
 // this module is built around.
 //
 // WHY A PURE MODULE AND NOT A NEW COLUMN. COL_COUNT is exactly 32 and
@@ -75,7 +75,7 @@ struct ExposureRow {
     // Why THIS row got its level. Empty for kNone: a row that is not exposed
     // has no reason worth a slot in the bar.
     std::wstring reason;
-    // Privileged owner behind the listener - the second axis of recipe 24.
+    // Privileged owner behind the listener - the second axis of the red case.
     // 'isSystem' covers System/LocalSystem owners (services, svchost),
     // 'isUnsigned' covers a binary with no Authenticode signature. The
     // combination is what makes a public listener alarming rather than

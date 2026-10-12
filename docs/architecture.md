@@ -141,7 +141,7 @@ The alternative was measured rather than assumed. A single-index lookup turned e
 
 ### Ghosts
 
-A row that disappeared flashes red for one refresh, then lingers as a **grey retained ghost** (F5.7) so the table keeps a short history of recently closed sockets. Ghosts are bounded at `ConnectionStore::kMaxRetainedGhosts` (500); the oldest are aged out first, their final byte counters frozen at the moment of death. `DISAPPEAR` still fires exactly once, so the change feed is unchanged.
+A row that disappeared flashes red for one refresh, then lingers as a **grey retained ghost** so the table keeps a short history of recently closed sockets. Ghosts are bounded at `ConnectionStore::kMaxRetainedGhosts` (500); the oldest are aged out first, their final byte counters frozen at the moment of death. `DISAPPEAR` still fires exactly once, so the change feed is unchanged.
 
 ## Model and view are separate
 
@@ -197,7 +197,7 @@ The CLI builds the same `Snapshot` through the same `SnapshotSource`, so a comma
 **The 32-column ceiling is a decision, not a limit that ran into.** The visible
 set, order, widths and sort all persist, and the visible set is a `UINT32` mask -
 one bit per `ColumnId` - in `Settings.h`, in the registry, and in the Columns menu's
-`IDM_COL_BASE + n` range in `resource.h`. `F5.1`-`F5.3` took `COL_COUNT` from 29 to
+`IDM_COL_BASE + n` range in `resource.h`. `COL_COUNT` was taken from 29 to
 exactly 32, so the mask is now full. `ColumnsWin.h` carries a `static_assert` that
 fails the build at 33, which is the point: the failure is meant to be loud and to
 name what has to widen first. **The decision taken on 2026-10-06 is to freeze at
@@ -209,10 +209,10 @@ widening is not one change but eight (`UINT64` mask, `REG_BINARY` at 8 bytes, a
 and that a persisted-mask widening which gets one of those wrong shows up as a
 user's saved layout silently changing. A column that is genuinely needed should
 raise this deliberately, not arrive as a side effect of a feature. Where a feature
-wanted a column that would not fit - ASN (9.5.1) is the live case - it reuses the
+wanted a column that would not fit - ASN is the live case - it reuses the
 Country column rather than growing the mask.
 
-**ASN is that case, and it now reuses `country`** (F5.4). The cell renders both
+**ASN is that case, and it now reuses `country`**. The cell renders both
 answers as `US · AS15169 Google LLC`, with the separator appearing only when both
 are known, so a row that has only a country looks exactly as it always did. The AS
 number is placed *before* the operator name on purpose: the cell ellipsises on

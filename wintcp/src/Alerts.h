@@ -41,7 +41,7 @@ namespace wintcp {
 
 // Thresholds for the alert engine below. Zero disables a given alert.
 //
-// B5 verdict (2026-10-01): "user-configurable" is what these SHOULD be, not
+// "user-configurable" is what these SHOULD be, not
 // what they are — there is no persistence, no CLI, and no editor, and the
 // engine has no production caller (only selftest drives it). Wiring the loop
 // (persist + per-refresh Evaluate + balloon via ShowTrayBalloon + a surface
@@ -85,7 +85,7 @@ struct Alert {
     bool rising = false;
 
 };
-// F5.6. A rule about ONE connection rather than about the whole table.
+// A rule about ONE connection rather than about the whole table.
 //
 // Empty means "any": a rule with no address and no process watches every row,
 // which is what the whole-table threshold already does. The interesting case is
@@ -116,7 +116,7 @@ public:
     std::vector<Alert> Evaluate(const std::vector<Connection>& rows,
                                 const AlertSettings& s);
 
-    // F5.6. Per-connection rules. A whole-table threshold answers "the machine is
+    // Per-connection rules. A whole-table threshold answers "the machine is
     // busy"; this answers "the one thing I asked about changed".
     //
     // The latch is PER RULE, keyed by NAME rather than by address: two rules
@@ -141,7 +141,7 @@ private:
     bool sawConnection_ = false;
     size_t lastCount_ = 0;
     size_t suppressed_ = 0;
-    // F5.6: rule name -> true while that rule is matching.
+    // rule name -> true while that rule is matching.
     std::set<std::wstring> ruleLatched_;
 };
 
@@ -155,7 +155,7 @@ bool ShowTrayBalloon(NOTIFYICONDATAW* nid, const std::wstring& title,
 // Human-readable byte-rate, shared with the status bar.
 std::wstring FormatBps(double bytesPerSecond);
 
-// F5.6. Where rules live. The engine reads a vector; something has to fill it, and
+// Where rules live. The engine reads a vector; something has to fill it, and
 // the answer cannot be a member of the window or of the CLI - both would be a place
 // the other one does not see.
 //

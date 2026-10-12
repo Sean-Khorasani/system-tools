@@ -38,7 +38,7 @@ namespace wintcp {
 // silent and catastrophic default that no "the default set is non-empty" test
 // would catch, because 1 IS non-empty.
 //
-// F5.1-F5.3 took COL_COUNT from 29 to exactly 32, so this is now load-bearing
+// The three newest columns took COL_COUNT from 29 to exactly 32, so this is now load-bearing
 // rather than theoretical, and /WX turns the C4293 into a build failure - which
 // is how it was caught. The 64-bit shift below is well defined at 32 and is cast
 // back down; the assert is the reminder that a 33rd column needs the stored mask
@@ -48,7 +48,7 @@ static_assert(COL_COUNT <= 32,
               "below caps at 32. Widen the stored mask (and Settings' "
               "ColVersion migration) BEFORE adding a 33rd column.");
 
-// DECISION 2026-10-06 (9.1.1): FREEZE AT 32. Not "we ran out of room" - 32 was
+// DECISION 2026-10-06: FREEZE AT 32. Not "we ran out of room" - 32 was
 // chosen over widening, and this is the note saying so at the place a 33rd
 // column would be added.
 //
@@ -64,7 +64,7 @@ static_assert(COL_COUNT <= 32,
 //     silently, which is the failure mode nobody would think to test for.
 //
 // So a feature that needs a column reuses an existing one rather than growing
-// the mask as a side effect. ASN (9.5.1) is the live case: it reuses Country.
+// the mask as a side effect. ASN is the live case: it reuses Country.
 // A 33rd column is a deliberate act - widen the mask and migrate first, in its
 // own commit - not something that arrives with a feature.
 //
@@ -83,7 +83,7 @@ constexpr UINT32 kAllColMask =
 // renumber every persisted bit and shift every user's saved layout. Spelled as
 // a named constant so the two halves of the decision cannot disagree.
 static_assert(COL_COUNT == kMaxPersistedColumns,
-              "The 32-column freeze was decided together (9.1.1). Removing a "
+              "The 32-column freeze. Removing a "
               "column renumbers the persisted mask, so a removal needs the same "
               "migration a widening would.");
 
@@ -94,7 +94,7 @@ static_assert(COL_COUNT == kMaxPersistedColumns,
 // Memory / Disk I/O / Speed / TLS / Country are opt-in enrichment. Must stay
 // in step with the ColVersion migration in Settings.cpp.
 //
-// G6's four `ss -i` columns and G5's per-process rate are hidden here for the
+// The four `ss -i` columns and the per-process rate are hidden here for the
 // same reason TLS and Country are, and with the same reasoning as the ColVersion
 // 4 migration: they are DIAGNOSTIC. RTT and retransmit counts are what you want
 // while chasing one slow connection and are four columns of mostly em-dashes to
@@ -106,12 +106,12 @@ constexpr UINT32 kDefaultVisibleCols =
     ~(1u << COL_DISK) & ~(1u << COL_BANDWIDTH) & ~(1u << COL_TLS) &
     ~(1u << COL_COUNTRY) & ~(1u << COL_RTT) & ~(1u << COL_MINRTT) &
     ~(1u << COL_CWND) & ~(1u << COL_RETRANS) & ~(1u << COL_GROUPRATE) &
-    // F5.1/F5.2/F5.3 join TLS and Country as opt-in enrichment: a parent id,
+    // These three join TLS and Country as opt-in enrichment: a parent id,
     // an integrity level and a signature verdict are what you switch on to
     // audit a few processes, not three more columns of mostly em-dashes spread
     // across three hundred rows.
     ~(1u << COL_PPID) & ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) &
-    // 5.5: the Note column is HIDDEN by default, unlike the Bookmarks column
+    // The Note column is HIDDEN by default, unlike the Bookmarks column
     // beside it. A pin or a colour tag is a two-character signal worth seeing
     // always; a note is prose that is empty on nearly every row, and a column
     // of em-dashes costs horizontal space that the connection identity needs.
@@ -123,7 +123,7 @@ inline UINT32 ClampVisibleCols(UINT32 mask) {
     return (mask == 0) ? 1u : mask;
 }
 
-// 9.4.4 column profiles. A profile is a named column MASK - nothing else. A
+// Column profiles. A profile is a named column MASK - nothing else. A
 // preset (File > Save view as preset) is a whole ViewState and already carries a
 // mask; these must not become a second, weaker preset that can drift from it.
 //
@@ -166,7 +166,7 @@ constexpr UINT32 kPerformanceProfileCols =
     ~(1u << COL_CWND) & ~(1u << COL_RETRANS) & ~(1u << COL_PPID) &
     ~(1u << COL_INTEGRITY) & ~(1u << COL_SIGNATURE) & ~(1u << COL_NOTE);
 
-// The five G6/G5 diagnostic readings, as one mask. "Show diagnostics" ORs these on
+// The five diagnostic readings, as one mask. "Show diagnostics" ORs these on
 // rather than replacing what is visible.
 constexpr UINT32 kDiagnosticsCols = (1u << COL_RTT) | (1u << COL_MINRTT) |
                                     (1u << COL_CWND) | (1u << COL_RETRANS) |

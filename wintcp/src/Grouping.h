@@ -57,7 +57,7 @@ struct GroupRow {
     std::uint64_t connectionCount = 1;   // per-row: 1, unless already merged
     bool removed = false;                 // a ghost row (vanished last cycle)
 
-    // G5: this row's PROCESS rate, identical on every row of a PID. Carried on
+    // This row's PROCESS rate, identical on every row of a PID. Carried on
     // the projection so the group can show the process figure without this
     // module knowing anything about Connection - the same discipline as
     // trafficRx above, which is also a per-PID value flattened onto per-row
@@ -97,7 +97,7 @@ struct ProcessGroup {
     // total into a small, plausible-looking, wrong number.
     std::uint64_t TotalTraffic() const { return SaturatingAdd(trafficRx, trafficTx); }
 
-    // G5: the PROCESS's bytes/second. Taken as the MAXIMUM over the members,
+    // the PROCESS's bytes/second. Taken as the MAXIMUM over the members,
     // for the same reason trafficRx above is - every row of one PID carries the
     // identical figure (ComputeGroupRates writes it to all of them), so max and
     // sum would agree in value and sum would be wrong by the member count. Using
@@ -153,7 +153,7 @@ bool GroupColumnText(const ProcessGroup& g, int columnId, wchar_t* out,
 // So the table/GUI keep the representative value, and `export` refuses the
 // combination BY NAME (see CmdExport) rather than writing a file whose header
 // over-claims. A named refusal is louder than a plausible wrong file, and this
-// codebase's whole posture - see MissingEnrichmentAdvice and the D24 switch
+    // codebase's whole posture - see MissingEnrichmentAdvice and the switch
 // allow-lists - is that a silent wrong answer is the failure to design out.
 //
 // Note which columns are NOT here: cpu, mem and disk fall through to the

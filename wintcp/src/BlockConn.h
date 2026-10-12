@@ -38,7 +38,7 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>   // R3: ParseLedgerBytes hands back the parsed pairs
+#include <vector>   // ParseLedgerBytes hands back the parsed pairs
 
 namespace wintcp {
 
@@ -113,7 +113,7 @@ bool IsConnectionBlocked(const BlockRequest& req);
 // created, via Item(). That is O(number of possible peers) rather than
 // O(system rules), which is the right trade: correctness over speed for a
 // count that runs on demand.
-// A count that cannot be made is not a count of zero: R3 added an error
+// A count that cannot be made is not a count of zero: an error
 // channel because `blocks` reporting "0" for a ledger it refused to read is
 // the silent-wrong-answer shape this tool does not otherwise ship. *error is
 // optional and, when supplied, is set ONLY on that failure - a genuinely
@@ -125,7 +125,7 @@ int CountWinTcpRules(std::wstring* error = nullptr);
 // survives; the failing names are appended to 'error'.
 bool RemoveAllWinTcpRules(std::wstring* error);
 
-// 9.2.9: one WinTCP-tagged rule as the viewer reports it. Enumerating the
+// One WinTCP-tagged rule as the viewer reports it. Enumerating the
 // policy store cannot be used to FIND these (see the note on
 // CountWinTcpRules above), so the list is driven from the ledger and probed
 // by name - but once a rule is in hand every field below is read from the
@@ -176,7 +176,7 @@ bool RemoveBlockedRule(const std::wstring& name, std::wstring* error);
 bool SetBlockedRuleEnabled(const std::wstring& name, bool enabled,
                            std::wstring* error);
 
-// 9.2.9, two PURE helpers so the viewer's ledger handling is testable
+// Two PURE helpers so the viewer's ledger handling is testable
 // without touching the real file. Both are the reason RemoveBlockedRule can
 // promise not to change what `blocks` counts: the ledger's shape is decided
 // here, once, rather than inline at two call sites that could disagree.
@@ -193,7 +193,7 @@ std::vector<std::wstring> SplitLedgerNames(const std::wstring& line);
 bool BlankLedgerName(const std::wstring& line, const std::wstring& name,
                      std::wstring* out);
 
-// R3: parse the ledger's bytes into rule-name pairs. PURE - no file, no
+// Parse the ledger's bytes into rule-name pairs. PURE - no file, no
 // registry, no environment - so the selftest can drive it with hostile input
 // without touching the real ledger under %APPDATA%, which is the one thing it
 // must never do. The file cap lives in ReadLedger (it needs the file size);
@@ -208,7 +208,7 @@ bool BlankLedgerName(const std::wstring& line, const std::wstring& name,
 bool ParseLedgerBytes(const char* data, size_t len,
                       std::vector<std::wstring>* out, std::wstring* error);
 
-// R3: the per-line cap, in the header so the selftest that pins the boundary
+// The per-line cap, in the header so the selftest that pins the boundary
 // uses the same number the parser does rather than a copy of it. A name is at
 // most kMaxRuleNameChars (255) wchar_t and a wchar_t is at most 4 bytes in
 // UTF-8, so a line this code can legitimately write cannot exceed
@@ -256,7 +256,7 @@ bool SetIpv4Teardown(const unsigned char* remoteAddr, uint16_t localPort,
                      uint16_t remotePort, std::wstring* error);
 
 // ========================================================================
-// 9.5.5 - the firewall manager's rule layer
+// The firewall manager's rule layer
 // ========================================================================
 //
 // BlockConnection is a SINGLE CONVERSATION: it takes a live row, kills it and
