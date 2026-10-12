@@ -33,6 +33,8 @@ add_executable(wintcp
     wintcp/src/TcpTable.cpp
 wintcp/src/RowEnrichment.cpp
 wintcp/src/ListViewColumns.cpp
+wintcp/src/ConnectionsList.cpp
+wintcp/src/ConnectionsListOwner.cpp
 wintcp/src/TrayIcon.cpp
     wintcp/src/TcpTable.h
     wintcp/src/ProcessInfo.cpp

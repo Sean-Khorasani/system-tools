@@ -51,6 +51,7 @@
 #include "WorkerSink.h"        // the mailbox the worker threads post into
 #include "RowEnrichment.h"     // DNS / country / ASN
 #include "ListViewColumns.h"   // column geometry: mask, widths, order
+#include "ConnectionsList.h"   // the list control, its text, its selection
 
 namespace wintcp {
 
@@ -63,7 +64,7 @@ namespace wintcp {
 // the OLD order, and there is no end-of-drag notification to hook.
 constexpr UINT WM_APP_COLUMNORDER_SYNC = WM_APP + 4;
 
-class MainWindow {
+class MainWindow : public ConnectionsListSink {
 public:
     MainWindow() = default;
     ~MainWindow();
@@ -132,8 +133,9 @@ private:
     void OnRefreshResult(RefreshResult* payload);   // takes ownership if registered
     void OnDnsResult(DnsResolver::Result* payload); // takes ownership if registered
 
-void CreateControls();
-void LayoutControls(int cx, int cy);
+    void CreateControls();
+    void LayoutControls(int cx, int cy);
+    void InitTooltips();                // control-bar tooltips + accNames
 // Column geometry lives in ListViewColumns; these are the window's half of
 // it - the dialogs, the side effects, the persistence and the repaint.
 void RebuildColumns();                 // apply visibility + widths
@@ -151,8 +153,6 @@ void InitFilterControls();
     void RecreateFont();                   // Segoe UI 9pt at current DPI
     void ApplyFontToChildren();
 
-    // Change highlighting: custom-draw rows flagged by the diff.
-    LRESULT OnCustomDraw(NMLVCUSTOMDRAW* cd);
 
     // Close connection.
     void CloseSelectedConnection();
@@ -200,18 +200,17 @@ void InitFilterControls();
     void RaiseAlert(const wintcp::Alert& a);   // one balloon per alert
     // Filter + sort + repaint the virtual list, preserving selection/scroll.
     void ApplyView();                      // captures selection from current view
+    // The funnel behind ApplyView: a caller that has already captured the
+    // selection (or wants to preserve a specific one) calls this with it, and
+    // every other path - a refresh, a column toggle, a preset, a GeoIP pick,
+    // a freeze - ends here.
     void ApplyViewWith(const std::vector<std::uint64_t>& ids,
                        std::uint64_t focusedId, int topIdx);
-    void CaptureSelection(std::vector<std::uint64_t>& ids,
-                          std::uint64_t* focusedId, int* topIdx) const;
-    void RestoreSelection(const std::vector<std::uint64_t>& ids,
-                          std::uint64_t focusedId, int topIdx);
     void UpdateStatusBar(const std::wstring& errorText);
     void UpdateCaption();               // the state-carrying title
-    void UpdateExposure();                   // the exposure badge
+    void UpdateExposure();              // the exposure badge
     void UpdateTrayTip();               // rows/frozen/grouped/alerts tip
-    void InitTooltips();                // control-bar tips
-    void UpdateStatusTips();            // every status pane gets a tip
+    void UpdateStatusTips();            // every status pane gets a tooltip
     void ResetLayout();                 // defaults + persist + rebuild
     // the process-tree view mode. Toggle swaps the tree control in
     // where the list view is; RebuildTree refills it from the store's rows
@@ -245,20 +244,20 @@ void InitFilterControls();
 
     void Refresh(bool reportErrors);
     void ExportCsv();                     // -> DoExport(false)
-    void DoExport(bool selectionOnly);    // CSV/TSV/JSON + last dir
     std::wstring SelectedRowsText(bool copyAll) const;
     void CopySelectionToClipboard(bool copyAll);
     void KillSelectedProcess();            // PID-reuse verification
     void ShowDetailsOfSelectedRow();       // modeless details window
     // REMOVED 2026-10-05. The capability moved to the CLI as
     // `capture --text` / `capture --out`.
-    // void FollowSelectedStream();        // pktmon + hex view
     void OpenSelectedFileLocation();      // ShellExecute "explore"
     // REMOVED 2026-10-05: the `properties` shell verb cannot
     // be invoked with a bare path, so this action never worked.
     // void ShowSelectedProcessProperties(); // ShellExecute "properties"
     void BlockSelectedConnection();       // firewall block
     void RemoveAllWinTcpBlocks();         // tray - every WinTCP rule at once
+    // The Export CSV path: the dialog is the window's, the text is the list's.
+    void DoExport(bool selectionOnly);
     // sectioned builder + silent live-update while open.
     DetailModel BuildDetails(const Connection& c) const;
     void RefreshDetailsWindow();           // no-op unless details visible
@@ -312,7 +311,6 @@ void InitFilterControls();
     unsigned settingsSaveAttempts_ = 0;
     unsigned settingsSaveFailures_ = 0;
 
-    // Keyboard UX: handlers for the Edit menu / accelerators.
     void SelectAllRows();
     void FocusFilterBox();
     void ClearFilterBox();
@@ -320,13 +318,10 @@ void InitFilterControls();
     std::wstring CurrentSearchText() const;
     unsigned CurrentProtoFilterMask() const;   // kProtoMask* combination
     DWORD CurrentStateFilter() const;          // kAllStates or MIB_TCP_STATE_*
-
     // First selected connection (nullptr when nothing is selected).
     //
     // The POINTER form. It stays for the two call sites that legitimately want
     // the live row and provably outlive it (the context-menu builder, and the
-    // read-only probes). Every handler that can open a dialog, a prompt or any
-    // other message pump must use SelectedCopy() instead - see there.
     const Connection* FirstSelectedRow() const;
 
     // The COPY form, for every handler that hands control to a modal loop.
@@ -335,15 +330,11 @@ void InitFilterControls();
     // Why this exists: a refresh arriving during a modal loop replaces rows_
     // and frees the row the pointer referred to, so a handler that kept
     // `const Connection* c` across a MessageBox read freed memory. This was
-    // fixed at three such sites individually; the fix did not stick because
-    // the safe pattern was not the easy one. This makes it the easy one: one
     // call, and the lifetime hazard is closed by construction rather than by
     // remembering a rule at each new site.
     //
     // std::optional rather than a bool + out-param because "no selection" and
-    // "a row" are one value, not two, and the caller cannot forget to check.
     std::optional<Connection> SelectedCopy() const;
-
     bool SelectedRowIndices(std::vector<int>& out) const;
 
 int VisibleToCol(int visibleIndex) const;   // -1 when out of range
@@ -353,16 +344,18 @@ int ColToVisible(int columnId) const;       // -1 when hidden
 bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
 
     // The index in the shell's system image list for a
-    // process image, or -1 when the shell has none.
     // Queries the shell by path, so an .exe shows its
-    // own icon rather than a generic one.
-    int ProcessIconIndex(const std::wstring& path) const;
-
-    // members ----------------------------------------------------------------
-    HINSTANCE hInstance_ = nullptr;
+    // The top-level window itself. Declared first because every control we
+    // own is its child, and because the ConnectionsList member below is
+    // constructed with *this.
     HWND hwnd_ = nullptr;
-    HWND hwndList_ = nullptr;
+    HINSTANCE hInstance_ = nullptr;
     HWND hwndStatus_ = nullptr;
+    // The shell's shared system image list, attached to the list control. The
+    // window owns the ATTACHMENT, not the list - the list is the shell's, and
+    // LVS_SHAREIMAGELISTS on the control is what keeps it from being destroyed
+    // with the control.
+    HIMAGELIST iconImageList_ = nullptr;
     HWND hwndRefreshBtn_ = nullptr;
     HWND hwndExportBtn_ = nullptr;
     HWND hwndAutoChk_ = nullptr;
@@ -372,11 +365,6 @@ bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
     HWND hwndSearchEdit_ = nullptr;
     // The shell's system small-icon list, attached to the list so
     // each row can carry its process's icon. Owned by
-    // the shell, not by us: it is never destroyed here, only
-    // attached and left for the list to release. Null until the
-    // shell image list is first resolved.
-    HIMAGELIST iconImageList_ = nullptr;
-    // one tooltip control for the whole control bar. Created once in
     // CreateControls; tools are added there and never removed, because the
     // bar's children live as long as the window.
     HWND hwndTip_ = nullptr;
@@ -558,12 +546,25 @@ bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
     // It used to have none at all, which is why the alert.* selftests
     // were the only thing exercising it.
     AlertEngine alertEngine_;
-
     wchar_t dispBuf_[kMaxColumnText] = {0};  // LVN_GETDISPINFO scratch buffer
 
     std::wstring filterDebounceText_;
     bool autoRefresh_ = false;
     UINT autoRefreshMs_ = kDefaultIntervalMs;
+
+    // ---- the ConnectionsListSink implementation --------------------------
+    // The list reports up; the window answers. Implemented in
+    // ConnectionsListOwner.cpp, beside the other owner half of the list.
+    void OnSortByColumn(int columnId, bool ascending) override;
+    void OnRowActivated() override;
+    void OnColumnDragStarted() override;
+    int ProcessIconIndex(const std::wstring& path) const override;
+    ConnectionsListSink::Painting QueryPainting() const override;
+
+    // The one list, now an object: the control, its cell text, its painting
+    // and its selection. The window's job with it is the FONT, the LAYOUT,
+    // and answering what it asks for.
+    ConnectionsList list_{store_, cols_, *this};
 };
 
 }  // namespace wintcp
