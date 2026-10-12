@@ -44,6 +44,7 @@
 #include "Settings.h"
 #include "Presets.h"
 #include "Bookmarks.h"
+#include "ViewPresets.h"    // the save/load/delete preset dialogs
 #include "ChangeLogWindow.h"
 #include "ProcessTreeView.h"   // the process-tree view mode's fill
 #include "TypeToJump.h"
@@ -446,6 +447,13 @@ bool AnyTrafficColVisible() const { return cols_.AnyTrafficVisible(); }
     // is pure and tested; this is its only production caller, and it used to be
     // inline RunAlerts, which is why a tested feature had no caller at all.
     AlertMonitor alertMonitor_;
+    // The preset file dialogs (save/load/delete), wired to the window's own
+    // Current/Apply. Constructed with them, so a caller cannot drive the
+    // dialogs with a stale view of the window.
+    ViewPresetDialogs presetDialogs_{
+        hwnd_,
+        [this]() { return CurrentPresetView(); },
+        [this](const PresetView& v) { ApplyPresetView(v); }};
     bool topMost_ = false;                 // View > Always on top
     // View > Tray icon. 'trayIconShown_' was a second truth for the same fact
     // and lived beside it; TrayIcon::IsShown() is the one that decides

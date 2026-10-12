@@ -4283,156 +4283,16 @@ void MainWindow::ApplyPresetView(const PresetView& v) {
     ApplyView();
 }
 
+
 void MainWindow::SavePreset() {
-    std::wstring name;
-    if (!PromptForText(hwnd_, L"Save view as preset",
-                       L"Preset name:", L"", kMaxPresetNameChars, &name))
-        return;
-    // Presets::Save refuses to overwrite by default and says so. The confirm
-    // is done HERE, not inside the store, so the store stays a dumb
-    // persistence layer that cannot show UI.
-    PresetSave result = Presets::Save(name, CurrentPresetView());
-    if (result == PresetSave::kExists) {
-        std::wstring msg = L"A preset named '" + name + L"' already exists.\r\n\r\n"
-                           L"Replace it?";
-        if (::MessageBoxW(hwnd_, msg.c_str(), L"Save preset",
-                          MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
-            return;
-        result = Presets::Save(name, CurrentPresetView(), true);
-    }
-    switch (result) {
-        case PresetSave::kCreated:
-            ::MessageBoxW(hwnd_, L"View saved.", L"Save preset",
-                          MB_OK | MB_ICONINFORMATION);
-            break;
-        case PresetSave::kOverwrote:
-            ::MessageBoxW(hwnd_, L"View replaced.", L"Save preset",
-                          MB_OK | MB_ICONINFORMATION);
-            break;
-        case PresetSave::kInvalidName:
-            ::MessageBoxW(hwnd_,
-                          L"That name cannot be used. It must be 1-"
-                          L"64 characters, with no backslash or control "
-                          L"characters.",
-                          L"Save preset", MB_OK | MB_ICONERROR);
-            break;
-        case PresetSave::kFailed:
-            ::MessageBoxW(hwnd_, L"Could not write the preset to the "
-                                 L"registry.",
-                          L"Save preset", MB_OK | MB_ICONERROR);
-            break;
-        case PresetSave::kExists:
-            break;   // user declined the replace; not an error
-    }
+    // The dialogs are ViewPresetDialogs' now; the window supplies what it
+    // always did - the current view and how to apply one - through the
+    // lambdas below.
+    presetDialogs_.Save();
 }
 
-void MainWindow::LoadPreset() {
-    const std::vector<std::wstring> names = Presets::List();
-    if (names.empty()) {
-        ::MessageBoxW(hwnd_, L"No saved presets yet.", L"Load preset",
-                      MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    // A numbered list rather than a combo: with more than a handful of
-    // presets a list box scrolls, and the numbers double as a way to refer to
-    // one in the message box.
-    //
-    // the list is the LABEL of the prompt, not a discarded local. The
-    // prompt used to build this text and then ask with an empty label, so
-    // the numbers meant nothing. Capped at a dozen rows with a count, so a
-    // long preset library cannot blow the dialog's caption bound (the prompt
-    // truncates past it; a truncated list still reads, a missing one
-    // does not).
-    std::wstring text = L"Type the number of the preset to load:\r\n\r\n";
-    const size_t kShownPresets = 12;
-    for (size_t i = 0; i < names.size() && i < kShownPresets; ++i)
-        text += std::to_wstring(i + 1) + L".  " + names[i] + L"\r\n";
-    if (names.size() > kShownPresets)
-        text += L"... and " + std::to_wstring(names.size() - kShownPresets) +
-                L" more (type its number anyway)\r\n";
-
-    std::wstring answer;
-    if (!PromptForText(hwnd_, L"Load preset", text.c_str(), L"1", 8, &answer))
-        return;
-    // Parse strictly: the field is user input and "2abc" or "-1" must not
-    // silently resolve to preset 2 or wrap to the last entry.
-    size_t idx = 0;
-    if (answer.empty() ||
-        !std::all_of(answer.begin(), answer.end(),
-                     [](wchar_t c) { return c >= L'0' && c <= L'9'; }) ||
-        answer.size() > 4) {
-        ::MessageBoxW(hwnd_, L"Enter just the number.", L"Load preset",
-                      MB_OK | MB_ICONERROR);
-        return;
-    }
-    for (wchar_t c : answer) idx = idx * 10 + static_cast<size_t>(c - L'0');
-    if (idx == 0 || idx > names.size()) {
-        ::MessageBoxW(hwnd_, L"There is no preset with that number.",
-                      L"Load preset", MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    PresetView v;
-    if (!Presets::Load(names[idx - 1], &v)) {
-        // All-or-nothing load: a partially readable preset is reported as a
-        // failure rather than applied, because half a view is a state the
-        // user never saved and cannot get back to.
-        ::MessageBoxW(hwnd_,
-                      L"That preset could not be read. It may be corrupt or "
-                      L"from a newer version.",
-                      L"Load preset", MB_OK | MB_ICONERROR);
-        return;
-    }
-    ApplyPresetView(v);
-}
-
-void MainWindow::DeletePreset() {
-    const std::vector<std::wstring> names = Presets::List();
-    if (names.empty()) {
-        ::MessageBoxW(hwnd_, L"No saved presets to delete.", L"Delete preset",
-                      MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    // same contract as LoadPreset - the numbered list is the prompt's
-    // label, capped the same way, so the numbers on screen mean something.
-    std::wstring text = L"Type the number of the preset to delete:\r\n\r\n";
-    const size_t kShownPresets = 12;
-    for (size_t i = 0; i < names.size() && i < kShownPresets; ++i)
-        text += std::to_wstring(i + 1) + L".  " + names[i] + L"\r\n";
-    if (names.size() > kShownPresets)
-        text += L"... and " + std::to_wstring(names.size() - kShownPresets) +
-                L" more (type its number anyway)\r\n";
-    std::wstring answer;
-    if (!PromptForText(hwnd_, L"Delete preset", text.c_str(), L"1", 8, &answer))
-        return;
-    size_t idx = 0;
-    if (answer.empty() ||
-        !std::all_of(answer.begin(), answer.end(),
-                     [](wchar_t c) { return c >= L'0' && c <= L'9'; }) ||
-        answer.size() > 4) {
-        ::MessageBoxW(hwnd_, L"Enter just the number.", L"Delete preset",
-                      MB_OK | MB_ICONERROR);
-        return;
-    }
-    for (wchar_t c : answer) idx = idx * 10 + static_cast<size_t>(c - L'0');
-    if (idx == 0 || idx > names.size()) {
-        ::MessageBoxW(hwnd_, L"There is no preset with that number.",
-                      L"Delete preset", MB_OK | MB_ICONERROR);
-        return;
-    }
-    const std::wstring victim = names[idx - 1];
-    // Deleting a saved view is irreversible, so it gets a confirm naming the
-    // preset. A typo must not cost the user a view they built.
-    if (::MessageBoxW(hwnd_,
-                      (L"Delete the preset '" + victim + L"'?").c_str(),
-                      L"Delete preset",
-                      MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
-        return;
-    if (!Presets::Delete(victim)) {
-        ::MessageBoxW(hwnd_, L"Could not delete the preset.", L"Delete preset",
-                      MB_OK | MB_ICONERROR);
-    }
-}
+void MainWindow::LoadPreset() { presetDialogs_.Load(); }
+void MainWindow::DeletePreset() { presetDialogs_.Delete(); }
 
 void MainWindow::ShowBookmarksList() {
     size_t unreadable = 0;
