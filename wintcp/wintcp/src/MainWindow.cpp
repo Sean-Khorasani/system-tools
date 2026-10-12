@@ -522,8 +522,8 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"columnOrder") == 0) {
         // The persisted order, as a comma list, so the harness can prove
         // a drag actually changed the order and that it round-tripped.
-        for (std::size_t i = 0; i < colOrder_.size() && i < kMaxColOrderSlots; ++i) {
-            const std::wstring piece = L" " + std::to_wstring(colOrder_[i]);
+        for (std::size_t i = 0; i < cols_.Order().size() && i < kMaxColOrderSlots; ++i) {
+            const std::wstring piece = L" " + std::to_wstring(cols_.Order()[i]);
             ::wcsncat_s(buf, piece.c_str(), _TRUNCATE);
         }
         return buf;
@@ -538,7 +538,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         const int v = (arg != nullptr) ? ::_wtoi(arg) : -1;
         const int col = VisibleToCol(v);
         if (col < 0) return L"";
-        ::swprintf_s(buf, L"%d", colWidths_[col]);
+        ::swprintf_s(buf, L"%d", cols_.Width(col));
         return buf;
     }
     if (::wcscmp(op, L"trayShown") == 0) {
@@ -563,7 +563,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return topMost_ ? L"1" : L"0";
     }
     if (::wcscmp(op, L"colOrderSize") == 0) {
-        ::swprintf_s(buf, L"%zu", colOrder_.size());
+        ::swprintf_s(buf, L"%zu", cols_.Order().size());
         return buf;
     }
     return nullptr;
@@ -771,7 +771,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAFFIC,
                          etw_.Running());
             // Re-sync the View > Columns ticks on every popup open so the
-            // menu always reflects visibleCols_, even if state changed
+            // menu always reflects the visible mask, even if state changed
             // through a path that did not update the menu itself.
             SyncColumnMenuChecks();
             break;
@@ -810,9 +810,11 @@ void MainWindow::OnCreate() {
     // holds a pointer to its sampler and cannot be cancelled, so freeing it
     // while that thread is alive would be a use-after-free; leaking one
     // object at exit is the smaller problem. See ~SocketTrafficSampler.
-    socketTraffic_ = new SocketTrafficSampler();
-    for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
-    visibleCols_ = kDefaultVisibleCols;
+socketTraffic_ = new SocketTrafficSampler();
+// Built-in column state first, so the portable wintcp.ini below and the
+// stored settings after it each override a complete, well-formed default
+// rather than half of one.
+cols_.Reset();
     // the portable `wintcp.ini` supplies DEFAULTS only, so it is
     // applied BEFORE settings_.Load() and an existing user's saved settings
     // always win. A file that exists but will not parse is reported once
@@ -852,20 +854,11 @@ void MainWindow::OnCreate() {
         }
     }
 
-    visibleCols_ = settings_.colVisible;
-    if (settings_.colWidthsValid) {
-        for (int i = 0; i < COL_COUNT; ++i) {
-            if (settings_.colWidths[i] > 0) colWidths_[i] = settings_.colWidths[i];
-        }
-    }
-    // Column order. Start from the built-in order and only override it
-    // if the registry holds a validated permutation; Settings::Load has
-    // already rejected anything malformed, so no re-check is needed here.
-    for (int i = 0; i < COL_COUNT; ++i) colOrder_[i] = kDisplayOrder[i];
-    if (settings_.colOrderValid) {
-        for (int i = 0; i < COL_COUNT; ++i) colOrder_[i] = settings_.colOrder[i];
-    }
-    autoRefresh_ = settings_.autoRefresh;
+// Column geometry from the stored settings: the visible mask, the widths and
+// the order in one call, which is what the three separate loops below used to
+// be. Settings::Load has validated the order, so no re-check here.
+cols_.LoadFromSettings(settings_);
+autoRefresh_ = settings_.autoRefresh;
     autoRefreshMs_ = settings_.intervalMs;
     dnsEnabled_ = settings_.resolveHosts;
     topMost_ = settings_.topMost;
@@ -1443,19 +1436,9 @@ void MainWindow::InitFilterControls() {
 }
 
 void MainWindow::HarvestColumnWidths() {
-    if (hwndList_ == nullptr) return;
-    HWND hdr = ListView_GetHeader(hwndList_);
-    if (hdr == nullptr) return;
-    const int existing = Header_GetItemCount(hdr);
-    for (int i = 0; i < existing && i < static_cast<int>(visToCol_.size()); ++i) {
-        HDITEMW hdi = {};
-        hdi.mask = HDI_WIDTH;
-        if (Header_GetItem(hdr, i, &hdi)) {
-            // Physical pixels -> logical 96-dpi units.
-            colWidths_[visToCol_[i]] =
-                ::MulDiv(hdi.cxy, kDpiUnscaled, static_cast<int>(dpi_));
-        }
-    }
+    // The window's half is nothing: the geometry object reads the control
+    // back itself.
+    cols_.HarvestWidths(hwndList_, static_cast<int>(dpi_));
 }
 
 void MainWindow::RebuildColumns() {
@@ -1463,34 +1446,10 @@ void MainWindow::RebuildColumns() {
 
     // Remember current widths (user may have dragged separators).
     HarvestColumnWidths();
-    HWND hdr = ListView_GetHeader(hwndList_);
-    if (hdr != nullptr) {
-        const int existing = Header_GetItemCount(hdr);
-        for (int i = existing - 1; i >= 0; --i)
-            ::SendMessageW(hwndList_, LVM_DELETECOLUMN, static_cast<WPARAM>(i), 0);
-    }
 
-    visToCol_.clear();
-    LVCOLUMNW col = {};
-    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | LVCF_SUBITEM;
-    // colOrder_ is sized at construction, but a defensive check here costs
-    // nothing and turns a would-be null-deref into a visibly empty list: a
-    // release-only crash in a column loop is not worth debugging twice.
-    if (static_cast<int>(colOrder_.size()) != COL_COUNT) {
-        colOrder_.assign(COL_COUNT, 0);
-        for (int i = 0; i < COL_COUNT; ++i) colOrder_[i] = kDisplayOrder[i];
-    }
-    for (const int c : colOrder_) {
-        if ((visibleCols_ & (1u << c)) == 0) continue;
-        col.pszText = const_cast<LPWSTR>(kColumns[c].title);
-        col.cx = S(colWidths_[c]);
-        col.fmt = kColumns[c].fmt;
-        col.iSubItem = static_cast<int>(visToCol_.size());
-        const LRESULT idx = ::SendMessageW(
-            hwndList_, LVM_INSERTCOLUMNW, static_cast<WPARAM>(visToCol_.size()),
-            reinterpret_cast<LPARAM>(&col));
-        if (idx >= 0) visToCol_.push_back(c);
-    }
+    // Rebuilding the columns annihilates the sort arrow, so it is restored
+    // here - one call, in the one place that deletes and re-inserts them.
+    cols_.SyncColumns(hwndList_, static_cast<int>(dpi_));
     UpdateSortIndicator();
     SyncGroupHeader();
 }
@@ -1500,34 +1459,15 @@ void MainWindow::SyncGroupHeader() {
     // header of the column that carries the aggregation says so with the
     // live group count. A flat view keeps the plain title, so the label
     // is state rather than decoration.
-    if (hwndList_ == nullptr) return;
-    HWND hdr = ListView_GetHeader(hwndList_);
-    if (hdr == nullptr) return;
-    const int vi = ColToVisible(COL_PROCESS);
-    if (vi < 0) return;
-    std::wstring title = kColumns[COL_PROCESS].title;
-    if (groupByProcess_) {
-        title += L" (";
-        title += std::to_wstring(store_.View().size());
-        title += L" groups)";
-    }
-    HDITEMW hdi = {};
-    hdi.mask = HDI_TEXT;
-    hdi.pszText = const_cast<LPWSTR>(title.c_str());
-    ::SendMessageW(hdr, HDM_SETITEMW, static_cast<WPARAM>(vi),
-                   reinterpret_cast<LPARAM>(&hdi));
+    cols_.SetGroupTitle(hwndList_, groupByProcess_, store_.View().size());
 }
 
 int MainWindow::VisibleToCol(int visibleIndex) const {
-    if (visibleIndex < 0 || visibleIndex >= static_cast<int>(visToCol_.size()))
-        return -1;
-    return visToCol_[static_cast<size_t>(visibleIndex)];
+    return cols_.VisibleToCol(visibleIndex);
 }
 
 int MainWindow::ColToVisible(int columnId) const {
-    for (size_t i = 0; i < visToCol_.size(); ++i)
-        if (visToCol_[i] == columnId) return static_cast<int>(i);
-    return -1;
+    return cols_.ColToVisible(columnId);
 }
 
 int MainWindow::ProcessIconIndex(const std::wstring& path) const {
@@ -1549,30 +1489,12 @@ int MainWindow::ProcessIconIndex(const std::wstring& path) const {
 }
 
 void MainWindow::UpdateSortIndicator() {
-    HWND hdr = ListView_GetHeader(hwndList_);
-    if (hdr == nullptr) return;
-    const int n = Header_GetItemCount(hdr);
-    const int target = ColToVisible(store_.SortColumn());
-    for (int i = 0; i < n; ++i) {
-        HDITEMW hdi = {};
-        hdi.mask = HDI_FORMAT;
-        if (!Header_GetItem(hdr, i, &hdi)) continue;
-        hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-        if (i == target)
-            hdi.fmt |= store_.SortAscending() ? HDF_SORTUP : HDF_SORTDOWN;
-        Header_SetItem(hdr, i, &hdi);
-    }
+    cols_.UpdateSortIndicator(hwndList_, store_.SortColumn(),
+                              store_.SortAscending());
 }
 
 void MainWindow::SyncColumnMenuChecks() {
-    HMENU colsMenu = FindColumnsMenu(::GetMenu(hwnd_));
-    if (colsMenu == nullptr) return;
-    for (int c = 0; c < COL_COUNT; ++c) {
-        ::CheckMenuItem(colsMenu, IDM_COL_BASE + c,
-                        MF_BYCOMMAND |
-                        ((visibleCols_ & (1u << c)) ? MF_CHECKED
-                                                    : MF_UNCHECKED));
-    }
+    cols_.SyncMenuChecks(::GetMenu(hwnd_));
 }
 
 // ---- the alert engine's only production caller ------------------------
@@ -1676,7 +1598,7 @@ void MainWindow::UpdateEmptyState() {
 
     // A country-bearing column with no database behind it. Both databases count,
     // because either fills the cell.
-    const bool countryShown = (visibleCols_ & (1u << COL_COUNTRY)) != 0;
+    const bool countryShown = cols_.IsVisible(COL_COUNTRY);
     if (countryShown && !enrich_.CountryLoaded() && !enrich_.AsnLoaded()) {
         emptyStateHint_ = L"no GeoIP database loaded - pick one in View > GeoIP "
                           L"database to fill Country";
@@ -1701,7 +1623,7 @@ void MainWindow::UpdateEmptyState() {
 void MainWindow::ShowEmptyStateActions() {
     const EmptyStateOffer offer = DecideEmptyState(
         store_.Rows().size(), store_.View().size(),
-        (visibleCols_ & (1u << COL_COUNTRY)) != 0, enrich_.CountryLoaded(),
+        cols_.IsVisible(COL_COUNTRY), enrich_.CountryLoaded(),
         enrich_.AsnLoaded(), AnyTrafficColVisible(), etw_.Running(),
         fallbackFlag_->load(), IsElevated());
 
@@ -1831,7 +1753,7 @@ UINT32 MainWindow::ColumnProfileMask(int profileId) const {
                 const UINT32 diagnostics =
                     (1u << COL_RTT) | (1u << COL_MINRTT) | (1u << COL_CWND) |
                     (1u << COL_RETRANS) | (1u << COL_GROUPRATE);
-                return visibleCols_ | diagnostics;
+                return cols_.VisibleMask() | diagnostics;
             }
         case IDM_PROFILE_DEFAULT:
         default:
@@ -1841,8 +1763,7 @@ UINT32 MainWindow::ColumnProfileMask(int profileId) const {
 
 void MainWindow::ApplyColumnProfile(int profileId) {
     RebuildColumns();                        // harvest widths before the swap
-    visibleCols_ = ClampVisibleCols(ColumnProfileMask(profileId));
-    settings_.colVisible = visibleCols_;
+    cols_.SetVisibleMask(ClampVisibleCols(ColumnProfileMask(profileId)));
     RebuildColumns();
     SyncColumnMenuChecks();
     SyncColumnProfileChecks();
@@ -1858,9 +1779,10 @@ void MainWindow::SyncColumnProfileChecks() {
         // five of its bits are present, which survives the user hiding a column
         // afterwards without lying about what is on screen.
         const UINT32 mask = ColumnProfileMask(id);
+        const UINT32 shown = cols_.VisibleMask();
         const bool on = (id == IDM_PROFILE_DIAGNOSTICS)
-                            ? (visibleCols_ & mask) == mask
-                            : visibleCols_ == mask;
+                            ? (shown & mask) == mask
+                            : shown == mask;
         ::CheckMenuItem(view, id, MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
     }
 }
@@ -1930,23 +1852,20 @@ void MainWindow::SyncQuickFilterChecks() {
 void MainWindow::ToggleColumn(int columnId) {
     if (columnId < 0 || columnId >= COL_COUNT) return;
     RebuildColumns();                     // harvests current widths first
-    const UINT32 bit = 1u << columnId;
-    // Never let the last visible column be hidden: the list would render
-    // empty and the only way back is this same menu.
-    if ((visibleCols_ & bit) != 0 && (visibleCols_ & bit) == visibleCols_) {
-        ::MessageBoxW(hwnd_,
-                      L"At least one column must stay visible.",
+    // The geometry object refuses the case that would empty the set; the
+    // window reports it, because a dialog is a window concern.
+    if (!cols_.Toggle(columnId)) {
+        ::MessageBoxW(hwnd_, L"At least one column must stay visible.",
                       L"Columns", MB_OK | MB_ICONINFORMATION);
         return;
     }
-    visibleCols_ ^= bit;
     SyncColumnMenuChecks();
     // Showing a traffic column with no source running would
     // leave it stuck on "—". Try the ETW counters once (elevated fills
     // immediately, UDP included) and fall back to the non-admin socket
     // totals otherwise; UpdateStatusBar explains whichever state applies.
     if (IsTrafficColumn(columnId)) {
-        if ((visibleCols_ & (1u << columnId)) != 0) {
+        if (cols_.IsVisible(columnId)) {
             EnsureTrafficCounters();
         } else if (!AnyTrafficColVisible() && fallbackFlag_->load()) {
             // Last traffic column hidden: stop paying for socket scans.
@@ -1957,11 +1876,6 @@ void MainWindow::ToggleColumn(int columnId) {
     }
     RebuildColumns();
     ApplyView();
-}
-
-bool MainWindow::AnyTrafficColVisible() const {
-    return (visibleCols_ & ((1u << COL_TRAFFIC) | (1u << COL_RX) |
-                            (1u << COL_TX) | (1u << COL_NETTOTAL))) != 0;
 }
 
 void MainWindow::EnsureTrafficCounters() {
@@ -2199,7 +2113,7 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     v.frozen = frozen_;
     v.frozenAtMs = frozenAt_;
     v.preserveSelection = preserveSelection_;
-    v.colVisible = visibleCols_;
+    v.colVisible = cols_.VisibleMask();
     // ApplyTo hands back the parsed program so the filter is parsed ONCE here
     // rather than again below; filterProgram_ is a derived cache of v.filter,
     // kept for the two callers that ask "is a text filter active?" without
@@ -2650,9 +2564,7 @@ void MainWindow::ResetLayout() {
     // recovery path short of the registry. Reset restores every default
     // the startup path uses, then persists through the same single write
     // path so the fix survives a restart.
-    visibleCols_ = kDefaultVisibleCols;
-    for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
-    for (int i = 0; i < COL_COUNT; ++i) colOrder_[i] = kDisplayOrder[i];
+    cols_.Reset();
     store_.SetSort(COL_PID, true);
     if (hwndSearchEdit_ != nullptr) ::SetWindowTextW(hwndSearchEdit_, L"");
     filterDebounceText_.clear();
@@ -2664,12 +2576,9 @@ void MainWindow::ResetLayout() {
     RebuildColumns();
     ApplyView();
     UpdateCaption();
-    settings_.colVisible = visibleCols_;
-    for (int i = 0; i < COL_COUNT; ++i)
-        settings_.colWidths[i] = colWidths_[i];
-    settings_.colWidthsValid = true;
-    for (int i = 0; i < COL_COUNT; ++i)
-        settings_.colOrder[i] = colOrder_[i];
+    // The geometry writes its own three settings keys, so the reset and the
+    // save cannot disagree about which is the mask and which is the order.
+    cols_.SaveToSettings(&settings_);
     settings_.colOrderValid = true;
     settings_.sortCol = COL_PID;
     settings_.sortAsc = true;
@@ -3547,42 +3456,20 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
 // column exactly where it was - so hiding and re-showing a column preserves
 // the slot the user gave it.
 void MainWindow::SyncColumnOrderFromHeader() {
-    if (hwndList_ == nullptr) return;
-    HWND hdr = ListView_GetHeader(hwndList_);
-    if (hdr == nullptr) return;
-    const int count = Header_GetItemCount(hdr);
-    if (count <= 0 || static_cast<int>(visToCol_.size()) != count) return;
-
-    // The order the control ended up in, as ColumnIds.
-    std::vector<int> newVisible;
-    newVisible.reserve(static_cast<size_t>(count));
-    for (int i = 0; i < count; ++i) {
-        const int col = VisibleToCol(i);
-        if (col < 0) return;   // inconsistent; leave the order alone
-        newVisible.push_back(col);
-    }
-    if (newVisible == visToCol_) return;   // no drag actually happened
-
-    // Fold the visible result back into a full-order permutation. Shared with
-    // the selftest (Settings.h) so the rule cannot drift: a copy of this
-    // logic in the window would be a second thing to keep correct.
-    const std::vector<int> result =
-        FoldVisibleOrder(colOrder_, visibleCols_, newVisible);
-    if (result.size() != colOrder_.size()) return;   // paranoia; never happens
-    colOrder_ = result;
+    // The geometry object folds the drag back into the permutation and says
+    // whether it actually changed. Everything else here is the window's job:
+    // persist the order, and re-apply so the visible order matches.
+    if (!cols_.SyncOrderFromHeader(hwndList_)) return;
 
     // Persist immediately. A reorder is an explicit user action, and losing it
     // because the app was killed afterwards would look like the feature is
     // broken. Widths are harvested first so the rebuild does not clobber the
     // layout the user just made with pre-drag widths.
-    //
-    // visToCol_ is deliberately NOT written here: RebuildColumns rebuilds it
-    // from colOrder_, and overwriting it first would discard the mapping the
-    // header state was just read through.
     HarvestColumnWidths();
     settings_.colOrderValid = true;
-    for (size_t i = 0; i < colOrder_.size() && i < COL_COUNT; ++i)
-        settings_.colOrder[i] = colOrder_[i];
+    const std::vector<int>& order = cols_.Order();
+    for (size_t i = 0; i < order.size() && i < COL_COUNT; ++i)
+        settings_.colOrder[i] = order[i];
     PersistSettings("column reorder");
     RebuildColumns();
     ApplyView();
@@ -3977,16 +3864,16 @@ std::wstring MainWindow::SelectedRowsText(bool copyAll) const {
                L" ago (stale snapshot, not live)\r\n";
     }
     // Header = visible columns, tab separated.
-    for (size_t i = 0; i < visToCol_.size(); ++i) {
+    for (size_t i = 0; i < cols_.VisToCol().size(); ++i) {
         if (i != 0) out += L"\t";
-        out += kColumns[visToCol_[i]].title;
+        out += kColumns[cols_.VisToCol()[i]].title;
     }
     out += L"\r\n";
 
     wchar_t buf[kMaxColumnText] = {0};
     const auto appendRow = [&](const Connection& c) {
-        for (size_t i = 0; i < visToCol_.size(); ++i) {
-            ConnectionStore::GetColumnText(c, visToCol_[i], buf,
+        for (size_t i = 0; i < cols_.VisToCol().size(); ++i) {
+            ConnectionStore::GetColumnText(c, cols_.VisToCol()[i], buf,
                                            kMaxColumnText);
             if (i != 0) out += L"\t";
             out += buf;
@@ -4089,7 +3976,7 @@ void MainWindow::DoExport(bool selectionOnly) {
     const std::string content = (format == 3)
         ? RenderJsonRows(rows, DefaultExportColumns(),
                          /*extraHostname=*/true)
-        : RenderDelimitedRows(rows, visToCol_, (format == 2) ? '\t' : ',',
+        : RenderDelimitedRows(rows, cols_.VisToCol(), (format == 2) ? '\t' : ',',
                               /*rfcCsv=*/format != 2);
     // JSON must not carry a BOM (strict parsers reject it); CSV/TSV keep
     // the Excel-friendly BOM.
@@ -4879,7 +4766,7 @@ PresetView MainWindow::CurrentPresetView() const {
     if (enrich_.CountryLoaded() || enrich_.AsnLoaded()) sources |= kPresetSourceGeoIp;
     // Widget reads stay here (search box, column mask, sort); the ViewState
     // assembly lives in the abstract layer so the CLI builds the same type.
-    return CurrentPresetViewFor(CurrentSearchText(), visibleCols_,
+    return CurrentPresetViewFor(CurrentSearchText(), cols_.VisibleMask(),
                                 store_.SortColumn(), store_.SortAscending(),
                                 sources);
 }
@@ -4890,7 +4777,7 @@ void MainWindow::ApplyPresetView(const PresetView& v) {
     // in one repaint rather than showing an intermediate state.
     ::SetWindowTextW(hwndSearchEdit_, v.filter.c_str());
     filterDebounceText_ = v.filter;
-    visibleCols_ = ClampVisibleCols(v.colVisible);
+    cols_.SetVisibleMask(ClampVisibleCols(v.colVisible));
     store_.SetSort(v.sortColumn, v.sortAsc);
 
     // Apply the source toggles. Turning one ON may start a counter source,
@@ -5414,7 +5301,7 @@ void MainWindow::ShowAboutBox() {
     s.geoIpLoaded = enrich_.CountryLoaded();
     s.presetsAvailable = true;   // the store is in-process; always available
     for (int i = 0; i < COL_COUNT; ++i)
-        if ((visibleCols_ & (1u << i)) != 0) ++s.visibleColumnCount;
+        if ((cols_.VisibleMask() & (1u << i)) != 0) ++s.visibleColumnCount;
     s.totalColumnCount = COL_COUNT;
     s.rowCount = store_.View().size();
     s.rowCountKnown = true;
@@ -5542,8 +5429,8 @@ void MainWindow::SaveSettings() {
         settings_.showCmd = ::IsZoomed(hwnd_) ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
     }
     HarvestColumnWidths();                 // physical -> logical widths
-    settings_.colVisible = visibleCols_;
-    for (int i = 0; i < COL_COUNT; ++i) settings_.colWidths[i] = colWidths_[i];
+    cols_.SaveToSettings(&settings_);
+    settings_.colWidthsValid = true;
     settings_.colWidthsValid = true;
     settings_.sortCol = store_.SortColumn();
     settings_.sortAsc = store_.SortAscending();
