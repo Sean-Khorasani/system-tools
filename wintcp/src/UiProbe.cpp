@@ -155,10 +155,85 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         if (::SendMessageW(hwndTree_, TVM_GETITEMW, 0,
                            reinterpret_cast<LPARAM>(&it)) == 0)
             return L"";
-        ::swprintf_s(buf, L"%lu", static_cast<unsigned long>(it.lParam));
-        return buf;
-    }
-    if (::wcscmp(op, L"listSelectionCount") == 0) {
+::swprintf_s(buf, L"%lu", static_cast<unsigned long>(it.lParam));
+return buf;
+}
+
+// What the MODEL says for one row and one COLUMN ID. Uses the COLUMN ID,
+// not the visible index, because the caller is naming a column.
+if (::wcscmp(op, L"rowCell") == 0 && arg != nullptr) {
+    const wchar_t* comma = ::wcschr(arg, L',');
+    if (comma == nullptr) return L"";
+    const std::wstring rowS(arg, comma - arg);
+    const size_t row = static_cast<size_t>(::_wtoi(rowS.c_str()));
+    const int colId = ::_wtoi(comma + 1);
+    const Connection* c = store_.ViewRow(row);
+    if (c == nullptr || colId < 0) return L"";
+    static wchar_t cell[kProbeBufChars];
+    ConnectionStore::GetColumnText(*c, colId, cell, kProbeBufChars);
+    return cell;
+}
+
+// What the list view ACTUALLY DREW.
+//
+// Every other probe here reads the MODEL, and a full model says nothing about
+// a control whose cells render blank. That is not hypothetical: the list view
+// was extracted into its own translation unit while the harness was still
+// checking only the item COUNT, so a broken LVN_GETDISPINFO would have left
+// every cell empty with all 66 checks green - and it took a person opening the
+// window to notice.
+//
+// LVM_GETITEMTEXT reaches the control's own cell text, which LVN_GETDISPINFO
+// filled, so this is the drawn truth rather than the intended one.
+//
+// arg is "row,col": the view row and the VISIBLE column index, both of which
+// the control itself works in.
+if (::wcscmp(op, L"cellText") == 0 && arg != nullptr) {
+    const wchar_t* comma = ::wcschr(arg, L',');
+    if (comma == nullptr) return L"";
+    const std::wstring rowS(arg, comma - arg);
+    const int row = ::_wtoi(rowS.c_str());
+    const int vis = ::_wtoi(comma + 1);
+    if (list_.Handle() == nullptr || row < 0 || vis < 0) return L"";
+    // STATIC, not a local: the harness copies the string on return, but
+    // returning a pointer to a local array is a dangling read the moment the
+    // next probe runs. Every other probe here returns a static or a member
+    // buffer for the same reason.
+    static wchar_t cell[kProbeBufChars];
+    cell[0] = L'\0';
+    LVITEMW li = {};
+    li.mask = LVIF_TEXT;
+    li.iItem = row;
+    li.iSubItem = vis;
+    li.pszText = cell;
+    li.cchTextMax = kProbeBufChars;
+    ::SendMessageW(list_.Handle(), LVM_GETITEMTEXTW,
+                   static_cast<WPARAM>(row),
+                   reinterpret_cast<LPARAM>(&li));
+    return cell;
+}
+
+// The list view's own image index for a row, or -1. Read from the control
+// rather than derived from the store, because the icon is resolved by the
+// shell at paint time and "no icon" has several legitimate causes (a process
+// with no readable path, the System process, a machine with no shell32). What
+// the harness can assert is that SOME row on a real machine carries one -
+// which is what catches the image list never having been attached, or the
+// image never having been set, both of which render as "no icons at all".
+if (::wcscmp(op, L"rowImage") == 0 && arg != nullptr) {
+    const int row = ::_wtoi(arg);
+    if (list_.Handle() == nullptr || row < 0) return L"";
+    LVITEMW li = {};
+    li.mask = LVIF_IMAGE;
+    li.iItem = row;
+    li.cchTextMax = 0;
+    ::SendMessageW(list_.Handle(), LVM_GETITEMW, 0,
+                   reinterpret_cast<LPARAM>(&li));
+    ::swprintf_s(buf, L"%d", li.iImage);
+    return buf;
+}
+
+if (::wcscmp(op, L"listSelectionCount") == 0) {
         const LRESULT n = ::SendMessageW(list_.Handle(), LVM_GETSELECTEDCOUNT, 0, 0);
         ::swprintf_s(buf, L"%lld", (long long)n);
         return buf;

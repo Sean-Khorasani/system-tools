@@ -916,6 +916,84 @@ const int v1 = static_cast<int>(Num(w, "visibleCol", "1"));
 Check(v0 >= 0 && v1 >= 0, "SMOKE column machinery: visible columns resolve",
       "VisibleToCol returned -1 for a shown column");
 
+// What the list view ACTUALLY DREW, not what the store holds.
+//
+// Every other check here reads the model, and a model that is full says
+// nothing about a control whose cells render blank. That is not hypothetical: a
+// split of the list into its own translation unit shipped with the harness
+// still checking only the item COUNT, so a broken LVN_GETDISPINFO could have
+// left every cell empty with all 66 checks green - and it took a person
+// opening the window to notice.
+//
+// This reads the control's own cell text through LVM_GETITEMTEXT, for the
+// first row of the first two visible columns, and asserts the text is
+// non-empty. The row must also be the one the store has, so the check binds
+// the control and the model together rather than testing either alone.
+{
+    // How many rows the control has. If it is zero the window has not been
+    // fed, and saying "the cell is empty" would point at the wrong thing.
+    const long listRows = Num(w, "rowCount");
+    if (listRows <= 0) {
+        Skip("SMOKE the list view renders rows",
+             "the list control reports no rows on this machine");
+    } else {
+        // Scan the first few visible columns for one that is populated on
+        // the store's first row, then read THAT cell back through the
+        // control. Column order and visibility are the control's business,
+        // and a skip here must mean "this machine has no such column", not
+        // "the check did not look".
+        std::string cellText;
+        int foundCol = -1;
+        std::string modelText;
+        for (int vis = 0; vis < 8; ++vis) {
+            const std::string colText = Of(w, "cellText", ("0," + std::to_string(vis)).c_str());
+            const int colId = static_cast<int>(Num(w, "visibleCol", std::to_string(vis).c_str()));
+            if (colId < 0) continue;
+            const std::string fromModel = Of(w, "rowCell", ("0," + std::to_string(colId)).c_str());
+            if (fromModel.empty() || fromModel == "\xE2\x80\x94") continue;
+            foundCol = vis;
+            cellText = colText;
+            modelText = fromModel;
+            break;
+        }
+        std::snprintf(line, sizeof(line),
+                      "SMOKE the list view renders rows: the control draws "
+                      "what the store holds (visible column %d, '%s')",
+                      foundCol, cellText.c_str());
+        Check(foundCol >= 0 && !cellText.empty() && cellText == modelText,
+              line,
+              std::string("the list view drew '" + cellText +
+                          "' for a cell the store says is '" + modelText +
+                          "' - the model is full and the control is not").c_str());
+
+        // The per-row process icon, read from the CONTROL.
+        //
+        // The same argument as the cell text, and the same blind spot: the
+        // icon is resolved through the shell's system image list at paint
+        // time, and nothing in this suite had ever looked at the control's
+        // own image index. A machine where every icon is missing - the image
+        // list never attached, or the index never set - would have passed
+        // everything.
+        //
+        // What is asserted is that SOME row carries an index, which is the
+        // machine-independent form: a host with no shell32 has no icons and
+        // skips, and "some rows have no icon" is normal and is NOT asserted
+        // against, because a protected process legitimately has none.
+        long withIcon = 0;
+        long scanned = (listRows < 60) ? listRows : 60;
+        for (long r = 0; r < scanned; ++r) {
+            if (Num(w, "rowImage", std::to_string(r).c_str()) >= 0) ++withIcon;
+        }
+        std::snprintf(line, sizeof(line),
+                      "SMOKE the list view draws process icons: %ld of %ld "
+                      "scanned rows carry an image index",
+                      withIcon, scanned);
+        Check(withIcon > 0, line,
+              "no row carries an image index - the system image list was "
+              "never attached, or the icon was never set");
+    }
+}
+
 // The reserved column. COL_TLS is defined, has a mask bit and a width, and is
 // NOT offered anywhere - because nothing populates it (no socket-level TLS
 // source exists), and a column that answers "unknown" on every row teaches the

@@ -1,5 +1,5 @@
 // TestMain.cpp
-// Entry point for wintcp-tests.exe. The moved self-test, benchmark and UI
+// Entry point for wintcp-dev.exe. The moved self-test, benchmark and UI
 // harness live here now; wintcp.exe does not contain them.
 //
 // WHY THIS FILE EXISTS. Bench.cpp (RunSelfTest / RunBench) and UiHarness.cpp
@@ -16,12 +16,21 @@
 // second copy of the code.
 //
 // MODES
-//   wintcp-tests.exe unit              the 472 internal checks; exit 0 on all pass
-//   wintcp-tests.exe bench [rows] [iters]
-//   wintcp-tests.exe ui                the 46 in-process GUI checks; needs a
+//   wintcp-dev.exe unit              the 1057 internal checks; exit 0 on all pass
+//   wintcp-dev.exe bench [rows] [iters]
+//   wintcp-dev.exe ui                the 68 in-process GUI checks; needs a
 //                                      desktop session, because it creates the
 //                                      real window and drives the real WndProc
 //
+// THIS BINARY HAS NO INTERACTIVE WINDOW. Running it with no mode prints this
+// usage and exits. The application is wintcp.exe, built from the same sources
+// with main.cpp instead of TestMain.cpp; this one exists only to be driven by
+// a mode, and every gate drives `unit` or `ui`. That is not an oversight - the
+// usage text below says it, because "I ran wintcp-dev.exe and nothing
+// happened" is the first thing anyone does with a second binary in the output
+// directory.
+//
+// The counts above are measured, not quoted - read them from the binaries.
 // The bootstrap below deliberately mirrors what wintcp.cpp's wmain does -
 // console code page, common controls, WSAStartup, RegisterClass - because a test
 // driver that skipped setup would exercise a differently-initialised process
@@ -68,7 +77,7 @@ void WriteWide(const std::wstring& s) {
 
 void Usage() {
     WriteOut(
-        "wintcp-tests.exe - development test driver for WinTCP\r\n"
+        "wintcp-dev.exe - development test driver for WinTCP\r\n"
         "\r\n"
         "  unit                 internal checks: parsers, snapshot diff, sort,\r\n"
         "                       grouping, filters, formatting, joins, GeoIP,\r\n"
@@ -137,7 +146,7 @@ int RunUiMode() {
         wchar_t msg[256] = {0};
         ::swprintf_s(msg, L"RegisterClassEx failed (error %lu).",
                      static_cast<unsigned long>(err));
-        ::MessageBoxW(nullptr, msg, L"wintcp-tests", MB_OK | MB_ICONERROR);
+        ::MessageBoxW(nullptr, msg, L"wintcp-dev", MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -148,7 +157,7 @@ int RunUiMode() {
         wchar_t msg[256] = {0};
         ::swprintf_s(msg, L"CreateWindowEx failed (error %lu).",
                      static_cast<unsigned long>(err));
-        ::MessageBoxW(nullptr, msg, L"wintcp-tests", MB_OK | MB_ICONERROR);
+        ::MessageBoxW(nullptr, msg, L"wintcp-dev", MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -178,7 +187,7 @@ int wmain(int argc, wchar_t** argv) {
     // the harness both call.
     WSADATA wsaData = {};
     if (::WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        ::MessageBoxW(nullptr, L"WSAStartup failed.", L"wintcp-tests",
+        ::MessageBoxW(nullptr, L"WSAStartup failed.", L"wintcp-dev",
                       MB_OK | MB_ICONERROR);
         return 1;
     }

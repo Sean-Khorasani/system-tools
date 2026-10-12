@@ -139,7 +139,12 @@ void ConnectionsList::OnGetDispInfo(NMLVDISPINFO* di) {
     if ((di->item.mask & LVIF_TEXT) == 0) return;
     dispBuf_[0] = L'\0';
     if (c != nullptr) {
-        const int col = cols_.ColToVisible(di->item.iSubItem);
+        // The control notifies with the VISIBLE index (iSubItem is the header's own
+// position), so the mapping runs the other way from the menu path: visible
+// index -> ColumnId. Using ColToVisible here compiles, reads correctly, and
+// returns garbage - it answers "which visible slot is THIS ColumnId in", so
+// every cell is drawn with a different column's text.
+const int col = cols_.VisibleToCol(di->item.iSubItem);
         if (col >= 0) {
             // when the view is grouped, a row is a process, not
             // a connection. The aggregate columns show the group's
