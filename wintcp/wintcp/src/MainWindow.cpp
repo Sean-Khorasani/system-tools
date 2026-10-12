@@ -3760,39 +3760,13 @@ void MainWindow::OpenSelectedFileLocation() {
     }
 }
 
-// REMOVED 2026-10-05. Kept, commented, for the same reason as
-// the menu entry: the reasoning is the valuable part and deleting it would lose
-// the answer to "why doesn't Process properties work?".
+// REMOVED 2026-10-05. Kept, and kept as an explanation rather than as
+// commented-out code, for the same reason as the menu entry: the reasoning is
+// the valuable part and deleting it would lose the answer to "why doesn't
+// Process properties work?".
 //
-// void MainWindow::ShowSelectedProcessProperties() {
-//     const std::optional<Connection> sel = list_.SelectedCopy();
-//     if (!sel.has_value()) return;
-//     const Connection& c = *sel;
-//     if (c.processPath.empty() || c.processPath == L"System") {
-//         ::MessageBoxW(hwnd_,
-//                       L"This row has no process path, so there are no file "
-//                       L"properties to show.",
-//                       L"Process properties", MB_OK | MB_ICONINFORMATION);
-//         return;
-//     }
-//     const std::wstring verb = L"properties";
-//     // shell32.dll is delay-loaded; gate before the call so its absence is
-//     // reported rather than raised. Same reason as ShowSelectedFileLocation.
-//     if (!DllAvailable("shell32.dll")) {
-//         ::MessageBoxW(hwnd_, L"Windows could not show properties for that file.",
-//                       L"Process properties", MB_OK | MB_ICONWARNING);
-//         return;
-//     }
-//     const HINSTANCE rc = ::ShellExecuteW(hwnd_, verb.c_str(), c.processPath.c_str(),
-//                                           nullptr, nullptr, SW_SHOWNORMAL);
-//     if (reinterpret_cast<INT_PTR>(rc) <= 32) {
-//         ::MessageBoxW(hwnd_, L"Windows could not show properties for that file.",
-//                       L"Process properties", MB_OK | MB_ICONWARNING);
-//     }
-// }
-//
-// What was wrong with it, having read it rather than guessed: `properties` is a
-// shell verb, and the way to invoke one is through a shell item
+// What was wrong with it, having read it rather than guessed: `properties` is
+// a shell verb, and the way to invoke one is through a shell item
 // (ShellExecuteEx on an IShellItem, or "explorer /select,"), not by handing
 // ShellExecuteW a raw path. Given a path it returns <= 32, which the three boxes
 // above collapsed into a single indistinguishable message - so a user could not
@@ -4195,43 +4169,6 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 // which keeps the pcapng for Wireshark or tshark. On the command line the
 // blocking is the point rather than the defect.
 //
-// void MainWindow::FollowSelectedStream() {
-//     const std::optional<Connection> sel = list_.SelectedCopy();
-//     if (!sel.has_value()) return;
-//     const Connection& c = *sel;
-//
-//     std::wstring why;
-//     if (!CaptureAvailable(&why)) {
-//         if (IsAdminMember() && Reelevate(L"Follow TCP stream")) {
-//             ::DestroyWindow(hwnd_);
-//             return;
-//         }
-//         ::MessageBoxW(hwnd_, why.c_str(), L"Follow TCP stream",
-//                       MB_OK | MB_ICONINFORMATION);
-//         return;
-//     }
-//     if (c.protocol != IPPROTO_TCP || c.state == MIB_TCP_STATE_LISTEN ||
-//         c.state == 0) {
-//         ::MessageBoxW(hwnd_,
-//                       L"Only an established TCP connection has a stream to "
-//                       L"follow.\n\nA listening socket has no peer yet.",
-//                       L"Follow TCP stream", MB_OK | MB_ICONINFORMATION);
-//         return;
-//     }
-//
-//     CaptureTarget target = MakeCaptureTarget(c);
-//     std::wstring startError;
-//     if (!StartCapture(target, &startError)) {
-//         ::MessageBoxW(hwnd_, startError.c_str(), L"Follow TCP stream",
-//                       MB_OK | MB_ICONERROR);
-//         return;
-//     }
-//     ShowCaptureWait(hwnd_, target.label);
-//     const CaptureResult result = StopCapture(target);
-//     stream_.SetDark(ThemeIsDark());
-//     stream_.Show(hwnd_, font_, L"WinTCP - TCP stream - " + target.label,
-//                  result, target.label);
-// }
 
 // ---- presets + bookmarks -----------------------------------------
 
