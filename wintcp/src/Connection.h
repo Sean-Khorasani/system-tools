@@ -72,8 +72,10 @@ enum RowTag : unsigned {
 //   2. A packet capture of the handshake, parsed by TlsDecode.cpp. Needs
 //      elevation, and only covers connections the user chooses to capture -
 //      which is why it can never fill a column over every row. The parser
-//      EXISTS and is tested (see the TlsDecode section of Bench.cpp); it has
-//      no caller, because `capture` does not hand its bytes to it yet.
+//      EXISTS, is tested (see the TlsDecode section of Bench.cpp) and HAS a
+//      caller: `capture` reports the handshake it reassembled as `tls:` lines.
+//      What has no caller is the COLUMN, which would need one of the two
+//      sources above over every row.
 //
 // 'known' false means TLS was looked for and not established, or no source
 // was able to look; the column then shows the same em-dash the other
