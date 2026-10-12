@@ -9,7 +9,7 @@
 #include <cstring>
 #include <vector>
 
-#include "Utils.h"   // C10: bufferWasTooSmall - the truncation check
+#include "Utils.h"   // bufferWasTooSmall - the truncation check
 
 namespace wintcp {
 namespace {
@@ -191,7 +191,7 @@ bool Reelevate(const std::wstring& featureName) {
     // normally does. Quote it unconditionally - GetCommandLine returns the
     // raw string, and a bare path with spaces would be split into arguments.
     //
-    // C10. `== 0` tested for failure; truncation is reported as the CAPACITY, not
+    // `== 0` tested for failure; truncation is reported as the CAPACITY, not
     // as 0 (measured: an 8-char buffer for this exe returned 8). So a path
     // longer than MAX_PATH would have been SILENTLY TRUNCATED, and that
     // truncated string is what gets quoted into the command line below - so
@@ -222,7 +222,7 @@ bool Reelevate(const std::wstring& featureName) {
     newCmd += kElevatedMarker;
     newCmd += L"\"";
 
-    // C10: same defect as the image path above. GetCurrentDirectoryW reports a
+    // Same defect as the image path above. GetCurrentDirectoryW reports a
     // too-small buffer as the REQUIRED size (measured: 14 for an 8-char
     // buffer), so `== 0` passed and 'dir' was left empty - and an empty lpCurrentDirectory
     // tells the elevated child to start wherever the shell feels like.

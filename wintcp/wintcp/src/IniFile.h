@@ -1,6 +1,6 @@
 // IniFile.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.2.10 - the portable `wintcp.ini` beside the executable.
+// the portable `wintcp.ini` beside the executable.
 //
 // WHAT THIS IS FOR. Settings live in HKCU, which is per user and per machine -
 // so a copy of wintcp.exe on a USB stick carries no preferences with it. A

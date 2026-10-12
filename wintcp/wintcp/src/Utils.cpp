@@ -4,14 +4,14 @@
 
 #include "Utils.h"
 
-#include <objbase.h>   // CoInitializeEx / CoCreateInstance (G21 annotation)
+#include <objbase.h>   // CoInitializeEx / CoCreateInstance
 // INITGUID before oleacc.h: the CLSID/IID/PROPID this uses are defined in
 // this TU, so no oleacc.lib import is needed (and none of the three build
 // paths grows a new link dependency for one annotation call). Virtual
 // calls need no import; CoCreateInstance/CoInitializeEx are ole32, which
 // is already linked (delay-loaded, and gated below at runtime).
 #include <initguid.h>
-#include <oleacc.h>    // IAccPropServices / PROPID_ACC_NAME (G21 annotation)
+#include <oleacc.h>    // IAccPropServices / PROPID_ACC_NAME
 #include <shellapi.h>  // ShellExecuteW (ShowFileInExplorer)
 
 #include <cstdio>
@@ -20,7 +20,7 @@
 #include <fstream>
 
 #include "Opt.h"
-#include "WinCaps.h"   // DllAvailable: ole32/oleacc are delay-loaded (G21)
+#include "WinCaps.h"   // DllAvailable: ole32/oleacc are delay-loaded
 
 namespace wintcp {
 
@@ -314,7 +314,7 @@ bool HasLowerSubstring(const std::wstring& haystackLower,
 }
 
 void SetAccessibleName(HWND hwnd, const std::wstring& name) {
-    // G21: the annotation itself. Dynamic Annotation (IAccPropServices)
+    // The annotation itself. Dynamic Annotation (IAccPropServices)
     // rather than a hand-rolled IAccessible: one property set on the
     // window, and every screen reader picks it up as the accessible
     // name - no object to implement, no WM_GETOBJECT to serve, no state

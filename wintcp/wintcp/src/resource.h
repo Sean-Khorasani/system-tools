@@ -21,7 +21,7 @@
 #define IDC_STATIC_FILTER       1109
 #define IDC_STATIC_PROTO        1110
 #define IDC_STATIC_STATE        1111
-// Roadmap: the tree control that replaces the list in process-tree mode.
+// The tree control that replaces the list in process-tree mode.
 // Same client area, one visible at a time.
 #define IDC_PROCESS_TREE        1112
 
@@ -45,31 +45,31 @@
 #define IDM_VIEW_TRAFFIC        40016
 #define IDM_VIEW_CHARTS         40017
 
-// 7.4. Placed after the existing View ids so no existing command number
+// Placed after the existing View ids so no existing command number
 // shifts - renumbering them would break any accelerator table referring to
 // them by literal value.
 #define IDM_VIEW_PRESERVE_SEL   40018
 
-// 5.5 freeze and 5.1 grouping. After the existing View ids so no existing
+// Freeze and grouping. After the existing View ids so no existing
 // command number shifts.
 #define IDM_VIEW_FREEZE         40019
 #define IDM_VIEW_GROUP          40020
 
-// 7.6: the shortcuts sheet, and 7.5 the About box split out so F1 can open
+// The shortcuts sheet, and the About box split out so F1 can open
 // the sheet while the About dialog keeps its own command id.
 #define IDM_HELP_SHORTCUTS      40021
 #define IDM_VIEW_GEOIP          40022
-// 9.2.9: the firewall viewer. Reads the rules `blocks` counts. 40065 because
+// The firewall viewer. Reads the rules `blocks` counts. 40065 because
 // 40023 is IDM_FILE_PRESET_SAVE - the View ids are not a contiguous block, and
 // a duplicate #define is a silently-shadowed menu command.
 #define IDM_VIEW_BLOCKED        40065
-// 9.4.2: offers the buttons for whatever empty state the table is in. Always
+// Offers the buttons for whatever empty state the table is in. Always
 // enabled; when there is nothing to fix it says so, which is itself the answer
 // to "why is my table empty" being asked at all. 40066 keeps it beside the
 // other View ids; 40200 is IDM_COL_BASE and must stay the boundary.
 #define IDM_VIEW_FIX_EMPTY      40066
 #define IDM_VIEW_ASNIP          40040
-// G28: one-click recovery for a mangled column layout. Beside the other View
+// One-click recovery for a mangled column layout. Beside the other View
 // ids; 40067/40068 are free (the column block starts at 40200).
 #define IDM_VIEW_RESET_LAYOUT   40067
 // GUI process-tree view: a tree control over the same snapshot the list
@@ -77,7 +77,7 @@
 // this is the view chrome over them.
 #define IDM_VIEW_PROCESSTREE    40068
 
-// 9.4.4 column profiles and F5.11/9.4.3 quick filters. Appended after the
+// Column profiles and quick filters. Appended after the
 // highest in-use View id so no existing command number shifts - the same rule
 // the View block above follows.
 //
@@ -91,7 +91,7 @@
 #define IDM_PROFILE_PERFORMANCE 40045
 #define IDM_PROFILE_DIAGNOSTICS 40046
 
-// F5.11. One-click quick filters. A contiguous block too, for the same reason:
+// One-click quick filters. A contiguous block too, for the same reason:
 // the handler indexes a table by the offset from the first id.
 #define IDM_QFILTER_ALL         40047
 #define IDM_QFILTER_TCP         40048
@@ -101,7 +101,7 @@
 #define IDM_QFILTER_MINE        40052
 #define IDM_QFILTER_CLEAR       40053
 
-// 5.2 preset commands and 5.3 bookmark commands, wired into the GUI.
+// Preset and bookmark commands, wired into the GUI.
 #define IDM_FILE_PRESET_SAVE    40023
 #define IDM_FILE_PRESET_LOAD    40024
 #define IDM_FILE_PRESET_DELETE  40025
@@ -142,7 +142,7 @@
 #define IDM_COL_TLS             (IDM_COL_BASE + 20)
 #define IDM_COL_COUNTRY         (IDM_COL_BASE + 21)
 #define IDM_COL_PINNED          (IDM_COL_BASE + 22)
-// G6: the `ss -i` columns, and G5's per-process rate. Appended, never
+// The `ss -i` columns, and the per-process rate. Appended, never
 // renumbered - the ordinal is baked into nothing persistent, but keeping the
 // existing values stable means a diff of this file shows only additions.
 #define IDM_COL_RTT             (IDM_COL_BASE + 23)
@@ -150,10 +150,10 @@
 #define IDM_COL_CWND            (IDM_COL_BASE + 25)
 #define IDM_COL_RETRANS         (IDM_COL_BASE + 26)
 #define IDM_COL_GROUPRATE       (IDM_COL_BASE + 27)
-// 5.5: the bookmark note as its own column.
+// The bookmark note as its own column.
 #define IDM_COL_NOTE            (IDM_COL_BASE + 28)
-// F5.1/F5.2/F5.3: the parent id, the mandatory integrity level and the
-// Authenticode verdict. Appended, never renumbered, for the reason the G6 block
+// The parent id, the mandatory integrity level and the
+// Authenticode verdict. Appended, never renumbered, for the reason the block
 // above gives.
 #define IDM_COL_PPID            (IDM_COL_BASE + 29)
 #define IDM_COL_INTEGRITY       (IDM_COL_BASE + 30)
@@ -169,7 +169,7 @@
 #define IDM_OPEN_FILE_LOCATION  40061
 #define IDM_PROCESS_PROPERTIES  40062
 #define IDM_BLOCK_CONNECTION    40063
-// D30: tray menu - remove every rule `block` ever created (the item the
+// Tray menu - remove every rule `block` ever created (the item the
 // Block confirmation has always pointed at; it did not exist until now).
 #define IDM_TRAY_UNBLOCK_ALL   40064
 

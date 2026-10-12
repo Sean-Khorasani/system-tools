@@ -4,7 +4,7 @@
 
 #include "Bench.h"
 #include "BenchCheck.h"   // Check / FormatCheckAreas, shared with BenchSync.cpp
-// 9.6.2/C12: the sync-and-hardening half of the selftest lives in its own
+// The sync-and-hardening half of the selftest lives in its own
 // translation unit (BenchSync.cpp). Forward declarations rather than a
 // shared header because only RunSelfTest below calls them, and a header for
 // eight functions nobody else touches would be a second place to forget.
@@ -17,11 +17,11 @@ void CheckSha256(TestResult& r);
 void CheckExposure(TestResult& r);
 void CheckKillTree(TestResult& r);
 void CheckIniFile(TestResult& r);
-void CheckDnsCache(TestResult& r);   // F5.5: pure over strings, so it sits beside them
+void CheckDnsCache(TestResult& r);   // pure over strings, so it sits beside them
 }  // namespace wintcp
 
-#include "ColumnsWin.h"   // 9.4.4 profile masks
-#include "FontCache.h"     // F5.15
+#include "ColumnsWin.h"   // profile masks
+#include "FontCache.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -33,7 +33,7 @@ void CheckDnsCache(TestResult& r);   // F5.5: pure over strings, so it sits besi
 // After windows.h: the TCP state constants live in these, and they are only
 // visible once the winsock/Windows headers have settled their macros.
 #include <iphlpapi.h>
-#include <psapi.h>       // C9: GetProcessMemoryInfo - the scratch leak gate
+#include <psapi.h>       // GetProcessMemoryInfo - the scratch leak gate
 #include <tcpmib.h>
 #include <tlhelp32.h>    // CreateToolhelp32Snapshot for bench stage [E]
 
@@ -41,7 +41,7 @@ void CheckDnsCache(TestResult& r);   // F5.5: pure over strings, so it sits besi
 #include <cstdio>
 #include <cstring>
 #include <set>
-#include <stdexcept>   // std::runtime_error for the r2.* containment checks
+#include <stdexcept>   // std::runtime_error for the guarded.* containment checks
 #include <string>
 #include <vector>
 
@@ -57,34 +57,34 @@ void CheckDnsCache(TestResult& r);   // F5.5: pure over strings, so it sits besi
 #include "DetailModel.h"
 #include "Elevate.h"
 #include "Pcapng.h"
-#include "Settings.h"      // IsColumnPermutation / FoldVisibleOrder (7.1)
-#include "TypeToJump.h"    // type-to-jump matching (7.2)
-#include "Grouping.h"      // row grouping by process (5.1)
-#include "Freeze.h"        // frozen-view age (5.5)
-#include "PromptDialog.h"  // C7: TemplateFits - the DLGTEMPLATE bounds
-#include "BuildInfo.h"     // shortcut sheet (7.6) + About summary (7.5)
-#include "Bookmarks.h"     // kBookmarkTag* (5.3 join test)
-#include "ChartExport.h"   // chart CSV (7.7a) + zoom reset (7.7b)
-#include "ChangeLogWindow.h"  // change-log buffer cap (5.4)
+#include "Settings.h"      // IsColumnPermutation / FoldVisibleOrder
+#include "TypeToJump.h"    // type-to-jump matching
+#include "Grouping.h"      // row grouping by process
+#include "Freeze.h"        // frozen-view age
+#include "PromptDialog.h"  // TemplateFits - the DLGTEMPLATE bounds
+#include "BuildInfo.h"     // shortcut sheet + About summary
+#include "Bookmarks.h"     // kBookmarkTag* join test
+#include "ChartExport.h"   // chart CSV + zoom reset
+#include "ChangeLogWindow.h"  // change-log buffer cap
 #include "Commands.h"    // abstract layer: details/preset/select helpers
-#include "BlockConn.h"   // R3: ParseLedgerBytes - the pure ledger parser
-#include "BlockedPeersDialog.h"  // 9.2.9: the dialog-template bounds
-#include "BookmarkFile.h"         // 9.2.10: the bookmark export/import codec
-#include "PresetFile.h"           // 9.2.10: the preset export/import codec
-#include "IniFile.h"              // 9.2.10: the portable wintcp.ini
-#include "EmptyStateActions.h"    // 9.4.2: the empty-state button decision
-#include "ProcessTree.h"          // 9.5.6: the process tree
-#include "RowAccessible.h"        // G21: the accessible row-text builders
-#include "Sha256.h"               // 9.5.7: the image hash
-#include "ExposureScore.h"        // 9.5.7: the exposure badge predicate
-#include "RefreshEngine.h"  // RefreshWatchdogNext policy (r8.* below)
+#include "BlockConn.h"   // ParseLedgerBytes - the pure ledger parser
+#include "BlockedPeersDialog.h"  // the dialog-template bounds
+#include "BookmarkFile.h"         // the bookmark export/import codec
+#include "PresetFile.h"           // the preset export/import codec
+#include "IniFile.h"              // the portable wintcp.ini
+#include "EmptyStateActions.h"    // the empty-state button decision
+#include "ProcessTree.h"          // the process tree
+#include "RowAccessible.h"        // the accessible row-text builders
+#include "Sha256.h"               // the image hash
+#include "ExposureScore.h"        // the exposure badge predicate
+#include "RefreshEngine.h"  // RefreshWatchdogNext policy (watchdog.* below)
 #include "WinCaps.h"       // capability-report policy (caps.* below)
 #include "StreamCapture.h"  // MakeCaptureTarget mapping (follow-stream)
 #include "SysStats.h"    // headless system stats formatting
-#include "Presets.h"       // preset registry round-trip (5.2, via ViewState)
+#include "Presets.h"       // preset registry round-trip (via ViewState)
 #include "ViewState.h"     // the view description every front end applies
-#include "DnsResolver.h"   // 9.2.8 pending sentinel + timeout contract
-#include "TcpTable.h"    // CloseTcpConnection (9.2.6 IPv6 refusal)
+#include "DnsResolver.h"   // pending sentinel + timeout contract
+#include "TcpTable.h"    // CloseTcpConnection (IPv6 refusal)
 #include "TcpReasm.h"
 #include "TlsDecode.h"
 #include "GeoIp.h"         // synthetic-database lookups (geoip.* checks)
@@ -103,7 +103,7 @@ std::vector<FilterClause> Prog(const std::wstring& text) {
     return out;
 }
 
-// The report's row shape (A6/C7). One definition, because the two prefixes MUST
+// The report's row shape. One definition, because the two prefixes MUST
 // be the same width: they sit side by side in a transcript and a ragged edge
 // makes every PASS/FAIL column fail to line up, which is the whole reason the
 // format exists. Asserting the widths here means a future edit to one cannot
@@ -139,14 +139,14 @@ void Check(TestResult& r, const char* name, bool ok,
     // CLI's and already has a name for it.
     if (!ok) r.exitCode = kExitFail;
 
-    // V3: count the check by the area its NAME carries. Every check name is
+    // Count the check by the area its NAME carries. Every check name is
     // "<area>.<...>", so the area is everything before the first dot.
     //
     // This is NOT coverage. It says how much was WRITTEN, which is the only
     // thing a harness with no instrumentation can honestly claim. It is
     // recorded so a reader can see where the checks are concentrated and
     // where they are thin, which is the question the count was always being
-    // asked to answer. The ticket's stated scope - "an explicitly labelled
+    // asked to answer. The scope - "an explicitly labelled
     // approximate number, never a figure presented as branch coverage" - is
     // exactly this: labelled, by construction.
     if (name != nullptr && name[0] != '\0') {
@@ -159,11 +159,11 @@ void Check(TestResult& r, const char* name, bool ok,
     }
 }
 
-// V3: the check count by area, for the summary line.
+// The check count by area, for the summary line.
 //
 // Deliberately NOT a fixed table of areas: the checks carry over 90 distinct
-// name prefixes (ticket ids like "f5" and "c10", product names like "chrome"
-// and "svchost", engine names like "geoip" and "asm"). A fixed table would
+// name prefixes (subject names like "filter" and "pcapng", product names like
+// "chrome" and "svchost", engine names like "geoip" and "asm"). A fixed table
 // silently drop everything it did not list, which is how a "coverage" number
 // ends up being a number about the table's completeness instead.
 //
@@ -201,7 +201,7 @@ std::string FormatCheckAreas(const std::map<std::string, size_t>& areas) {
 
 // ---- synthetic GeoIP database -------------------------------------------------
 //
-// The MaxMind DB wire format (A6/C7). Every literal this fixture used to spell
+// The MaxMind DB wire format. Every literal this fixture used to spell
 // inline, in one place, because the rule is NOT ours and getting it wrong is
 // invisible: a wrong control byte produces a file the reader either rejects or,
 // worse, parses into a plausible-looking wrong answer.
@@ -222,7 +222,7 @@ constexpr unsigned char kMmMap    = 0xE0;
 // arithmetic limit, but 29/30/31 are reserved: a byte whose low five bits are
 // one of those means "the real size follows in further bytes", so a value that
 // fits must never reach 29. One function, because this clamp was written twice
-// with two different expressions - the drift A2 exists to prevent.
+// with two different expressions - the drift this one function prevents.
 constexpr size_t kMmMaxInlineSize = 29;
 
 // The extended-size marker: low five bits set to 29 do NOT mean "29 bytes" -
@@ -486,7 +486,7 @@ void MmAwkwardCountry(std::vector<unsigned char>* out, unsigned ptrSize,
 // at the fixed offset its size code needs.
 // 'declaredRecordBits', when non-zero, overrides ONLY the record_size written
 // into metadata; the tree is still laid out for 'recordBits'. That produces a
-// file which is well formed apart from what it CLAIMS - the input F5.13's
+// file which is well formed apart from what it CLAIMS - the input the
 // diagnostic exists for, and one that cannot be reached by asking the builder
 // for a bogus layout, because a 4-bit record has no byte size to write.
 std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entries,
@@ -599,7 +599,7 @@ std::vector<unsigned char> BuildSyntheticMmdb(const std::vector<MmdbEntry>& entr
     // carry the pointer, so the prefix's last bit does not matter.
     for (size_t k = 0; k < entries.size(); ++k) {
         // depth 0 builds an EMPTY tree - node_count 0 - which is the malformed
-        // file the reader must refuse by name (F5.13). There is no node for an
+        // file the reader must refuse by name. There is no node for an
         // entry to claim and there cannot be: the file is rejected at its
         // metadata, so the entries below travel only to give the data section
         // something to hold. Indexing the empty 'vector' in setRec instead
@@ -748,7 +748,7 @@ bool LoadSyntheticDb(TestResult& r, const std::vector<unsigned char>& db,
 // The rejection half of LoadSyntheticDb: the load must FAIL, and the message
 // must contain 'needle'. Asserting only "it did not load" is satisfied by any
 // of a dozen unrelated breaks, so it pins nothing - this requires the reader to
-// say WHICH fault it found, which is the whole of F5.13. The file is deleted
+// say WHICH fault it found, which is the whole point. The file is deleted
 // here rather than left to the caller, because on the failure path there is no
 // "if it loaded" branch to hang a cleanup on, and a leftover bad database would
 // be re-read by whatever ran next.
@@ -884,7 +884,7 @@ void CheckSyntheticGeoIp(TestResult& r) {
         ::DeleteFileW(SyntheticDbPath().c_str());
     }
 
-    // F5.13. Both faults below used to be reported by ONE sentence
+    // Both faults below used to be reported by ONE sentence
     // ("describes an impossible search tree") which the CLI then surfaced as a
     // bare "cannot load database" - a user with a bad file was told nothing
     // they could act on. The first database is laid out for 24-bit records, so
@@ -1312,7 +1312,7 @@ void CheckRealGeoIp(TestResult& r) {
     }
 }
 
-// ---- 9.4.4 column profiles, F5.11 quick filters, F5.15 font cache ----------
+// ---- column profiles, quick filters, font cache ----------------------------
 // All three are pure data transforms over public types, so they are checked here
 // rather than through the window. The GUI handler is a thin wrapper round them.
 
@@ -1518,7 +1518,7 @@ void CheckFontCache(TestResult& r) {
     FontCache::Get().OnDpiChanged();
 }
 
-// ---- 9.2.11 / F5.6: the alert CONFIGURATION and its persistence ------------
+// ---- the alert CONFIGURATION and its persistence ----------------------------
 // The engine's evaluation semantics have been pinned since it was written. What
 // was never checked is the part that shipped now: that the values a user sets
 // survive the trip through the registry and come back the same.
@@ -1572,7 +1572,7 @@ void CheckAlertConfiguration(TestResult& r) {
               one.alertOnRst && !one.alertOnClosed);
 }
 
-// ---- F5.6: per-connection alert rules ---------------------------------------
+// ---- per-connection alert rules -------------------------------------------
 // The threshold engine is whole-table and latched on CHANGES to that table. A
 // rule is per-connection and must latch per RULE, which is a different problem:
 // two rules watching the same address are two independent watches, and keying the
@@ -1691,7 +1691,7 @@ void CheckAlertRules(TestResult& r) {
     (void)s;
 }
 
-// ---- F5.6: the rule serialisation ------------------------------------------
+// ---- the rule serialisation ------------------------------------------------
 // A rule typed by hand in the registry has to survive the round trip, and the two
 // halves that most easily go wrong are the empties ("no address means any") and the
 // booleans ("on but not closed"). The registry itself is not touched here: what is
@@ -1744,12 +1744,12 @@ void CheckAlertRuleSerialisation(TestResult& r) {
           v.find(L"watch-cloudflare") == std::wstring::npos,
           WideToUtf8(v));
 }
-// 9.5.5: the dialog now has six controls (list + Delete / Enable / Disable /
+// The dialog now has six controls (list + Delete / Enable / Disable /
 // Remove all / Close), up from four. The selftest and the writer share one
 // number so cdit and the capacity arithmetic cannot be edited out of step -
 // a mismatch is an out-of-bounds read inside the dialog manager, not a
 // compile error.
-// 9.2.10 - the bookmark file codec. Both directions, because a hand-rolled
+// The bookmark file codec. Both directions, because a hand-rolled
 // JSON reader is exactly the kind of code that works on the happy path and
 // silently accepts (or silently drops) everything else.
 //
@@ -1758,11 +1758,11 @@ void CheckAlertRuleSerialisation(TestResult& r) {
 // to make impossible, so several checks refuse a file whose LAST record is
 // corrupt and require that the good records before it do not arrive.
 
-// 9.2.10 - the preset file codec. The sibling of BookmarkFile's, over the same
+// The preset file codec. The sibling of BookmarkFile's, over the same
 // all-or-nothing rule: a preset that loads half is a view the user never saved,
 // and unlike a bookmark the failure is subtle - it is believed.
 
-// 9.4.2 - the empty-state button decision. Pure, so the precedence rule and
+// The empty-state button decision. Pure, so the precedence rule and
 // the elevation rule are both pinned.
 //
 // The one that matters most is that [Run as admin] NEVER appears for a process
@@ -1770,17 +1770,17 @@ void CheckAlertRuleSerialisation(TestResult& r) {
 // that already has them is a button that does nothing, and a user who clicks
 // it and sees nothing happen has been lied to.
 
-// 9.5.6 - the process tree. Pure, so the cycle rule, the root rule and the
+// The process tree. Pure, so the cycle rule, the root rule and the
 // ancestor rule are all pinned without spawning a process or an elevation
 // prompt - and the cycle rule is the one that matters, because following a
 // spurious PID cycle is an infinite loop or a stack overflow.
 
-// 9.5.7 - the SHA-256 core. The vectors are FIPS 180-4's own, plus the
+// The SHA-256 core. The vectors are FIPS 180-4's own, plus the
 // exact-multiple-of-64 cases that are the only place an accumulate-and-compress
 // accumulator can go wrong. The hex formatter is checked with exact strings
 // because a case or separator slip here is invisible in every other check.
 
-// 9.5.5 - the exposure badge's predicate. Pure, so which rows count as
+// The exposure badge's predicate. Pure, so which rows count as
 // exposed is pinned independently of the status bar that reports it.
 //
 // The rule under test is recipe 24's red case, and it has three axes rather
@@ -1789,15 +1789,15 @@ void CheckAlertRuleSerialisation(TestResult& r) {
 // finding; all three is the red case. A badge that only looked at one axis
 // would either miss the red case or cry wolf on every service on the box.
 
-// ---- 9.5.6: the kill plan -------------------------------------------------
-// Moved to BenchSync.cpp along with CheckKillTree (C12 split). The
+// ---- the kill plan --------------------------------------------------------
+// Moved to BenchSync.cpp along with CheckKillTree. The
 // kill-plan helpers live there now because the checks that use them do.
 
 
 
 constexpr int kDialogControls = 6;
 
-// 9.2.10 - the portable wintcp.ini grammar. Pure over a string, so the whole
+// The portable wintcp.ini grammar. Pure over a string, so the whole
 // reader is pinned with no disk and no registry.
 //
 // The property that matters is the ONE the reader is strict about: a line with
@@ -2063,7 +2063,7 @@ TestResult RunSelfTest() {
                   prog[0].numeric && prog[0].lo == 1000 && prog[0].hi == 2000;
         Check(r, "filter.parse.pid-range", ok);
 
-        // D1: `duration:` is a numeric threshold in SECONDS with s/m/h/d
+        // `duration:` is a numeric threshold in SECONDS with s/m/h/d
         // suffixes, not a substring of the printed cell. It used to be the
         // latter, so `duration:1h` matched nothing at all.
         prog.clear();
@@ -2252,7 +2252,7 @@ TestResult RunSelfTest() {
               !MatchFilter(u, p0) && !MatchFilter(u, p1));
     }
 
-    // 3d. The enrichment pre-pass (G2b). A `tx:`/`rx:`/`net:`/`country:`/
+    // 3d. The enrichment pre-pass. A `tx:`/`rx:`/`net:`/`country:`/
     //     `host:` clause reads a column that is still empty before its join,
     //     so the pre-pass must hold exactly those clauses back and keep the
     //     rest. Getting this wrong is silent: the filter rejects every row,
@@ -2325,7 +2325,7 @@ TestResult RunSelfTest() {
               hit(L"tx:1GB") && !hit(L"tx:100GB") && !hit(L"tx:1GB proto:udp"));
     }
 
-    // 3d2. Missing-switch advice (G7). The pre-pass can only hold clauses
+    // 3d2. Missing-switch advice. The pre-pass can only hold clauses
     //      back until their JOIN runs; when the switch that starts the join
     //      was never given, the clause could only ever answer "no match" and
     //      the user got an empty table with no explanation at all (measured:
@@ -2365,7 +2365,7 @@ TestResult RunSelfTest() {
         q.quiet = true;
         Check(r, "enrich.advice.quiet-stays-silent",
               MissingEnrichmentAdvice(q).empty());
-        // 9.2.2: the quiet REFUSAL sees what the advisory path suppresses.
+        // The quiet REFUSAL sees what the advisory path suppresses.
         // If this ever returns empty, quiet runs silently go back to
         // answering "no match" for a question nobody asked.
         Check(r, "enrich.quiet-refusal-sees-filter-advice",
@@ -2387,7 +2387,7 @@ TestResult RunSelfTest() {
         Check(r, "enrich.advice.no-filter-none",
               MissingEnrichmentAdvice(e).empty());
 
-        // The columns half (D13): a printed enrichment column whose switch
+        // The columns half: a printed enrichment column whose switch
         // is off names the switch instead of printing a silent column of
         // em-dashes. The filter half above never covered this - `list
         // --columns rx` with no --traffic explained nothing.
@@ -2421,7 +2421,7 @@ TestResult RunSelfTest() {
     }
 
 {
-// 3f. C7 - the DLGTEMPLATE bounds. TemplateFits writes into a buffer the
+// 3f. The DLGTEMPLATE bounds. TemplateFits writes into a buffer the
     //      caller supplies and reports whether the template fitted, which is the
     //      only reason any of this can be checked: the prompt it exists for is
     //      MODAL, so a headless harness cannot open it, and while the template
@@ -2441,12 +2441,12 @@ TestResult RunSelfTest() {
         std::vector<BYTE> big(4096, 0xAA);
         const bool builtOk =
             TemplateFits(kStyle, 0, 0, 0, 270, 60, kTitle, &big);
-        Check(r, "c7.template.builds-in-a-large-buffer",
+        Check(r, "template.builds-in-a-large-buffer",
               builtOk && !big.empty() && big.size() <= 4096,
               "bytes=" + std::to_string(big.size()));
         // On success the buffer is truncated to the TRUE length, so its
         // contents are exactly what the dialog manager reads.
-        Check(r, "c7.template.buffer-is-truncated-to-fit",
+        Check(r, "template.buffer-is-truncated-to-fit",
               builtOk && !big.empty() && big.size() < 4096,
               "bytes=" + std::to_string(big.size()));
 
@@ -2457,12 +2457,12 @@ TestResult RunSelfTest() {
             DLGTEMPLATE head = {};
             ::memcpy(&head, big.data(),
                     (std::min)(sizeof(head), big.size()));
-            Check(r, "c7.template.declares-three-controls", head.cdit == 3,
+            Check(r, "template.declares-three-controls", head.cdit == 3,
                   "cdit=" + std::to_string(head.cdit));
-            Check(r, "c7.template.carries-the-font-style",
+            Check(r, "template.carries-the-font-style",
                   (head.style & DS_SETFONT) != 0,
                   "style=" + std::to_string(head.style));
-            Check(r, "c7.template.has-a-plausible-size",
+            Check(r, "template.has-a-plausible-size",
                   big.size() > sizeof(DLGTEMPLATE) && big.size() < 4096,
                   "bytes=" + std::to_string(big.size()));
         }
@@ -2474,11 +2474,10 @@ TestResult RunSelfTest() {
         // What this CANNOT assert, and why it matters that it is stated here: a
         // small overrun is not directly observable through this API, because
         // TemplateFits is bounded by buf.size() and nothing follows the buffer
-        // for a sentinel to live in. The first version of this check tried - it
-        // compared the final byte against a fill pattern - and reported 12
-        // "overruns" that were not overruns at all: a refusal legitimately
-        // leaves the buffer filled to exactly its last byte, so the last byte
-        // has changed and nothing ran off the end.
+        // for a sentinel to live in. Comparing the final byte against a fill
+        // pattern is not evidence of an overrun: a refusal legitimately leaves
+        // the buffer filled to exactly its last byte, so the last byte has
+        // changed and nothing ran off the end.
         //
         // What stands in for the sentinel is the allocator: a write past the end
         // of a heap block corrupts the block header, and this sweep frees
@@ -2503,15 +2502,15 @@ TestResult RunSelfTest() {
                     ++refused;
                 }
             }
-            Check(r, "c7.template.every-buffer-size-decides",
+            Check(r, "template.every-buffer-size-decides",
                   refused + accepted == static_cast<int>(kOriginal),
                   "refused=" + std::to_string(refused) +
                       " accepted=" + std::to_string(accepted));
-            Check(r, "c7.template.never-returns-an-oversized-template",
+            Check(r, "template.never-returns-an-oversized-template",
                   overran == 0, "oversized=" + std::to_string(overran));
             // Both outcomes must occur. A writer that refused EVERY size would
             // satisfy the two checks above while having broken the prompt.
-            Check(r, "c7.template.some-sizes-succeed-and-some-refuse",
+            Check(r, "template.some-sizes-succeed-and-some-refuse",
                   refused > 0 && accepted > 0,
                   "refused=" + std::to_string(refused) +
                       " accepted=" + std::to_string(accepted));
@@ -2530,45 +2529,44 @@ TestResult RunSelfTest() {
                 kStyle, 0, 0, 0, 270, 60,
                 std::wstring(kTemplateMaxChars + 1, L'x').c_str(),
                 &overLimit);
-            Check(r, "c7.template.title-at-the-limit-is-accepted",
+            Check(r, "template.title-at-the-limit-is-accepted",
                   okLen && atLimit.size() <= 8192 && !atLimit.empty(),
                   "bytes=" + std::to_string(atLimit.size()));
-            Check(r, "c7.template.title-over-the-limit-is-refused", !tooLong,
+            Check(r, "template.title-over-the-limit-is-refused", !tooLong,
                   "bytes=" + std::to_string(overLimit.size()));
         }
 
         // Bad arguments are refused, not dereferenced. The null-title case is
-        // here because the header promises it and the first implementation did
-        // not: it called wcslen(title) before anything looked at title, and the
-        // suite died with an access violation. The empty buffer needs a named
+        // here because the header promises it: calling wcslen(title) before
+        // anything looks at title is an access violation. The empty buffer
+        // needs a named
         // local because a temporary cannot bind to the pointer parameter.
         {
             std::vector<BYTE> buf(4096, 0);
-            Check(r, "c7.template.null-title-is-refused",
+            Check(r, "template.null-title-is-refused",
                   !TemplateFits(kStyle, 0, 0, 0, 270, 60, nullptr, &buf));
-            Check(r, "c7.template.null-buffer-is-refused",
+            Check(r, "template.null-buffer-is-refused",
                   !TemplateFits(kStyle, 0, 0, 0, 270, 60, L"x", nullptr));
             std::vector<BYTE> nothing;
-            Check(r, "c7.template.empty-buffer-is-refused",
+            Check(r, "template.empty-buffer-is-refused",
                   !TemplateFits(kStyle, 0, 0, 0, 270, 60, L"x", &nothing));
         }
 
         // Every DLGITEMTEMPLATE must start on a DWORD, or the dialog manager
-        // walks a misaligned template - the intermittent AV this module's own
-        // comment says the audit tracked down.
+        // walks a misaligned template - an intermittent access violation.
         //
         // Located by SCANNING for the 0xFFFF ordinal-class marker rather than by
-        // computing offsets. The first version of this check re-derived the
-        // template layout, got the title padding wrong by one wchar, and read
-        // out of bounds. Re-deriving a layout in a test is how the test rots, and
-        // a scan cannot run off the front.
+        // computing offsets. A re-derived template layout gets the title
+        // padding wrong by one wchar and reads out of bounds. Re-deriving a
+        // layout in a test is how the test rots, and a scan cannot run off the
+        // front.
         //
         // And the CONTROL START is checked, not the marker word. The marker sits
         // immediately after the DLGITEMTEMPLATE, whose size is 18 bytes - not a
         // multiple of 4 - so every marker legitimately lands at an address that
-        // is 2 mod 4. The first version of this check asserted the marker was
-        // DWORD-aligned and failed on a perfectly correct template; the
-        // requirement is on the item, which is where the writer aligns.
+        // is 2 mod 4. Asserting that the marker itself is DWORD-aligned fails
+        // on a perfectly correct template; the requirement is on the item,
+        // which is where the writer aligns.
         if (builtOk && !big.empty()) {
             std::vector<size_t> markers;
             for (size_t k = 0; k + 2 <= big.size(); ++k) {
@@ -2576,7 +2574,7 @@ TestResult RunSelfTest() {
                 ::memcpy(&w, big.data() + k, sizeof(w));
                 if (w == 0xFFFF) markers.push_back(k);
             }
-            Check(r, "c7.template.three-controls-mean-three-markers",
+            Check(r, "template.three-controls-mean-three-markers",
                   markers.size() == 3,
                   "markers=" + std::to_string(markers.size()));
             bool allAligned = markers.size() == 3;
@@ -2595,18 +2593,18 @@ TestResult RunSelfTest() {
                 residues += " " + std::to_string(start & 3u);
                 if ((start & 3u) != 0) allAligned = false;
             }
-            Check(r, "c7.template.every-control-starts-dword-aligned",
+            Check(r, "template.every-control-starts-dword-aligned",
                   allAligned, "item start address mod 4:" + residues);
         }
     }
-        // R5: garbage in, never a crash, always an error or a skip. Table
+        // Garbage in, never a crash, always an error or a skip. Table
         // driven, so a case is one row and adding a row needs no new code.
         //
         // Property under test, stated once: for any input below the call
         // RETURNS, it does not read out of bounds, it does not loop forever,
         // and it never invents a packet. "Never a crash" is not checkable from
         // inside the process, so it is evidenced structurally - the bounds are
-        // checked BEFORE the reads that would need them (see r5.pcapng notes),
+        // checked BEFORE the reads that would need them (see the pcapng notes),
         // and the gate would show a crashed driver as a non-zero exit.
         // "Always an error" is pinned by asserting a non-empty error string,
         // not merely !ok: a refusal that says nothing is what a reader cannot
@@ -2680,7 +2678,7 @@ TestResult RunSelfTest() {
                 db[35] = (unsigned char)((c.blockLen >> 24) & 0xFF);
                 const PcapngParse p = ParsePcapng(db.data(), db.size());
                 const std::string label =
-                    std::string("r5.pcapng.blocklen-") + c.name;
+                    std::string("pcapng.blocklen-") + c.name;
                 const bool saidWhy =
                     p.error.find(c.needle) != std::wstring::npos;
                 Check(r, label.c_str(),
@@ -2690,7 +2688,7 @@ TestResult RunSelfTest() {
                           " packets=" + std::to_string(p.packets.size()));
                 // Whatever the verdict, no packet may be invented from a file
                 // whose own block lengths are impossible.
-                Check(r, (std::string("r5.pcapng.blocklen-") + c.name +
+                Check(r, (std::string("pcapng.blocklen-") + c.name +
                           "-invents-nothing").c_str(),
                       p.packets.empty(),
                       "packets=" + std::to_string(p.packets.size()));
@@ -2723,12 +2721,12 @@ TestResult RunSelfTest() {
             // SHB: type, length, byte-order magic, version (major+minor), a
             // 64-BIT section length, trailing length = 4+4+4+4+8+4 = 28.
             //
-            // The section length is 8 bytes, not 4. The first version of this
-            // fixture wrote it with put32, making the block 24 bytes while
-            // declaring 28 - so the parser resumed 4 bytes into the IDB, read
-            // its snaplen as a block length, and reported "not a sane multiple
-            // of 4". Every other field in the fixture was correct; this one
-            // word was not, and the symptom pointed at the parser.
+            // The section length is 8 bytes, not 4. Writing it with put32 makes
+            // the block 24 bytes while declaring 28 - so the parser resumes 4
+            // bytes into the IDB, reads its snaplen as a block length, and
+            // reports "not a sane multiple of 4". Every other field in the
+            // fixture is correct; this one word is not, and the symptom points
+            // at the parser.
             put32(0x0A0D0D0A);
             put32(28);
             put32(0x1A2B3C4D);
@@ -2743,14 +2741,13 @@ TestResult RunSelfTest() {
             put32(0xFFFFFFFF); // snaplen
             put32(20);
             // EPB carrying one 54-byte TCP frame
-            // Fixed offsets, not a running count. The first version of this fixture
-            // pushed bytes one at a time and got the IP total length wrong by
-            // 30 (0x54 declared for a 40-byte frame), which makes the packet
-            // look truncated inside ParseIpTcp - a fixture fault that reads as
-            // a parser fault. The field layout below is the same one the
-            // passing pcapng.ethernet-tcp-parses check uses, which is
-            // deliberate: a second, differently-framed fixture would be a
-            // second chance to get the offsets wrong.
+            // Fixed offsets, not a running count: pushing bytes one at a time
+            // gets the IP total length wrong by 30 (0x54 declared for a 40-byte
+            // frame), which makes the packet look truncated inside ParseIpTcp -
+            // a fixture fault that reads as a parser fault. The field layout
+            // below is the same one the passing pcapng.ethernet-tcp-parses
+            // check uses, which is deliberate: a second, differently-framed
+            // fixture would be a second chance to get the offsets wrong.
             unsigned char fr[64] = {0};
             fr[0] = 0x6c; fr[1] = 0x55; fr[5] = 0x08;   // dst MAC (see L5582)
             fr[6] = 0xc0; fr[7] = 0x00; fr[8] = 0x02; fr[9] = 0x01;
@@ -2782,7 +2779,7 @@ TestResult RunSelfTest() {
             put32(88);       // trailing length
 
             const PcapngParse p = ParsePcapng(f.data(), f.size());
-            Check(r, "r5.pcapng.a-real-file-still-parses",
+            Check(r, "pcapng.a-real-file-still-parses",
                   p.ok && p.packets.size() == 1 && p.error.empty(),
                   "ok=" + std::string(p.ok ? "1" : "0") +
                       " packets=" + std::to_string(p.packets.size()) +
@@ -2791,7 +2788,7 @@ TestResult RunSelfTest() {
             // And the refusal rows above are refusing THIS parser, not a
             // parser that stopped working: the same binary gets a packet here.
             // The fields are srcPort/dstPort, not localPort/remotePort.
-            Check(r, "r5.pcapng.the-packet-it-kept-is-the-one-it-parsed",
+            Check(r, "pcapng.the-packet-it-kept-is-the-one-it-parsed",
                   p.packets.size() == 1 && p.packets[0].srcPort == 8080 &&
                       p.packets[0].dstPort == 443 &&
                       p.packets[0].ipVersion == 4,
@@ -2836,12 +2833,12 @@ TestResult RunSelfTest() {
                 else ++refused;
                 if (!p.packets.empty()) ++invented;
             }
-            Check(r, "r5.pcapng.every-prefix-decides",
+            Check(r, "pcapng.every-prefix-decides",
                   clean + refused == static_cast<int>(full.size() + 1),
                   "clean=" + std::to_string(clean) +
                       " refused=" + std::to_string(refused) +
                       " prefixes=" + std::to_string(full.size() + 1));
-            Check(r, "r5.pcapng.every-prefix-invents-nothing",
+            Check(r, "pcapng.every-prefix-invents-nothing",
                   invented == 0, "invented=" + std::to_string(invented));
         }
 
@@ -2858,7 +2855,7 @@ TestResult RunSelfTest() {
             db[28] = 0x06;
             db[32] = 0x00; db[33] = 0x00; db[34] = 0x01; db[35] = 0x00;
             const PcapngParse p = ParsePcapng(db.data(), db.size());
-            Check(r, "r5.pcapng.huge-length-refused-not-trusted",
+            Check(r, "pcapng.huge-length-refused-not-trusted",
                   !p.ok && p.badBlocks > 0 && p.packets.empty(),
                   "badBlocks=" + std::to_string(p.badBlocks) +
                       " err=" + WideToUtf8(p.error));
@@ -2911,14 +2908,14 @@ TestResult RunSelfTest() {
                 const bool wantAccept =
                     (std::string(c.name).find("accepts-") == 0);
                 const std::string label =
-                    std::string("r5.registry.colorder-") + c.name;
+                    std::string("registry.colorder-") + c.name;
                 Check(r, label.c_str(), accepted == wantAccept,
                       "accepted=" + std::string(accepted ? "1" : "0") +
                           " count=" + std::to_string(c.count));
             }
-            Check(r, "r5.registry.colorder-rejects-null-ptr",
+            Check(r, "registry.colorder-rejects-null-ptr",
                   !IsColumnPermutation(nullptr, 6));
-            Check(r, "r5.registry.colorder-null-ptr-zero-count-is-still-rejected",
+            Check(r, "registry.colorder-null-ptr-zero-count-is-still-rejected",
                   !IsColumnPermutation(nullptr, 0),
                   "the null check precedes the count bound");
             // The validator is a gate, not a filter: a value it accepts must
@@ -2927,11 +2924,11 @@ TestResult RunSelfTest() {
             {
                 std::vector<int> all(COL_COUNT);
                 for (int i = 0; i < COL_COUNT; ++i) all[i] = i;
-                Check(r, "r5.registry.colorder-accepts-the-full-permutation",
+                Check(r, "registry.colorder-accepts-the-full-permutation",
                       IsColumnPermutation(all.data(), COL_COUNT));
                 std::vector<int> missingOne = all;
                 missingOne.pop_back();
-                Check(r, "r5.registry.colorder-a-short-order-is-still-accepted",
+                Check(r, "registry.colorder-a-short-order-is-still-accepted",
                       IsColumnPermutation(missingOne.data(), missingOne.size()),
                       "count=" + std::to_string(missingOne.size()) +
                           " of " + std::to_string(COL_COUNT) +
@@ -2950,20 +2947,19 @@ TestResult RunSelfTest() {
             // not return empty. That is read from Settings.cpp:170-183, and it
             // is the right answer: an order with every column hidden is still
             // the order, and returning empty would make the window lose its
-            // layout entirely. Pinned as "unchanged", not as "empty" - the
-            // earlier version of this check asserted the wrong thing and the
-            // test was red for a reason that was not a defect.
+            // layout entirely. Pinned as "unchanged", not as "empty" - an empty
+            // answer here would be the wrong assertion.
             const std::vector<int> full = {0, 1, 2, 3, 4, 5};
-            Check(r, "r5.fold.empty-visible-returns-full",
+            Check(r, "colorder.fold.empty-visible-returns-full",
                   FoldVisibleOrder(full, 0x3F, {}) == full);
-            Check(r, "r5.fold.empty-order-is-empty",
+            Check(r, "colorder.fold.empty-order-is-empty",
                   FoldVisibleOrder({}, 0x3F, {}).empty());
-            Check(r, "r5.fold.mask-zero-returns-the-order-unchanged",
+            Check(r, "colorder.fold.mask-zero-returns-the-order-unchanged",
                   FoldVisibleOrder(full, 0, {}) == full,
                   "no visible column means no slot to reorder");
         }
     }
-    // 3e. R3 - the ledger parser. ParseLedgerBytes is pure, so the hostile
+    // 3e. The ledger parser. ParseLedgerBytes is pure, so the hostile
     //      input it exists to reject is driven here directly. Driving the real
     //      file instead would mean pointing %APPDATA% at a scratch directory
     //      and writing to it: the selftest must never touch the ledger that
@@ -2995,13 +2991,13 @@ TestResult RunSelfTest() {
             "WinTCP block: CB0071AA-8080-0-endpoint\tWinTCP block: CB0071AA-8080-0-ports\r\n";
         const bool okGood =
             ParseLedgerBytes(good.data(), good.size(), &out, &err);
-        Check(r, "r3.ledger.parses-a-real-shape",
+        Check(r, "ledger.parses-a-real-shape",
               okGood && out.size() == 2 && err.empty(), detail());
         // The tab is what RemoveAllWinTcpRules splits on to recover a name; if
         // the parser ever normalised it away, every removal would miss.
         const std::string firstPair =
             out.empty() ? std::string() : WideToUtf8(out[0]);
-        Check(r, "r3.ledger.keeps-the-tab",
+        Check(r, "ledger.keeps-the-tab",
               out.size() == 2 &&
                   firstPair ==
                       "WinTCP block: CB0071A9-443-80-endpoint\t"
@@ -3011,7 +3007,7 @@ TestResult RunSelfTest() {
         // Empty file: an absent ledger is an empty ledger, not a failure.
         out.clear();
         const bool okEmpty = ParseLedgerBytes("", 0, &out, &err);
-        Check(r, "r3.ledger.empty-is-not-an-error",
+        Check(r, "ledger.empty-is-not-an-error",
               okEmpty && out.empty() && err.empty(), detail());
 
         // A final line with no terminator must still be read: a ledger whose
@@ -3021,7 +3017,7 @@ TestResult RunSelfTest() {
         const std::string noEol = "a\tb";
         const bool okNoEol =
             ParseLedgerBytes(noEol.data(), noEol.size(), &out, &err);
-        Check(r, "r3.ledger.last-line-without-newline",
+        Check(r, "ledger.last-line-without-newline",
               okNoEol && out.size() == 1 && out[0] == L"a\tb", detail());
 
         // CRLF and LF both have to reduce to the same pair, or one ledger
@@ -3031,7 +3027,7 @@ TestResult RunSelfTest() {
         const std::string mixed = "x\ty\r\nz\tw\nq\te";
         const bool okMixed =
             ParseLedgerBytes(mixed.data(), mixed.size(), &out, &err);
-        Check(r, "r3.ledger.crlf-and-lf-both-parse",
+        Check(r, "ledger.crlf-and-lf-both-parse",
               okMixed && out.size() == 3 && out[0] == L"x\ty" &&
                   out[1] == L"z\tw" && out[2] == L"q\te",
               detail());
@@ -3042,7 +3038,7 @@ TestResult RunSelfTest() {
         const std::string blanks = "\r\n\r\n   \r\nreal\tpair\r\n\r\n";
         const bool okBlanks =
             ParseLedgerBytes(blanks.data(), blanks.size(), &out, &err);
-        Check(r, "r3.ledger.skips-blank-lines",
+        Check(r, "ledger.skips-blank-lines",
               okBlanks && out.size() == 1 && out[0] == L"real\tpair",
               detail());
 
@@ -3056,14 +3052,14 @@ TestResult RunSelfTest() {
             out.assign(7, L"sentinel");
             const bool ok = ParseLedgerBytes(withHuge.data(), withHuge.size(),
                                              &out, &err);
-            Check(r, "r3.ledger.refuses-an-over-long-line",
+            Check(r, "ledger.refuses-an-over-long-line",
                   !ok && !err.empty(), "err=" + WideToUtf8(err));
             // The refusal must name WHICH line, or a long file is undebuggable.
-            Check(r, "r3.ledger.refusal-names-the-line",
+            Check(r, "ledger.refusal-names-the-line",
                   err.find(L"line 2") != std::wstring::npos, WideToUtf8(err));
             // The "never half-apply" promise: a rejected file must not leave
             // the caller holding a usable-looking partial ledger.
-            Check(r, "r3.ledger.refusal-leaves-out-untouched",
+            Check(r, "ledger.refusal-leaves-out-untouched",
                   out.size() == 7 && out[0] == L"sentinel",
                   "out.size=" + std::to_string(out.size()));
         }
@@ -3076,7 +3072,7 @@ TestResult RunSelfTest() {
             out.clear();
             const bool ok =
                 ParseLedgerBytes(atCap.data(), atCap.size(), &out, &err);
-            Check(r, "r3.ledger.exactly-at-the-cap-is-accepted",
+            Check(r, "ledger.exactly-at-the-cap-is-accepted",
                   ok && out.size() == 1 && err.empty(),
                   "ok=" + std::string(ok ? "1" : "0") + " err=" + WideToUtf8(err));
         }
@@ -3105,7 +3101,7 @@ TestResult RunSelfTest() {
                 const bool ok =
                     ParseLedgerBytes(text.data(), text.size(), &out, &err);
                 const std::string label =
-                    std::string("r3.ledger.rejects-") + b.name;
+                    std::string("ledger.rejects-") + b.name;
                 Check(r, label.c_str(), !ok && !err.empty(),
                       "err=" + WideToUtf8(err));
             }
@@ -3122,7 +3118,7 @@ TestResult RunSelfTest() {
             out.clear();
             const bool ok =
                 ParseLedgerBytes(text.data(), text.size(), &out, &err);
-            Check(r, "r3.ledger.accepts-valid-multibyte-utf8",
+            Check(r, "ledger.accepts-valid-multibyte-utf8",
                   ok && out.size() == 1 && err.empty() &&
                       out[0].find(L"\x6D4B\x8BD5") != std::wstring::npos,
                   detail());
@@ -3138,13 +3134,13 @@ TestResult RunSelfTest() {
             out.clear();
             const bool ok = ParseLedgerBytes(text.data(), text.size(),
                                              &out, &err);
-            Check(r, "r3.ledger.rejects-an-embedded-nul",
+            Check(r, "ledger.rejects-an-embedded-nul",
                   !ok && err.find(L"NUL") != std::wstring::npos,
                   "err=" + WideToUtf8(err));
         }
     }
 
-    // 3e-bis. 9.2.9 - the firewall viewer's ledger helpers. Both are pure and
+    // 3e-bis. The firewall viewer's ledger helpers. Both are pure and
     //        both decide the ledger's SHAPE, which is why they are pinned
     //        directly: CountWinTcpRules and RemoveAllWinTcpRules both split on
     //        the tab and read field 0, so a viewer that reshaped a line would
@@ -3157,25 +3153,25 @@ TestResult RunSelfTest() {
 
         // Two names, in order.
         const std::vector<std::wstring> both = SplitLedgerNames(pair);
-        Check(r, "9.2.9.split.two-names-in-order",
+        Check(r, "blockedpeers.split.two-names-in-order",
               both.size() == 2 && both[0] == a && both[1] == b,
               "n=" + std::to_string(both.size()));
 
         // A bare name with no tab is one name, not zero and not two.
         const std::vector<std::wstring> one = SplitLedgerNames(a);
-        Check(r, "9.2.9.split.no-tab-is-one-name",
+        Check(r, "blockedpeers.split.no-tab-is-one-name",
               one.size() == 1 && one[0] == a,
               "n=" + std::to_string(one.size()));
 
         // The post-removal shape: the first field blank, the second intact.
         // The empty first field must NOT surface as a name.
         const std::vector<std::wstring> half = SplitLedgerNames(L"\t" + b);
-        Check(r, "9.2.9.split.blank-first-field-is-not-a-name",
+        Check(r, "blockedpeers.split.blank-first-field-is-not-a-name",
               half.size() == 1 && half[0] == b,
               "n=" + std::to_string(half.size()));
 
         // Both blank: nothing at all.
-        Check(r, "9.2.9.split.both-blank-is-empty",
+        Check(r, "blockedpeers.split.both-blank-is-empty",
               SplitLedgerNames(L"\t").empty() &&
                   SplitLedgerNames(std::wstring()).empty(),
               "");
@@ -3184,21 +3180,21 @@ TestResult RunSelfTest() {
         // field COUNT does not change.
         std::wstring blanked;
         const bool didBlank = BlankLedgerName(pair, a, &blanked);
-        Check(r, "9.2.9.blank.endpoint-keeps-the-tab",
+        Check(r, "blockedpeers.blank.endpoint-keeps-the-tab",
               didBlank && blanked == L"\t" + b, WideToUtf8(blanked));
 
         // Blanking the PORTS name leaves field 0 alone - this is the case
         // that would change the `blocks` count if it got it wrong.
         const bool didBlank2 = BlankLedgerName(pair, b, &blanked);
         const std::wstring portsLeft = a + L"\t";
-        Check(r, "9.2.9.blank.ports-keeps-field-0", didBlank2 && blanked == portsLeft,
+        Check(r, "blockedpeers.blank.ports-keeps-field-0", didBlank2 && blanked == portsLeft,
               WideToUtf8(blanked));
 
         // Blanking the only name leaves an empty line, which the writer then
         // drops; blanking nothing leaves the line untouched and says so.
         std::wstring untouched = pair;
         const bool noChange = BlankLedgerName(pair, L"not ours", &untouched);
-        Check(r, "9.2.9.blank.a-name-that-is-not-ours",
+        Check(r, "blockedpeers.blank.a-name-that-is-not-ours",
               !noChange && untouched == pair, WideToUtf8(untouched));
 
         // A name that appears as a PREFIX of the other must not match: the
@@ -3207,11 +3203,11 @@ TestResult RunSelfTest() {
         const std::wstring edge = shortName + L"\t" + L"other";
         const bool okEdge = BlankLedgerName(edge, shortName, &blanked);
         const std::wstring edgeLeft = L"\t" + std::wstring(L"other");
-        Check(r, "9.2.9.blank.matches-whole-fields-only",
+        Check(r, "blockedpeers.blank.matches-whole-fields-only",
               okEdge && blanked == edgeLeft, WideToUtf8(blanked));
     }
 
-    // 3e-ter. 9.2.9 - the viewer's row text and dialog-template capacity. Both
+    // 3e-ter. The viewer's row text and dialog-template capacity. Both
     //        are pure and both guard a crash the UI harness cannot reach, because
     //        it cannot dismiss a modal: the template writer's arithmetic and the
     //        row formatter's bound are verified here, which is the whole reason
@@ -3225,7 +3221,7 @@ TestResult RunSelfTest() {
         plain.enabled = true;
         plain.isBlocking = true;
         const std::wstring okRow = BlockedPeersRowText(plain);
-        Check(r, "9.2.9.row.plain-has-no-warning",
+        Check(r, "blockedpeers.row.plain-has-no-warning",
               okRow.find(L"[disabled]") == std::wstring::npos &&
                   okRow.find(L"[not a block]") == std::wstring::npos,
               WideToUtf8(okRow));
@@ -3234,14 +3230,14 @@ TestResult RunSelfTest() {
         BlockedRule disabled = plain;
         disabled.enabled = false;
         const std::wstring disRow = BlockedPeersRowText(disabled);
-        Check(r, "9.2.9.row.disabled-is-labelled",
+        Check(r, "blockedpeers.row.disabled-is-labelled",
               disRow.find(L"[disabled]") != std::wstring::npos,
               WideToUtf8(disRow));
 
         BlockedRule allowRule = plain;
         allowRule.isBlocking = false;
         const std::wstring allowRow = BlockedPeersRowText(allowRule);
-        Check(r, "9.2.9.row.not-a-block-is-labelled",
+        Check(r, "blockedpeers.row.not-a-block-is-labelled",
               allowRow.find(L"[not a block]") != std::wstring::npos,
               WideToUtf8(allowRow));
 
@@ -3250,38 +3246,38 @@ TestResult RunSelfTest() {
         BlockedRule huge = plain;
         huge.name = std::wstring(5000, L'W');
         const std::wstring hugeRow = BlockedPeersRowText(huge);
-        Check(r, "9.2.9.row.long-name-truncates",
+        Check(r, "blockedpeers.row.long-name-truncates",
               hugeRow.size() < 5000, "len=" + std::to_string(hugeRow.size()));
 
-        // G14: the report columns render the same fields the row text does,
+        // The report columns render the same fields the row text does,
         // split so each is sortable. Name identifies, Remote scopes ("any"
         // when the rule carries none), Status states without text suffixes.
-        Check(r, "9.2.9.cells.rule-is-the-name",
+        Check(r, "blockedpeers.cells.rule-is-the-name",
               BlockedPeersCellText(plain, kBlockedColRule) == plain.name,
               WideToUtf8(BlockedPeersCellText(plain, kBlockedColRule)));
-        Check(r, "9.2.9.cells.remote-scopes",
+        Check(r, "blockedpeers.cells.remote-scopes",
               BlockedPeersCellText(plain, kBlockedColRemote) ==
                   L"203.0.113.7:443",
               WideToUtf8(BlockedPeersCellText(plain, kBlockedColRemote)));
         BlockedRule anyScope = plain;
         anyScope.remoteAddrs.clear();
         anyScope.remotePorts.clear();
-        Check(r, "9.2.9.cells.empty-scope-reads-any",
+        Check(r, "blockedpeers.cells.empty-scope-reads-any",
               BlockedPeersCellText(anyScope, kBlockedColRemote) == L"any",
               WideToUtf8(BlockedPeersCellText(anyScope, kBlockedColRemote)));
-        Check(r, "9.2.9.cells.enabled-status",
+        Check(r, "blockedpeers.cells.enabled-status",
               BlockedPeersCellText(plain, kBlockedColStatus) == L"enabled",
               WideToUtf8(BlockedPeersCellText(plain, kBlockedColStatus)));
-        Check(r, "9.2.9.cells.disabled-status",
+        Check(r, "blockedpeers.cells.disabled-status",
               BlockedPeersCellText(disabled, kBlockedColStatus) ==
                   L"disabled",
               WideToUtf8(BlockedPeersCellText(disabled, kBlockedColStatus)));
-        Check(r, "9.2.9.cells.not-a-block-status",
+        Check(r, "blockedpeers.cells.not-a-block-status",
               BlockedPeersCellText(allowRule, kBlockedColStatus) ==
                   L"not a block",
               WideToUtf8(
                   BlockedPeersCellText(allowRule, kBlockedColStatus)));
-        Check(r, "9.2.9.cells.unknown-column-is-the-name",
+        Check(r, "blockedpeers.cells.unknown-column-is-the-name",
               BlockedPeersCellText(plain, 99) == plain.name,
               WideToUtf8(BlockedPeersCellText(plain, 99)));
 
@@ -3290,7 +3286,7 @@ TestResult RunSelfTest() {
         // the "refuse rather than overrun" contract honest as the layout
         // changes. A title of any length the code will accept must still fit.
         const size_t cap = BlockedPeersTemplateCapacity(0);
-        Check(r, "9.2.9.dialog.capacity-is-sane",
+        Check(r, "blockedpeers.dialog.capacity-is-sane",
               cap > sizeof(DLGTEMPLATE) && cap < 1024 * 1024,
               "cap=" + std::to_string(cap));
 
@@ -3298,7 +3294,7 @@ TestResult RunSelfTest() {
         // failure PromptDialog.cpp documents: a writer that only advances the
         // cursor corrupts the heap before it ever checks.
         std::vector<BYTE> tiny(8, 0);
-        Check(r, "9.2.9.dialog.refuses-a-tiny-buffer",
+        Check(r, "blockedpeers.dialog.refuses-a-tiny-buffer",
               !BlockedPeersTemplateFits(L"Blocked peers", &tiny) ||
                   tiny.size() <= 8,
               "size=" + std::to_string(tiny.size()));
@@ -3308,30 +3304,30 @@ TestResult RunSelfTest() {
         std::vector<BYTE> right(cap + 64, 0);
         const bool filled =
             BlockedPeersTemplateFits(L"Blocked peers", &right);
-        Check(r, "9.2.9.dialog.fills-a-right-sized-buffer",
+        Check(r, "blockedpeers.dialog.fills-a-right-sized-buffer",
               filled && right.size() <= cap + 64, "size=" + std::to_string(right.size()));
 
-        // 9.5.5: the editor added two buttons and a shorter list, so cdit
+        // The editor added two buttons and a shorter list, so cdit
         // moved from 4 to 6 and the capacity moved with it. A capacity that
         // did NOT track cdit would be a buffer the dialog manager reads past
         // the end of, which is the intermittent access violation
         // PromptDialog.cpp is about - so the two are pinned together rather
         // than trusted to have been edited in step.
-        Check(r, "9.2.9.dialog.control-count-matches-capacity",
+        Check(r, "blockedpeers.dialog.control-count-matches-capacity",
               BlockedPeersControlCount() == kDialogControls,
               "cdit=" + std::to_string(BlockedPeersControlCount()) +
                   " want " + std::to_string(kDialogControls));
     }
 
-    // 3e-quart. 9.5.5 - the general firewall rule. Both functions under test
+    // 3e-quart. The general firewall rule. Both functions under test
     //        are PURE, so the platform constraints they enforce are verifiable
     //        without COM and without elevation.
     //
     //        The constraint that matters most is one this file can only
     //        document rather than test: Windows Firewall's conflict resolution
     //        is BLOCK WINS, so an allow rule does NOT carve a process out of a
-    //        block rule. That is recorded in BlockConn.h and enforced by
-    //        review - nothing here can measure a policy decision the platform
+    //        block rule. That is recorded in BlockConn.h and cannot be
+    //        tested here - nothing here can measure a policy decision the platform
     //        makes at match time. Excluding a process has to be done by
     //        scoping the block, which is what the process field is for.
 
@@ -3343,7 +3339,7 @@ TestResult RunSelfTest() {
         base.remoteAddress = L"203.0.113.7";
         base.remotePorts = L"443";
         const std::wstring a = BuildFwRuleName(base);
-        Check(r, "9.5.5.name.same-rule-same-name",
+        Check(r, "fwrule.name.same-rule-same-name",
               a == BuildFwRuleName(base), WideToUtf8(a));
 
         struct Diff {
@@ -3364,7 +3360,7 @@ TestResult RunSelfTest() {
             FwRule changed = base;
             d.apply(&changed);
             const std::wstring other = BuildFwRuleName(changed);
-            Check(r, (std::string("9.5.5.name.") + d.name +
+            Check(r, (std::string("fwrule.name.") + d.name +
                       "-changes-the-name")
                          .c_str(),
                   other != a,
@@ -3376,7 +3372,7 @@ TestResult RunSelfTest() {
         FwRule labelled = base;
         labelled.label = L"mylabel";
         const std::wstring withLabel = BuildFwRuleName(labelled);
-        Check(r, "9.5.5.name.label-is-appended-not-substituted",
+        Check(r, "fwrule.name.label-is-appended-not-substituted",
               withLabel.find(L"mylabel") != std::wstring::npos &&
                   withLabel.find(a) != std::wstring::npos,
               WideToUtf8(withLabel));
@@ -3392,7 +3388,7 @@ TestResult RunSelfTest() {
             withStar.remotePorts = L"*";
             FwRule withNum = withStar;
             withNum.localPorts = L"443";
-            Check(r, "9.5.5.name.local-ports-actually-differ",
+            Check(r, "fwrule.name.local-ports-actually-differ",
                   BuildFwRuleName(withStar) != BuildFwRuleName(withNum),
                   WideToUtf8(BuildFwRuleName(withStar)) + " vs " +
                       WideToUtf8(BuildFwRuleName(withNum)));
@@ -3406,7 +3402,7 @@ TestResult RunSelfTest() {
         p1.remoteAddress = L"a/b";
         FwRule p2;
         p2.remoteAddress = L"a_b";
-        Check(r, "9.5.5.name.sanitises-rather-than-dropping",
+        Check(r, "fwrule.name.sanitises-rather-than-dropping",
               BuildFwRuleName(p1) != BuildFwRuleName(p2),
               WideToUtf8(BuildFwRuleName(p1)) + " vs " +
                   WideToUtf8(BuildFwRuleName(p2)));
@@ -3414,7 +3410,7 @@ TestResult RunSelfTest() {
         // are also distinct.
         FwRule p3;
         p3.remoteAddress = L"a\\b";
-        Check(r, "9.5.5.name.sanitiser-is-consistent",
+        Check(r, "fwrule.name.sanitiser-is-consistent",
               BuildFwRuleName(p1) != BuildFwRuleName(p3),
               WideToUtf8(BuildFwRuleName(p1)) + " vs " +
                   WideToUtf8(BuildFwRuleName(p3)));
@@ -3423,7 +3419,7 @@ TestResult RunSelfTest() {
         // than pushing the name over the limit.
         FwRule huge;
         huge.label = std::wstring(1000, L'x');
-        Check(r, "9.5.5.name.long-label-is-trimmed",
+        Check(r, "fwrule.name.long-label-is-trimmed",
               BuildFwRuleName(huge).size() <= kMaxRuleNameChars,
               "len=" + std::to_string(BuildFwRuleName(huge).size()));
     }
@@ -3436,30 +3432,30 @@ TestResult RunSelfTest() {
         FwRule anyPorts;
         anyPorts.protocol = 0;
         anyPorts.localPorts = L"443";
-        Check(r, "9.5.5.validate.any-protocol-refuses-ports",
+        Check(r, "fwrule.validate.any-protocol-refuses-ports",
               !ValidateFwRule(anyPorts, &err) && !err.empty(),
               WideToUtf8(err));
 
         FwRule anyOk = anyPorts;
         anyOk.localPorts = L"*";
         anyOk.remotePorts = L"*";
-        Check(r, "9.5.5.validate.any-protocol-allows-any-ports",
+        Check(r, "fwrule.validate.any-protocol-allows-any-ports",
               ValidateFwRule(anyOk, &err), WideToUtf8(err));
 
         FwRule badProto;
         badProto.protocol = 99;
-        Check(r, "9.5.5.validate.refuses-an-unknown-protocol",
+        Check(r, "fwrule.validate.refuses-an-unknown-protocol",
               !ValidateFwRule(badProto, &err), WideToUtf8(err));
 
         // An empty field is not "*" and would be a rule nobody asked for.
         FwRule emptyAddr;
         emptyAddr.remoteAddress.clear();
-        Check(r, "9.5.5.validate.refuses-an-empty-address",
+        Check(r, "fwrule.validate.refuses-an-empty-address",
               !ValidateFwRule(emptyAddr, &err), WideToUtf8(err));
 
         FwRule emptyPort;
         emptyPort.localPorts.clear();
-        Check(r, "9.5.5.validate.refuses-an-empty-port-field",
+        Check(r, "fwrule.validate.refuses-an-empty-port-field",
               !ValidateFwRule(emptyPort, &err), WideToUtf8(err));
 
         // A bare program name is the classic "it blocked the wrong thing":
@@ -3467,18 +3463,18 @@ TestResult RunSelfTest() {
         // not control.
         FwRule bareProc;
         bareProc.processPath = L"chrome.exe";
-        Check(r, "9.5.5.validate.refuses-a-bare-process-name",
+        Check(r, "fwrule.validate.refuses-a-bare-process-name",
               !ValidateFwRule(bareProc, &err) && !err.empty(),
               WideToUtf8(err));
 
         FwRule fullProc;
         fullProc.processPath = L"C:\\Program Files\\Google\\Chrome\\chrome.exe";
-        Check(r, "9.5.5.validate.accepts-a-full-process-path",
+        Check(r, "fwrule.validate.accepts-a-full-process-path",
               ValidateFwRule(fullProc, &err), WideToUtf8(err));
 
         FwRule badProc;
         badProc.processPath = L"C:\\a\nb.exe";
-        Check(r, "9.5.5.validate.refuses-an-unsafe-process-path",
+        Check(r, "fwrule.validate.refuses-an-unsafe-process-path",
               !ValidateFwRule(badProc, &err), WideToUtf8(err));
 
         // A CIDR inbound rule is the case that matters most for "stop this
@@ -3487,27 +3483,27 @@ TestResult RunSelfTest() {
         cidr.inbound = true;
         cidr.remoteAddress = L"203.0.113.0/24";
         cidr.remotePorts = L"*";
-        Check(r, "9.5.5.validate.accepts-a-cidr-inbound-rule",
+        Check(r, "fwrule.validate.accepts-a-cidr-inbound-rule",
               ValidateFwRule(cidr, &err), WideToUtf8(err));
 
         // The struct's defaults must be a rule the user can actually ask for.
         FwRule defaults;
         defaults.remoteAddress = L"*";
-        Check(r, "9.5.5.validate.defaults-are-a-valid-rule",
+        Check(r, "fwrule.validate.defaults-are-a-valid-rule",
               ValidateFwRule(defaults, &err), WideToUtf8(err));
     }
 
     // 3d3. The pre-join view. A filter with an enrichment clause had NO view
     //      applied when EnrichViewForList returned: the pre-join selection
     //      works off the flat rows (the joined columns were empty then), and
-    //      export renders store.View() directly. Measured before the fix:
+    //      export renders store.View() directly:
     //      `export --dns --filter "host:com"` wrote a silent 0-row file while
-    //      `list` with the same filter printed 55 rows, and D3's head hint
+    //      `list` with the same filter printed 55 rows, and the head hint
     //      saw view=0 on every pre-join filter. The joins run inside
     //      EnrichViewForList, so the view must be applied after them.
     //
-    //      D3's own firing is asserted here too, in the deterministic form:
-    //      DNS is switched on and COL_HOST is printed (D13 scopes the hint to
+    //      The head hint's own firing is asserted here too, in the deterministic
+    //      form: DNS is switched on and COL_HOST is printed (the hint is scoped
     //      per-address enrichment on a row that is actually shown), and both
     //      rows have an EMPTY remote address so the join has no candidate -
     //      the selftest must never put a DNS query on the wire.
@@ -3531,7 +3527,7 @@ TestResult RunSelfTest() {
         ListOptions o;
         o.filter = L"net:0";      // enrichment clause -> pre-join path
         o.traffic = true;         // a join runs (samples pids; may stay 0)
-        o.dns = true;             // per-address join: D3's territory (D13)
+        o.dns = true;             // per-address join: head-hint territory
         o.columns.push_back(COL_HOST);  // ...and a printed host column
         o.limit = 1;
         std::wstring jerr;
@@ -3540,16 +3536,16 @@ TestResult RunSelfTest() {
         Check(r, "enrich.view.prejoin-applies-filtered-view",
               ok && s.View().size() == 2,
               "view=" + std::to_string(s.View().size()));
-        // D3 walks that view: the head is the listener, so the hint must
-        // fire - it could not even see the row before the view was applied -
-        // and it must style itself as an observation, not an error (D13).
-        Check(r, "enrich.view.prejoin-d3-sees-the-head",
+        // The head hint walks that view: the head is the listener, so it
+        // must fire - it could not even see the row before the view was applied -
+        // and it must style itself as an observation, not an error.
+        Check(r, "enrich.view.prejoin-sees-the-head",
               advice.find("note: none of the") != std::string::npos &&
                   advice.find("can be enriched") != std::string::npos,
               advice);
     }
 
-    // 3e. Kernel ages (G3-B). A single-shot run has no "first seen" of its own,
+    // 3e. Kernel ages. A single-shot run has no "first seen" of its own,
     //     so the only honest age is the kernel's ConnectionTimeMs, backdated
     //     onto the row. The two rules that matter: it may only move the row's
     //     age BACKWARD (a shorter reading must not make a connection look
@@ -3635,7 +3631,7 @@ TestResult RunSelfTest() {
               s2.ApplyKernelAges(ages) == 0);
     }
 
-    // 4b. DUPLICATE IDENTITIES (D20). The 4-tuple is not unique on a real
+    // 4b. DUPLICATE IDENTITIES. The 4-tuple is not unique on a real
     // machine - mDNS alone gave 62 rows sharing UDPv4|0.0.0.0:5353|*|* here -
     // so the diff must pair N fresh rows with N previous rows instead of
     // collapsing them onto one. Before this, a repeat snapshot of N identical
@@ -3756,7 +3752,7 @@ TestResult RunSelfTest() {
         }
     }
 
-    // 4c. PER-SOCKET BYTES + RATE (D21). The Speed column and `speed:` filter
+    // 4c. PER-SOCKET BYTES + RATE. The Speed column and `speed:` filter
     // were dead: nothing in the tree ever set Connection::perRowBytes, so
     // ComputeBps was unreachable and the column printed an em-dash on every
     // tick of every watch while `help list` advertised it. These checks pin
@@ -3848,7 +3844,7 @@ TestResult RunSelfTest() {
                   sp.Rows()[0].trafficRx == 0);
     }
 
-    // 3b. G5: the per-PROCESS rate. The rule being pinned is that it is a SUM
+    // 3b. The per-PROCESS rate. The rule being pinned is that it is a SUM
     //     over the process's socket-counted rows and never a division - and the
     //     test is built so the two would give different answers, because a test
     //     that cannot distinguish the right method from the plausible wrong one
@@ -3872,11 +3868,11 @@ TestResult RunSelfTest() {
         // carry identity fields that survive the copy: pid, ports, addresses.
 
         // The 4-tuples the rows actually have, read back from the store rather
-        // than re-derived here. Deriving them a second time is how the first
-        // version of this case got them wrong (it invented 192.168.1.10:
-        // 50000+i) and every join then silently matched nothing - which fails
-        // with "0", indistinguishable from an arithmetic bug. Reading the row's
-        // own values cannot drift from the row.
+        // than re-derived here. A second derivation is a second chance to get
+        // them wrong (inventing 192.168.1.10:50000+i) and every join then
+        // silently matches nothing - which fails with "0", indistinguishable
+        // from an arithmetic bug. Reading the row's own values cannot drift
+        // from the row.
         std::vector<SocketBytes> sb;
         for (const Connection& row : gp.Rows()) {
             SocketBytes b;
@@ -3890,7 +3886,7 @@ TestResult RunSelfTest() {
             sb.push_back(b);
         }
         gp.ApplySocketBytes(sb);
-        Check(r, "g5.first-sample-has-no-rate", gp.ComputeRates() == 0 &&
+        Check(r, "grouprate.first-sample-has-no-rate", gp.ComputeRates() == 0 &&
               !gp.Rows()[0].groupBpsKnown);
 
         ::Sleep(60);
@@ -3901,17 +3897,17 @@ TestResult RunSelfTest() {
         for (SocketBytes& b : sb) { b.rx += 300; b.tx += 30; }
         gp.ApplySocketBytes(sb);
         gp.ComputeRates();
-        // Pick the row that was actually socket-counted. Index order is not the order
-        // the join wrote, and asserting on rows_[0] blindly is how the first
-        // version of this case reported "group=0 row=0" for a rate that had
-        // been computed correctly on the other row.
+        // Pick the row that was actually socket-counted. Index order is not the
+        // order the join wrote, and asserting on rows_[0] blindly reports
+        // "group=0 row=0" for a rate that was computed correctly on the other
+        // row.
         const Connection* counted = nullptr;
         for (const Connection& c : gp.Rows())
             if (c.perRowBytes && c.bpsKnown) { counted = &c; break; }
         const bool found = counted != nullptr;
         const double groupTotal = found ? counted->groupRxBps + counted->groupTxBps : 0.0;
         const double rowTotal = found ? counted->rxBps + counted->txBps : 0.0;
-        Check(r, "g5.group-rate-is-the-sum-not-the-average",
+        Check(r, "grouprate.group-rate-is-the-sum-not-the-average",
               found && counted->groupBpsKnown && groupTotal > rowTotal * 1.9,
               found ? ("group=" + std::to_string(static_cast<long>(groupTotal)) +
                        " row=" + std::to_string(static_cast<long>(rowTotal)))
@@ -3925,12 +3921,12 @@ TestResult RunSelfTest() {
         // 13000 ceiling that proved nothing about correctness. Absolute upper
         // bounds on wall-clock-derived values are flaky by construction; the
         // ratio check above is what pins the arithmetic.
-        Check(r, "g5.group-rate-magnitude",
+        Check(r, "grouprate.group-rate-magnitude",
               groupTotal > 8000.0,
               "groupTotal=" + std::to_string(static_cast<long>(groupTotal)));
         // EVERY row of the process carries the same process figure - that is
         // what makes the group renderer's MAXIMUM-not-sum aggregation correct.
-        Check(r, "g5.same-process-same-rate",
+        Check(r, "grouprate.same-process-same-rate",
               gp.Rows()[0].groupBpsKnown && gp.Rows()[1].groupBpsKnown &&
                   gp.Rows()[0].groupRxBps == gp.Rows()[1].groupRxBps &&
                   gp.Rows()[0].groupTxBps == gp.Rows()[1].groupTxBps);
@@ -3942,15 +3938,15 @@ TestResult RunSelfTest() {
         etw.ReplaceSnapshot(rows);
         etw.SetTraffic(4242, 5000, 500);   // per-PID join: sets no perRowBytes
         etw.ComputeRates();
-        Check(r, "g5.per-pid-source-has-no-group-rate",
+        Check(r, "grouprate.per-pid-source-has-no-group-rate",
               !etw.Rows()[0].groupBpsKnown && !etw.Rows()[1].groupBpsKnown);
     }
 
-    // 3d. D29: the "may this process be ended" rule.
+    // 3d. The "may this process be ended" rule.
     //
     //     This is a pure function specifically so the rule can be pinned here
     //     rather than only exercised through a modal dialog on a live machine.
-    //     The bug it guards against was a crash the user hit by hand, so a
+    //     The bug it guards against is a crash reachable by hand, so a
     //     regression test that needs a GUI to run would be a test that never
     //     runs.
     {
@@ -3958,96 +3954,96 @@ TestResult RunSelfTest() {
         // The self-kill. Reachable with no memory bug at all: wintcp.exe holds
         // its own connections, so it has its own rows, and "End process" on one
         // of them used to end WinTCP.
-        Check(r, "d29.self-is-refused",
+        Check(r, "killverdict.self-is-refused",
               PidKillVerdict(self, self, true) == PidVerdict::IsSelf);
         // ...and the refusal explains itself rather than being a bare false.
-        Check(r, "d29.self-refusal-has-text",
+        Check(r, "killverdict.self-refusal-has-text",
               PidKillRefusal(PidVerdict::IsSelf) != nullptr &&
                   wcslen(PidKillRefusal(PidVerdict::IsSelf)) > 0);
         // A different process is fine, which is the half that would break if
         // the self-check were written as "refuse everything".
-        Check(r, "d29.others-allowed",
+        Check(r, "killverdict.others-allowed",
               PidKillVerdict(1000, self, true) == PidVerdict::Ok &&
                   PidKillVerdict(4, self, true) != PidVerdict::Ok);
         // Pseudo-PIDs have no image to end. PID 0 arrives on every TIME_WAIT
         // and listening-wildcard row, so this is not a corner case.
-        Check(r, "d29.pseudo-refused",
+        Check(r, "killverdict.pseudo-refused",
               PidKillVerdict(0, self, false) == PidVerdict::Pseudo &&
                   PidKillVerdict(4, self, true) == PidVerdict::Pseudo);
         // Every non-Ok verdict must carry a message. A refusal the user cannot
         // read is indistinguishable from a hang, and this one replaced a
         // silent wrong-process kill.
-        Check(r, "d29.every-refusal-is-explainable",
+        Check(r, "killverdict.every-refusal-is-explainable",
               PidKillRefusal(PidVerdict::Ok) == nullptr ||
                       PidKillRefusal(PidVerdict::Ok)[0] == L'\0');
         for (PidVerdict v : {PidVerdict::IsSelf, PidVerdict::Pseudo,
                              PidVerdict::NotPermitted}) {
-            Check(r, "d29.refusal-text-present",
+            Check(r, "killverdict.refusal-text-present",
                   PidKillRefusal(v) != nullptr &&
                       PidKillRefusal(v)[0] != L'\0');
         }
         // The rule must be a function of BOTH pids, not of a global. Two
         // processes, each self to itself and "other" to the other, is the
         // property that makes the same code safe in the GUI and the CLI.
-        Check(r, "d29.verdict-is-symmetric-in-the-caller",
+        Check(r, "killverdict.verdict-is-symmetric-in-the-caller",
               PidKillVerdict(100, 100, true) == PidVerdict::IsSelf &&
                   PidKillVerdict(100, 200, true) == PidVerdict::Ok &&
                   PidKillVerdict(200, 100, true) == PidVerdict::Ok);
     }
 
-    // 3d. R2: worker containment. RunGuarded is pure — no threads, no window —
+    // 3d. Worker containment. RunGuarded is pure — no threads, no window —
     //     so the policy is pinned headlessly and the call sites (refresh, DNS,
     //     ETW, scan pool) only have to invoke it. A containment helper that
     //     itself throws is worse than none, so the first property tested is
     //     that success is silent and failures are values, not exits.
     {
         bool ran = false;
-        Check(r, "r2.success-is-silent",
+        Check(r, "guarded.success-is-silent",
               RunGuarded([&] { ran = true; }).empty() && ran);
         const std::string stdErr = RunGuarded([] {
             throw std::runtime_error("synthetic");
         });
-        Check(r, "r2.std-exception-is-named",
+        Check(r, "guarded.std-exception-is-named",
               stdErr.find("synthetic") != std::string::npos,
               stdErr);
         const std::string unknownErr = RunGuarded([] { throw 42; });
-        Check(r, "r2.unknown-exception-is-labelled",
+        Check(r, "guarded.unknown-exception-is-labelled",
               unknownErr.find("unknown") != std::string::npos,
               unknownErr);
         // Errors are distinct values, not one shared string: a worker that
         // reports "failed" without saying how is only marginally better than
         // one that dies.
-        Check(r, "r2.errors-are-distinct", stdErr != unknownErr);
+        Check(r, "guarded.errors-are-distinct", stdErr != unknownErr);
     }
 
-    // 3e. R8: the watchdog policy. Pure timestamps in, verdict out — the
+    // 3e. The watchdog policy. Pure timestamps in, verdict out — the
     //     window only executes. Every bound is asserted here so the policy
     //     cannot drift without a failing test saying which side moved.
     {
         using WA = WatchdogAction;
         // Fresh results are healthy at any cadence, including a zero
         // interval (the floor dominates: max(4*0, 15000) = 15000).
-        Check(r, "r8.fresh-is-healthy",
+        Check(r, "watchdog.fresh-is-healthy",
               RefreshWatchdogNext(100000, 99000, 2000, 0) == WA::Healthy &&
                   RefreshWatchdogNext(100000, 99000, 0, 0) == WA::Healthy);
         // The floor dominates fast cadences: 4 x 2 s = 8 s would
         // false-positive on two consecutive slow passes, so 10 s of silence
         // at a 2 s cadence is still healthy and 16 s is stale.
-        Check(r, "r8.floor-dominates-fast-cadence",
+        Check(r, "watchdog.floor-dominates-fast-cadence",
               RefreshWatchdogNext(100000, 90000, 2000, 0) == WA::Healthy &&
                   RefreshWatchdogNext(106000, 90000, 2000, 0) ==
                       WA::StaleRestart);
         // The factor dominates slow cadences: at 60 s, four missed ticks is
         // four minutes of dead UI, so the threshold is 4x60 = 240 s, and
         // 200 s of silence is still (just) healthy.
-        Check(r, "r8.factor-dominates-slow-cadence",
+        Check(r, "watchdog.factor-dominates-slow-cadence",
               RefreshWatchdogNext(300000, 100000, 60000, 0) == WA::Healthy &&
                   RefreshWatchdogNext(400000, 100000, 60000, 0) ==
                       WA::StaleRestart);
         // At the cap, staleness gives up instead of restarting forever. Below
         // the cap it restarts — including at cap-1, which is the boundary
         // that would silently become "restart forever" if written as >.
-        Check(r, "r8.cap-gives-up",
+        Check(r, "watchdog.cap-gives-up",
               RefreshWatchdogNext(500000, 100000, 2000,
                                   kMaxWatchdogRestarts) == WA::StaleGiveUp &&
                   RefreshWatchdogNext(500000, 100000, 2000,
@@ -4056,17 +4052,17 @@ TestResult RunSelfTest() {
         // Recovery forgives: with a fresh base the same restart count is
         // healthy, which is what lets the caller reset history on recovery
         // instead of dooming the fourth restart hours later.
-        Check(r, "r8.recovery-forgives",
+        Check(r, "watchdog.recovery-forgives",
               RefreshWatchdogNext(500000, 499000, 2000,
                                   kMaxWatchdogRestarts) == WA::Healthy);
         // A clock going backwards (base in the future) is age zero, never
         // stale: GetTickCount64 is monotonic, but the comparison must still
         // be total — a stuck future stamp must not read as "overdue by 2^64".
-        Check(r, "r8.future-base-is-healthy",
+        Check(r, "watchdog.future-base-is-healthy",
               RefreshWatchdogNext(100000, 200000, 2000, 0) == WA::Healthy);
     }
 
-    // 3f. C2: the IPv6 scope-suffix rule. Pure string/scalar logic over raw
+    // 3f. The IPv6 scope-suffix rule. Pure string/scalar logic over raw
     //     bytes, so the rule is pinned exactly — and it is the rule whose two
     //     copies disagreed, where disagreement silently breaks a join key.
     {
@@ -4080,32 +4076,32 @@ TestResult RunSelfTest() {
         unsigned char justOutside[16] = {0};
         justOutside[0] = 0xFE; justOutside[1] = 0xC0; justOutside[15] = 0x01;
 
-        Check(r, "c2.link-local-gets-suffix",
+        Check(r, "scopesuffix.link-local-gets-suffix",
               Ipv6ScopeSuffix(linkLocal, 12) == L"%12");
         // THE regression: the socket scan used to append a suffix for ANY
         // nonzero scope id while the store appended only for /10, so a
         // non-link-local socket with a scope id produced two spellings of one
         // address and the age join missed. Global + nonzero scope must be bare.
-        Check(r, "c2.global-suppresses-suffix",
+        Check(r, "scopesuffix.global-suppresses-suffix",
               Ipv6ScopeSuffix(global, 12).empty(),
               WideToUtf8(Ipv6ScopeSuffix(global, 12)));
-        Check(r, "c2.outside-the-10-suppresses-suffix",
+        Check(r, "scopesuffix.outside-the-10-suppresses-suffix",
               Ipv6ScopeSuffix(justOutside, 3).empty());
         // Scope 0 means "no scope": never print "%0", which is a different
         // string from the bare address and would break the key the same way.
-        Check(r, "c2.zero-scope-is-bare",
+        Check(r, "scopesuffix.zero-scope-is-bare",
               Ipv6ScopeSuffix(linkLocal, 0).empty() &&
                   Ipv6ScopeSuffix(global, 0).empty());
         // A null byte pointer must not be dereferenced: the callers pass
         // sin6_addr.s6_addr / ucLocalAddr, and defensive here is free.
-        Check(r, "c2.null-address-is-safe",
+        Check(r, "scopesuffix.null-address-is-safe",
               Ipv6ScopeSuffix(nullptr, 12).empty());
     }
 
-    // 3c. G6: the TCP_INFO columns. Everything here is pure formatting or
+    // 3c. The TCP_INFO columns. Everything here is pure formatting or
     //     join logic, so it can be pinned exactly - the part that needs a live
     //     socket (do the fields arrive at all, and in what unit) was measured
-    //     separately with temp/d2probe.cpp and is recorded in todo.md.
+    //     separately with temp/d2probe.cpp.
     {
         // (a) THE UNIT CONVERSION. RttUs is microseconds; the column must show
         //     milliseconds, because it is named for `ss -i` and `ss -i` prints
@@ -4116,7 +4112,7 @@ TestResult RunSelfTest() {
         // is "1.2" (not 1.3 - that would be rounding to the nearest tenth, a
         // different and equally defensible rule, but it must be ONE rule). The
         // explicit "!=" pins that choice so it cannot drift silently.
-        Check(r, "g6.rtt-formats-as-milliseconds",
+        Check(r, "tcpinfo.rtt-formats-as-milliseconds",
               FormatRttMs(24) == L"24" && FormatRttMs(0) == L"<1" &&
                   FormatRttMs(1250) == L"1.2" && FormatRttMs(1250) != L"1.25" &&
                   FormatRttMs(1000) == L"1" && FormatRttMs(999) == L"999",
@@ -4124,7 +4120,7 @@ TestResult RunSelfTest() {
         // Sub-millisecond must NOT print as "0": a zero-latency reading is
         // physically impossible and a user would report it as a bug. "<1" is
         // what `ss` shows.
-        Check(r, "g6.zero-rtt-is-not-zero-latency", FormatRttMs(0) == L"<1");
+        Check(r, "tcpinfo.zero-rtt-is-not-zero-latency", FormatRttMs(0) == L"<1");
 
         // (b) THE JOIN, on a full 4-tuple.
         ConnectionStore ts;
@@ -4134,7 +4130,7 @@ TestResult RunSelfTest() {
         SocketTcpInfo info;
         // MakeReferenceTcpRow's ACTUAL 4-tuple (192.168.1.10:51752 ->
         // 203.0.113.9:443). The join matches on all four parts, so a made-up
-        // address here matches nothing and every G6 assertion below fails with
+        // address here matches nothing and every tcpinfo assertion below fails with
         // a dash - a test-data mistake that looks exactly like a code bug.
         info.localAddress = L"192.168.1.10";
         info.localPort = 51752;
@@ -4150,7 +4146,7 @@ TestResult RunSelfTest() {
         info.timestamps = false;      // measured: this host reports ts=0
         info.timestampsKnown = true;
         ti.push_back(info);
-        Check(r, "g6.join-hits-the-row", ts.ApplySocketTcpInfo(ti) == 1);
+        Check(r, "tcpinfo.join-hits-the-row", ts.ApplySocketTcpInfo(ti) == 1);
 
         wchar_t buf[128] = {0};
         ConnectionStore::GetColumnText(ts.Rows()[0], COL_RTT, buf, 128);
@@ -4159,7 +4155,7 @@ TestResult RunSelfTest() {
         const std::wstring minCell(buf);
         ConnectionStore::GetColumnText(ts.Rows()[0], COL_RETRANS, buf, 128);
         const std::wstring retxCell(buf);
-        Check(r, "g6.columns-render-the-joined-values",
+        Check(r, "tcpinfo.columns-render-the-joined-values",
               rttCell == L"24" && minCell == L"16" && retxCell == L"2.5 KB",
               "rtt=" + WideToUtf8(rttCell) + " min=" + WideToUtf8(minCell) +
                   " retx=" + WideToUtf8(retxCell));
@@ -4167,7 +4163,7 @@ TestResult RunSelfTest() {
         // (c) ZERO RETRANSMIT IS A REAL ANSWER, not "unknown". A dash here would
         //     hide the healthiest possible result - "this connection has never
         //     retransmitted" is the thing you want to see.
-        Check(r, "g6.zero-retrans-is-not-unknown",
+        Check(r, "tcpinfo.zero-retrans-is-not-unknown",
               ts.Rows()[0].retransKnown && ts.Rows()[0].retransBytes == 2525);
         ConnectionStore zero;
         std::vector<Connection> z = {MakeReferenceTcpRow()};
@@ -4178,7 +4174,7 @@ TestResult RunSelfTest() {
         std::vector<SocketTcpInfo> zt = {zinfo};
         zero.ApplySocketTcpInfo(zt);
         ConnectionStore::GetColumnText(zero.Rows()[0], COL_RETRANS, buf, 128);
-        Check(r, "g6.zero-retrans-renders-as-zero", std::wstring(buf) == L"0 B",
+        Check(r, "tcpinfo.zero-retrans-renders-as-zero", std::wstring(buf) == L"0 B",
               WideToUtf8(std::wstring(buf)));
 
         // (d) PER-FIELD, not all-or-nothing. The kernel populates these
@@ -4199,7 +4195,7 @@ TestResult RunSelfTest() {
         const std::wstring noRtt(buf);
         ConnectionStore::GetColumnText(partial.Rows()[0], COL_CWND, buf, 128);
         const std::wstring withCwnd(buf);
-        Check(r, "g6.per-field-not-all-or-nothing",
+        Check(r, "tcpinfo.per-field-not-all-or-nothing",
               noRtt == L"—" && withCwnd != L"—" && withCwnd != L"",
               "rtt=" + WideToUtf8(noRtt) + " cwnd=" + WideToUtf8(withCwnd));
 
@@ -4216,7 +4212,7 @@ TestResult RunSelfTest() {
         lower.minRttMs = 900;          // LARGER: must be ignored too
         std::vector<SocketTcpInfo> lt = {lower};
         mono.ApplySocketTcpInfo(lt);
-        Check(r, "g6.cumulative-never-goes-backwards",
+        Check(r, "tcpinfo.cumulative-never-goes-backwards",
               mono.Rows()[0].retransBytes == 2525 &&
                   mono.Rows()[0].minRttMs == 16,
               "retx=" + std::to_string(mono.Rows()[0].retransBytes) +
@@ -4226,7 +4222,7 @@ TestResult RunSelfTest() {
         shrink.cwnd = 64;
         std::vector<SocketTcpInfo> st = {shrink};
         mono.ApplySocketTcpInfo(st);
-        Check(r, "g6.instantaneous-is-replaced",
+        Check(r, "tcpinfo.instantaneous-is-replaced",
               mono.Rows()[0].cwnd == 64);
 
         // (f) THE FILTERS. A threshold in the unit the column SHOWS, so a
@@ -4237,25 +4233,25 @@ TestResult RunSelfTest() {
         std::vector<Connection> f1 = {MakeReferenceTcpRow()};
         fl.ReplaceSnapshot(f1);
         fl.ApplySocketTcpInfo(ti);
-        Check(r, "g6.rtt-filter-is-threshold-in-ms",
+        Check(r, "tcpinfo.rtt-filter-is-threshold-in-ms",
               MatchFilter(fl.Rows()[0], Prog(L"rtt:20")) &&
                   !MatchFilter(fl.Rows()[0], Prog(L"rtt:30")) &&
                   MatchFilter(fl.Rows()[0], Prog(L"rtt:20-30")));
-        Check(r, "g6.cwnd-filter-is-threshold-in-bytes",
+        Check(r, "tcpinfo.cwnd-filter-is-threshold-in-bytes",
               MatchFilter(fl.Rows()[0], Prog(L"cwnd:16000")) &&
                   !MatchFilter(fl.Rows()[0], Prog(L"cwnd:17000")));
-        Check(r, "g6.retrans-filter",
+        Check(r, "tcpinfo.retrans-filter",
               MatchFilter(fl.Rows()[0], Prog(L"retrans:2000")) &&
                   !MatchFilter(fl.Rows()[0], Prog(L"retrans:3000")));
         // A bare field name means "has this reading", NOT "matches everything".
-        Check(r, "g6.bare-field-means-has-a-reading",
+        Check(r, "tcpinfo.bare-field-means-has-a-reading",
               MatchFilter(fl.Rows()[0], Prog(L"rtt:")) &&
                   MatchFilter(fl.Rows()[0], Prog(L"cwnd:")));
         // An UNMEASURED row must match none of them.
         ConnectionStore un;
         std::vector<Connection> u = {MakeReferenceTcpRow()};
         un.ReplaceSnapshot(u);
-        Check(r, "g6.unmeasured-row-matches-no-g6-filter",
+        Check(r, "tcpinfo.unmeasured-row-matches-no-filter",
               !MatchFilter(un.Rows()[0], Prog(L"rtt:")) &&
                   !MatchFilter(un.Rows()[0], Prog(L"rtt:0")) &&
                   !MatchFilter(un.Rows()[0], Prog(L"cwnd:0")) &&
@@ -4268,7 +4264,7 @@ TestResult RunSelfTest() {
         // match in HasLowerSubstring. So a threshold silently became "all of
         // them", straight against `help list`'s "never matches all". The unit
         // suffixes are now parsed, so this asserts both sides of the boundary.
-        Check(r, "g6.byte-suffix-is-a-threshold",
+        Check(r, "tcpinfo.byte-suffix-is-a-threshold",
               MatchFilter(fl.Rows()[0], Prog(L"retrans:1KB")) &&
                   !MatchFilter(fl.Rows()[0], Prog(L"retrans:3KB")) &&
                   MatchFilter(fl.Rows()[0], Prog(L"cwnd:1KB")) &&
@@ -4277,14 +4273,14 @@ TestResult RunSelfTest() {
         // A value that is not a number at all falls through to the text clause
         // and matches nothing here. It must never fall back to "everything":
         // that is the same defect, reached by a different spelling.
-        Check(r, "g6.unparsable-value-matches-nothing",
+        Check(r, "tcpinfo.unparsable-value-matches-nothing",
               !MatchFilter(fl.Rows()[0], Prog(L"rtt:100ms")) &&
                   !MatchFilter(fl.Rows()[0], Prog(L"retrans:abc")) &&
                   !MatchFilter(fl.Rows()[0], Prog(L"cwnd:zzz")));
 
         // (g) THE COLUMN NAMES round-trip, which is what stops `help list` and
         //     the README advertising a column that cannot be typed.
-        Check(r, "g6.column-names-resolve",
+        Check(r, "tcpinfo.column-names-resolve",
               ColumnIdForName(L"rtt") == COL_RTT &&
                   ColumnIdForName(L"latency") == COL_RTT &&
                   ColumnIdForName(L"minrtt") == COL_MINRTT &&
@@ -4292,9 +4288,9 @@ TestResult RunSelfTest() {
                   ColumnIdForName(L"retrans") == COL_RETRANS &&
                   ColumnIdForName(L"procspeed") == COL_GROUPRATE &&
                   ColumnIdForName(L"groupspeed") == COL_GROUPRATE);
-        // (h) The columns are RIGHT-aligned numbers, and every G6 column has a
+        // (h) The columns are RIGHT-aligned numbers, and every tcpinfo column has a
         //     width budget so a streamed header and a padded row agree.
-        Check(r, "g6.columns-are-right-aligned",
+        Check(r, "tcpinfo.columns-are-right-aligned",
               GetColumnStyle(COL_RTT).right && GetColumnStyle(COL_MINRTT).right &&
                   GetColumnStyle(COL_CWND).right &&
                   GetColumnStyle(COL_RETRANS).right &&
@@ -4302,21 +4298,21 @@ TestResult RunSelfTest() {
                   GetColumnStyle(COL_MINRTT).cap > 0);
     }
 
-    // 3d. F5.1 / F5.2 / F5.3: the parent, integrity and signature columns.
+    // 3d. The parent, integrity and signature columns.
     //
-    // What is testable here is exactly the part that went wrong three times
-    // while this was being built: the RID -> level mapping, the label wording
-    // the filter and the column share, and the filter's refusal to answer for
-    // a row it never measured. What is NOT testable without a live token is
-    // whether OpenProcessToken succeeds - that was measured on the machine
-    // (122 Medium / 115 System / 11 High / 1 Low / 2 Untrusted over 328 rows,
-    // 77 unreadable because the process could not be opened at all) and is
-    // recorded in todo.md rather than pinned here.
+    // What is testable here is exactly the part that went wrong three times:
+    // the RID -> level mapping, the label wording the filter and the column
+    // share, and the filter's refusal to answer for a row it never measured.
+    // What is NOT testable without a live token is whether OpenProcessToken
+    // succeeds - that was measured on the machine (122 Medium / 115 System /
+    // 11 High / 1 Low / 2 Untrusted over 328 rows, 77 unreadable because the
+    // process could not be opened at all) and is measured here rather than
+    // pinned.
     {
         // (a) THE RID MAPPING, exhaustively over the documented values. Exact
         //     equality, not >= : an unfamiliar future RID must read as unknown
         //     rather than silently claiming the nearest known level.
-        Check(r, "f5.2.rid-maps-to-named-level",
+        Check(r, "integrity.rid-maps-to-named-level",
               IntegrityFromRid(0)     == kIntegrityUntrusted &&
               IntegrityFromRid(4096)  == kIntegrityLow &&
               IntegrityFromRid(8192)  == kIntegrityMedium &&
@@ -4324,7 +4320,7 @@ TestResult RunSelfTest() {
               IntegrityFromRid(16384) == kIntegritySystem &&
               IntegrityFromRid(28672) == kIntegrityProtected);
 
-        Check(r, "f5.2.unknown-rid-is-not-the-nearest-level",
+        Check(r, "integrity.unknown-rid-is-not-the-nearest-level",
               IntegrityFromRid(1) == kIntegrityUnknown &&
               IntegrityFromRid(6144) == kIntegrityUnknown &&
               IntegrityFromRid(12287) == kIntegrityUnknown &&
@@ -4335,7 +4331,7 @@ TestResult RunSelfTest() {
         //     enum value: ascending has to mean least-trusted first for the
         //     sort to be the useful direction, and this pins that decision so
         //     reordering the enum cannot silently reverse it.
-        Check(r, "f5.2.enum-is-in-increasing-trust-order",
+        Check(r, "integrity.enum-is-in-increasing-trust-order",
               kIntegrityUntrusted < kIntegrityLow && kIntegrityLow < kIntegrityMedium &&
               kIntegrityMedium < kIntegrityHigh && kIntegrityHigh < kIntegritySystem &&
               kIntegritySystem < kIntegrityProtected);
@@ -4343,9 +4339,9 @@ TestResult RunSelfTest() {
         // (c) LABELS. "unsigned" must stay lowercase because the filter matches
         //     a lower-case needle against it, and "BAD SIG" must stay shouty
         //     because it is the one state a reader must not miss. Both were
-        //     asserted rather than assumed: the first version matched the RAW
-        //     label, so `integrity:high` found nothing among eleven High rows.
-        Check(r, "f5.2.labels-are-distinct-per-level",
+        //     asserted rather than assumed: matching the RAW label finds nothing
+        //     with `integrity:high` among eleven High rows.
+        Check(r, "integrity.labels-are-distinct-per-level",
               std::wcscmp(IntegrityLabel(kIntegrityLow), L"Low") == 0 &&
               std::wcscmp(IntegrityLabel(kIntegrityMedium), L"Medium") == 0 &&
               std::wcscmp(IntegrityLabel(kIntegrityHigh), L"High") == 0 &&
@@ -4353,7 +4349,7 @@ TestResult RunSelfTest() {
               std::wcscmp(IntegrityLabel(kIntegrityProtected), L"Protected") == 0 &&
               std::wcscmp(IntegrityLabel(kIntegrityUntrusted), L"Untrusted") == 0);
 
-        Check(r, "f5.3.labels-separate-unsigned-from-invalid",
+        Check(r, "signature.labels-separate-unsigned-from-invalid",
               std::wcscmp(SignatureLabel(kSigUnsigned), L"unsigned") == 0 &&
               std::wcscmp(SignatureLabel(kSigInvalid), L"BAD SIG") == 0 &&
               // The pair that must never collapse: an unsigned binary is the
@@ -4363,69 +4359,69 @@ TestResult RunSelfTest() {
               std::wcscmp(SignatureLabel(kSigUnsigned),
                           SignatureLabel(kSigInvalid)) != 0);
 
-        Check(r, "f5.3.unchecked-label-is-the-dash",
+        Check(r, "signature.unchecked-label-is-the-dash",
               std::wcscmp(SignatureLabel(kSigUnchecked), L"—") == 0);
 
         // (d) THE COLUMN CELLS. GetColumnText is what both surfaces print.
         {
             Connection c = MakeReferenceTcpRow();
 
-            // F5.1. ppid unknown is NOT "no parent" - it is an unanswerable
+            // ppid unknown is NOT "no parent" - it is an unanswerable
             // question, and it prints the dash. ppid known with no name (the
             // parent was not in the snapshot) still prints the NUMBER, because
             // collapsing that to a dash would claim the process has no parent,
             // which is the one answer the snapshot cannot give.
             wchar_t buf[64] = {0};
             ConnectionStore::GetColumnText(c, COL_PPID, buf, 64);
-            Check(r, "f5.1.unknown-ppid-dashes",
+            Check(r, "ppid.unknown-ppid-dashes",
                   std::wcsstr(buf, L"—") != nullptr);
 
             c.ppidKnown = true;
             c.ppid = 4242;
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_PPID, buf, 64);
-            Check(r, "f5.1.known-ppid-without-name-prints-the-number",
+            Check(r, "ppid.known-ppid-without-name-prints-the-number",
                   std::wcsstr(buf, L"4242") != nullptr);
 
             c.parentName = L"services.exe";
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_PPID, buf, 64);
-            Check(r, "f5.1.known-ppid-prints-number-and-name",
+            Check(r, "ppid.known-ppid-prints-number-and-name",
                   std::wcsstr(buf, L"4242") != nullptr &&
                   std::wcsstr(buf, L"services.exe") != nullptr);
 
-            // F5.2. Unmeasured integrity dashes, and an AppContainer marker is
+            // Unmeasured integrity dashes, and an AppContainer marker is
             // ADDED to the level rather than replacing it.
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_INTEGRITY, buf, 64);
-            Check(r, "f5.2.unmeasured-integrity-dashes",
+            Check(r, "integrity.unmeasured-integrity-dashes",
                   std::wcsstr(buf, L"—") != nullptr);
 
             c.integrity = static_cast<unsigned>(kIntegrityHigh);
             c.appContainer = false;
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_INTEGRITY, buf, 64);
-            Check(r, "f5.2.cell-is-the-level-name",
+            Check(r, "integrity.cell-is-the-level-name",
                   std::wcsstr(buf, L"High") != nullptr);
 
             c.appContainer = true;
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_INTEGRITY, buf, 64);
-            Check(r, "f5.2.appcontainer-keeps-the-level-and-adds-a-marker",
+            Check(r, "integrity.appcontainer-keeps-the-level-and-adds-a-marker",
                   std::wcsstr(buf, L"High") != nullptr &&
                   std::wcsstr(buf, L"+AC") != nullptr);
 
-            // F5.3. Unchecked is a dash, NOT "unsigned": WinTCP not looking is
+            // Unchecked is a dash, NOT "unsigned": WinTCP not looking is
             // not the same as WinTCP looking and finding nothing.
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_SIGNATURE, buf, 64);
-            Check(r, "f5.3.unchecked-dashes-rather-than-claiming-unsigned",
+            Check(r, "signature.unchecked-dashes-rather-than-claiming-unsigned",
                   std::wcsstr(buf, L"—") != nullptr);
 
             c.signature = static_cast<unsigned>(kSigUnsigned);
             buf[0] = L'\0';
             ConnectionStore::GetColumnText(c, COL_SIGNATURE, buf, 64);
-            Check(r, "f5.3.cell-is-the-verdict-label",
+            Check(r, "signature.cell-is-the-verdict-label",
                   std::wcsstr(buf, L"unsigned") != nullptr);
         }
 
@@ -4445,7 +4441,7 @@ TestResult RunSelfTest() {
             // lower* search keys, and the whole point of those fields is that a
             // filter never pays ToLowerW per row per clause. A row edited without
             // re-finalizing it is a row whose search keys describe a PREVIOUS
-            // version of it - which is exactly how `parent:services` matched
+            // version of it - which is how `parent:services` matches
             // nothing in the first draft of this block while looking correct.
             Connection c = MakeReferenceTcpRow();
             c.ppid = 4242;
@@ -4454,34 +4450,34 @@ TestResult RunSelfTest() {
             c.integrity = static_cast<unsigned>(kIntegrityHigh);
             ConnectionStore::FinalizeRow(c);
 
-            Check(r, "f5.1.filter-ppid-matches-exactly",
+            Check(r, "ppid.filter-ppid-matches-exactly",
                   matches(L"ppid:4242", c) && !matches(L"ppid:4243", c));
-            Check(r, "f5.1.filter-parent-searches-the-name",
+            Check(r, "ppid.filter-parent-searches-the-name",
                   matches(L"parent:services", c) && !matches(L"parent:explorer", c));
             // A row with NO ppid answer must not match any threshold, including
             // the empty one that means "has a ppid".
             Connection unknown = MakeReferenceTcpRow();
             unknown.ppidKnown = false;
-            Check(r, "f5.1.unmeasured-ppid-matches-nothing",
+            Check(r, "ppid.unmeasured-ppid-matches-nothing",
                   !matches(L"ppid:4242", unknown) && !matches(L"ppid:", unknown));
 
-            Check(r, "f5.2.filter-integrity-matches-the-level",
+            Check(r, "integrity.filter-integrity-matches-the-level",
                   matches(L"integrity:high", c) && matches(L"integrity:High", c) &&
                   !matches(L"integrity:system", c));
             // Unreadable integrity answers "no match", not "match everything".
             unknown.integrity = 0;
-            Check(r, "f5.2.unmeasured-integrity-matches-nothing",
+            Check(r, "integrity.unmeasured-integrity-matches-nothing",
                   !matches(L"integrity:high", unknown) &&
                   !matches(L"integrity:", unknown));
             // A value that is not a level is a value that matches nothing -
             // never a degenerate substring test that selects the whole table.
-            Check(r, "f5.2.bogus-integrity-matches-nothing",
+            Check(r, "integrity.bogus-integrity-matches-nothing",
                   !matches(L"integrity:bogus", c));
-            Check(r, "f5.2.appcontainer-finds-its-marker",
+            Check(r, "integrity.appcontainer-finds-its-marker",
                   !matches(L"integrity:ac", c));
             c.appContainer = true;
             ConnectionStore::FinalizeRow(c);
-            Check(r, "f5.2.appcontainer-marker-is-searchable",
+            Check(r, "integrity.appcontainer-marker-is-searchable",
                   matches(L"integrity:ac", c));
             c.appContainer = false;
 
@@ -4489,20 +4485,20 @@ TestResult RunSelfTest() {
             // the filter - which is the reason the two features are not
             // symmetric, and worth stating rather than leaving to be discovered.
             c.signature = static_cast<unsigned>(kSigValid);
-            Check(r, "f5.3.bare-signed-means-verified-and-good",
+            Check(r, "signature.bare-signed-means-verified-and-good",
                   matches(L"signed:", c));
             c.signature = static_cast<unsigned>(kSigUnsigned);
-            Check(r, "f5.3.bare-signed-excludes-unsigned",
+            Check(r, "signature.bare-signed-excludes-unsigned",
                   !matches(L"signed:", c));
-            Check(r, "f5.3.bogus-signature-matches-nothing",
+            Check(r, "signature.bogus-signature-matches-nothing",
                   !matches(L"signature:bogus", c));
             c.signature = static_cast<unsigned>(kSigInvalid);
-            Check(r, "f5.3.bare-signed-excludes-a-bad-signature",
+            Check(r, "signature.bare-signed-excludes-a-bad-signature",
                   !matches(L"signed:", c));
             // Unchecked answers nothing at all, even to the bare form: reporting
             // an unasked question as if it had been asked is the failure mode.
             c.signature = 0;
-            Check(r, "f5.3.unchecked-row-matches-nothing",
+            Check(r, "signature.unchecked-row-matches-nothing",
                   !matches(L"signed:", c) && !matches(L"signature:", c));
         }
 
@@ -4510,17 +4506,17 @@ TestResult RunSelfTest() {
         //     three new columns must be OFF by default - asserted here because
         //     COL_COUNT reached exactly 32, where the naive
         //     `(1u << COL_COUNT) - 1` is a shift by the width of the type.
-        Check(r, "f5.columns-exist-in-the-persisted-mask",
+        Check(r, "colmask.columns-exist-in-the-persisted-mask",
               COL_PPID < COL_COUNT && COL_INTEGRITY < COL_COUNT &&
               COL_SIGNATURE < COL_COUNT);
-        Check(r, "f5.columns-are-hidden-by-default",
+        Check(r, "colmask.columns-are-hidden-by-default",
               (kDefaultVisibleCols & (1u << COL_PPID)) == 0 &&
               (kDefaultVisibleCols & (1u << COL_INTEGRITY)) == 0 &&
               (kDefaultVisibleCols & (1u << COL_SIGNATURE)) == 0);
         // The mask must still cover every column AND a normal majority of them:
         // a mask of 1 (the value `1u << 32` produces) is non-empty, so "not
         // empty" alone would not have caught the shift.
-        Check(r, "f5.all-col-mask-covers-every-column",
+        Check(r, "colmask.all-col-mask-covers-every-column",
               (kAllColMask & (1u << (COL_COUNT - 1))) != 0 &&
               (kAllColMask & (1u << COL_PPID)) != 0 &&
               (kAllColMask & (1u << COL_SIGNATURE)) != 0);
@@ -4531,7 +4527,7 @@ TestResult RunSelfTest() {
             UINT32 bits = kDefaultVisibleCols;
             int pop = 0;
             while (bits != 0) { bits &= bits - 1u; ++pop; }
-            Check(r, "f5.default-set-is-more-than-one-column", pop > 4);
+            Check(r, "colmask.default-set-is-more-than-one-column", pop > 4);
         }
     }
 
@@ -4587,7 +4583,7 @@ TestResult RunSelfTest() {
         Check(r, "store.diff.ghost-row", store.Rows().size() == 3,
               "rows=" + std::to_string(store.Rows().size()));
 
-        // Same snapshot again: the ghost is RETAINED (F5.7), no events fire.
+        // Same snapshot again: the ghost is RETAINED, no events fire.
         store.ReplaceSnapshot(b2);
         ev = store.TakeChangeEvents();
         Check(r, "store.diff.stable-second-cycle",
@@ -4596,7 +4592,7 @@ TestResult RunSelfTest() {
                   " rows=" + std::to_string(store.Rows().size()));
     }
 
-    // 4b. F5.7: closed sockets are retained as grey ghosts (not dropped after one
+    // 4b. Closed sockets are retained as grey ghosts (not dropped after one
     // cycle), fire DISAPPEAR exactly once, freeze their final metrics, and are
     // capped at kMaxRetainedGhosts (oldest evicted first).
     {
@@ -4613,14 +4609,14 @@ TestResult RunSelfTest() {
             const std::vector<RowChange> ev = store.TakeChangeEvents();
             for (const RowChange& e : ev) if (e.kind == kChangeDisappear) ++totalD;
         }
-        Check(r, "f5.7.disappear-once", totalD == 1, "d=" + std::to_string(totalD));
+        Check(r, "ghost.disappear-once", totalD == 1, "d=" + std::to_string(totalD));
 
         const Connection* g = nullptr;
         for (const Connection& c : store.Rows())
             if (c.flags & kRowRemoved) { g = &c; break; }
-        Check(r, "f5.7.ghost-retained", g != nullptr);
-        Check(r, "f5.7.ghost-death-tick", g != nullptr && g->deathTick > 0);
-        Check(r, "f5.7.ghost-final-metrics",
+        Check(r, "ghost.ghost-retained", g != nullptr);
+        Check(r, "ghost.ghost-death-tick", g != nullptr && g->deathTick > 0);
+        Check(r, "ghost.ghost-final-metrics",
               g != nullptr && g->finalRx == 12345 && g->finalTx == 678);
 
         // Stable empty snapshots keep the ghost and never re-fire DISAPPEAR.
@@ -4629,13 +4625,13 @@ TestResult RunSelfTest() {
             const std::vector<RowChange> ev = store.TakeChangeEvents();
             for (const RowChange& e : ev) if (e.kind == kChangeDisappear) ++totalD;
         }
-        Check(r, "f5.7.retain-past-one-cycle",
+        Check(r, "ghost.retain-past-one-cycle",
               store.Rows().size() == 1 && totalD == 1,
               "rows=" + std::to_string(store.Rows().size()) +
                   " d=" + std::to_string(totalD));
     }
 
-    // F5.7 cap: more than kMaxRetainedGhosts vanished sockets are trimmed to it,
+    // Cap: more than kMaxRetainedGhosts vanished sockets are trimmed to it,
     // the oldest (earliest deathTick) evicted first.
     {
         ConnectionStore store;
@@ -4652,7 +4648,7 @@ TestResult RunSelfTest() {
         size_t ghosts = 0;
         for (const Connection& c : store.Rows())
             if (c.flags & kRowRemoved) ++ghosts;
-        Check(r, "f5.7.cap-trims-to-500",
+        Check(r, "ghost.cap-trims-to-500",
               store.Rows().size() == ConnectionStore::kMaxRetainedGhosts &&
                   ghosts == ConnectionStore::kMaxRetainedGhosts,
               "rows=" + std::to_string(store.Rows().size()) +
@@ -5046,7 +5042,7 @@ TestResult RunSelfTest() {
         Check(r, "sort.cpu-ascending",
               store.View().size() == 2);   // equal keys, stable/deterministic
 
-        // Unknown readings ("—") sort LAST in both directions (7.4).
+        // Unknown readings ("—") sort LAST in both directions.
         {
             ConnectionStore s2;
             std::vector<Connection> r2;
@@ -5204,7 +5200,7 @@ TestResult RunSelfTest() {
               "stage=" + std::to_string(stage));
     }
 
-    // 12b. D2. A stalled socket must not be able to damage the totals, and it
+    // 12b. A stalled socket must not be able to damage the totals, and it
     //      must not be retried forever. Both are pure state logic, so they can
     //      be pinned here without needing a socket that actually stalls -
     //      which matters, because the machine that can produce one is exactly
@@ -5233,7 +5229,7 @@ TestResult RunSelfTest() {
             after.count(7) != 0 ? static_cast<long>(after.at(7).rx) : -1;
         const long afterTx =
             after.count(7) != 0 ? static_cast<long>(after.at(7).tx) : -1;
-        Check(r, "d2.incomplete-pass-keeps-totals",
+        Check(r, "sampler.incomplete-pass-keeps-totals",
               beforeRx == 500 && afterRx == 700 && afterTx == 800,
               "beforeRx=" + std::to_string(beforeRx) +
                   " afterRx=" + std::to_string(afterRx) +
@@ -5244,32 +5240,32 @@ TestResult RunSelfTest() {
         //     socket costs a wedged worker thread on every refresh, for as long
         //     as the app is open.
         SocketTrafficSampler remember;
-        Check(r, "d2.no-stalls-remembered-initially",
+        Check(r, "sampler.no-stalls-remembered-initially",
               remember.UnreadableCount() == 0,
               "count=" + std::to_string(remember.UnreadableCount()));
         std::vector<ProbeTarget> stalled = {{7, 0x20}, {7, 0x20}, {9, 0x30}};
         remember.RememberStalled(stalled);
         // Three entries, two of them the same socket: the set counts DISTINCT
         // sockets, which is the quantity that has to be bounded.
-        Check(r, "d2.stalls-remembered-once",
+        Check(r, "sampler.stalls-remembered-once",
               remember.UnreadableCount() == 2,
               "count=" + std::to_string(remember.UnreadableCount()));
         // Remembering nothing must not disturb what is already remembered, or
         // every healthy pass would clear the list and the bound would be void.
         remember.RememberStalled({});
-        Check(r, "d2.empty-stall-list-is-a-no-op",
+        Check(r, "sampler.empty-stall-list-is-a-no-op",
               remember.UnreadableCount() == 2);
         // And the pool must be big enough to survive the stalls seen in one
         // walk - this is a DIRECTION, not a performance number: with a pool
         // equal to the stall count, everything behind the stalls went unread
         // and tailscaled.exe reported no data at all.
-        Check(r, "d2.pool-exceeds-observed-stalls",
+        Check(r, "sampler.pool-exceeds-observed-stalls",
               SocketTrafficSampler::kProbeWorkers >= 8,
               "workers=" + std::to_string(SocketTrafficSampler::kProbeWorkers));
         // The no-progress ceiling must be far below the hard budget, or the
         // "wait for progress" optimisation buys nothing: it is the difference
         // between a one-shot costing 8.3 s and one costing 1.1 s here.
-        Check(r, "d2.no-progress-is-the-real-wait",
+        Check(r, "sampler.no-progress-is-the-real-wait",
               SocketTrafficSampler::kNoProgressMs > 0 &&
                   SocketTrafficSampler::kNoProgressMs * 8 <=
                       SocketTrafficSampler::kScanTimeoutMs,
@@ -5279,7 +5275,7 @@ TestResult RunSelfTest() {
                   std::to_string(SocketTrafficSampler::kScanTimeoutMs));
     }
 
-// 12b. C8 - the swallowed whole-pass failure is now COUNTED.
+// 12b. The swallowed whole-pass failure is now COUNTED.
     //
     //      The defect: Sample() wrapped the handle-table walk in a bare
     //      `catch (...) { tableOk = false; }` with no counter and no report.
@@ -5303,7 +5299,7 @@ TestResult RunSelfTest() {
     //      increment is therefore UNCOVERED, and the header says so too.
     {
         SocketTrafficSampler fresh;
-        Check(r, "c8.traffic.scan-failures-start-at-zero",
+        Check(r, "traffic.scan-failures-start-at-zero",
               fresh.ScanFailureCount() == 0,
               "count=" + std::to_string(fresh.ScanFailureCount()));
 
@@ -5313,7 +5309,7 @@ TestResult RunSelfTest() {
         const std::vector<DWORD> pids = {42, 99};
         (void)other.Sample(pids);
         (void)other.Sample(pids);
-        Check(r, "c8.traffic.scan-failures-are-per-instance",
+        Check(r, "traffic.scan-failures-are-per-instance",
               other.ScanFailureCount() == 0 && fresh.ScanFailureCount() == 0,
               "other=" + std::to_string(other.ScanFailureCount()) +
                   " fresh=" + std::to_string(fresh.ScanFailureCount()));
@@ -5340,9 +5336,9 @@ TestResult RunSelfTest() {
                 if (now > static_cast<unsigned>(kPasses)) withinRange = false;
                 last = now;
             }
-            Check(r, "c8.traffic.scan-failure-count-never-decreases",
+            Check(r, "traffic.scan-failure-count-never-decreases",
                   monotonic, "final=" + std::to_string(last));
-            Check(r, "c8.traffic.scan-failure-count-within-pass-count",
+            Check(r, "traffic.scan-failure-count-within-pass-count",
                   withinRange && last <= static_cast<unsigned>(kPasses),
                   "count=" + std::to_string(last) +
                       " passes=" + std::to_string(kPasses));
@@ -5350,16 +5346,16 @@ TestResult RunSelfTest() {
             // added beside are separate: a timeout must not show up as a
             // whole-pass failure, or the two diagnostics would be the same
             // number wearing two names.
-            Check(r, "c8.traffic.healthy-machine-reports-no-scan-failures",
+            Check(r, "traffic.healthy-machine-reports-no-scan-failures",
                   last == 0, "count=" + std::to_string(last));
-            Check(r, "c8.traffic.timeout-and-failure-counters-are-distinct",
+            Check(r, "traffic.timeout-and-failure-counters-are-distinct",
                   s.ScanFailureCount() <= s.TimeoutCount() ||
                       s.TimeoutCount() == 0,
                   "failures=" + std::to_string(s.ScanFailureCount()) +
                       " timeouts=" + std::to_string(s.TimeoutCount()));
         }
     }
-// 12c. C9 - the scratch is freed when the free is safe.
+// 12c. The scratch is freed when the free is safe.
     //
     //      WHAT CHANGED. Sample() used to pair a bare `new ScanScratch()` with a
     //      `delete scratch` a hundred lines later, guarded by a live-worker
@@ -5377,23 +5373,21 @@ TestResult RunSelfTest() {
     //      code, which would be worse than the gap. So the destructor rule
     //      itself is UNCOVERED and its comment says so.
     //
-    //      ONLY THREE PASSES. The first version used 40, which is not wrong but
-    //      is more than the measurement needs: a leaked scratch is about 9.2 MB,
-    //      so three passes put the real defect at 27.7 MB against a 1 MB bound,
-    //      and the whole unit suite still runs in about a second.
+    //      ONLY THREE PASSES: three is what the measurement needs. A leaked
+    //      scratch is about 9.2 MB, so three passes put the real defect at
+    //      27.7 MB against a 1 MB bound, and the whole unit suite still runs in
+    //      about a second.
     //
-    //      A HARNESS TRAP WORTH RECORDING, because it cost most of the time
-    //      spent on this check. Running the suite through PowerShell's
-    //      Start-Job made it appear to hang - reproducibly, past 420 s - and
-    //      bisecting the block then "proved" HeapCompact was responsible. Both
-    //      were wrong. Start-Job launches a fresh PowerShell that does NOT
-    //      inherit this shell's elevated token, and a non-elevated
-    //      SocketTrafficSampler cannot duplicate other processes' handles, so
-    //      Sample() blocked. Started with Start-Process instead, the very same
-    //      binaries finish in 1.1 s. The lesson is not about HeapCompact: a
-    //      harness that changes the token under the code under test will invent
-    //      hangs that do not exist, and bisecting against one will confidently
-    //      point at innocent code.
+    //      A HARNESS TRAP WORTH RECORDING. Running the suite through
+    //      PowerShell's Start-Job made it appear to hang - reproducibly, past
+    //      420 s - and made HeapCompact look responsible. Start-Job launches a
+    //      fresh PowerShell that does NOT inherit this shell's elevated token,
+    //      and a non-elevated SocketTrafficSampler cannot duplicate other
+    //      processes' handles, so Sample() blocked. Started with Start-Process
+    //      instead, the very same binaries finish in 1.1 s. The lesson is not
+    //      about HeapCompact: a harness that changes the token under the code
+    //      under test will invent hangs that do not exist, and bisecting
+    //      against one will confidently point at innocent code.
     //
     //      The measurement is a STEADY-STATE one, and that detail matters: the
     //      first Sample() legitimately grows the sampler, because it builds the
@@ -5452,7 +5446,7 @@ TestResult RunSelfTest() {
         // defect measures 27.7 MB, so the bound sits more than 20x above the
         // noise and more than 27x below the failure.
         const long long kAllowance = 1024LL * 1024;
-        Check(r, "c9.traffic.scratch-is-freed-every-pass",
+        Check(r, "traffic.scratch-is-freed-every-pass",
               before != 0 && after != 0 && grew < kAllowance,
               "grew " + std::to_string(grew) + " bytes over " +
                   std::to_string(kPasses) + " passes (allowance " +
@@ -5461,7 +5455,7 @@ TestResult RunSelfTest() {
         // The counters must not have moved just because we scanned a lot: a
         // leak here would be a silent one, and timeouts_ is the only other
         // signal this class emits.
-        Check(r, "c9.traffic.sampling-hardly-trips-the-timeout-counter",
+        Check(r, "traffic.sampling-hardly-trips-the-timeout-counter",
               leak.TimeoutCount() < static_cast<unsigned>(kPasses),
               "timeouts=" + std::to_string(leak.TimeoutCount()) +
                   " of " + std::to_string(kPasses) + " passes");
@@ -5470,11 +5464,11 @@ TestResult RunSelfTest() {
         // release() only runs on the abandon path. If a plain healthy pass were
         // releasing, this would be nonzero and every traffic column on the
         // machine would be quietly blank.
-        Check(r, "c9.traffic.healthy-passes-do-not-abandon-the-scratch",
+        Check(r, "traffic.healthy-passes-do-not-abandon-the-scratch",
               leak.ScanFailureCount() == 0,
               "scanFailures=" + std::to_string(leak.ScanFailureCount()));
     }
-// 12d. C10 - the truncation rule the four path reads now share.
+// 12d. The truncation rule the four path reads now share.
     //
     //      The defect was that `rc == 0` tests for FAILURE, and these APIs
     //      report a too-small buffer as a SIZE. So the check passed on
@@ -5494,14 +5488,14 @@ TestResult RunSelfTest() {
         // A value that exactly fills the buffer must NOT be flagged: measured,
         // a 15-char value in a 16-slot buffer returns 15, and flagging that
         // would refuse a call that succeeded.
-        Check(r, "c10.trunc.rule-flags-failure",
+        Check(r, "trunc.rule-flags-failure",
               wintcp::bufferWasTooSmall(0, 260), "rc=0 cap=260");
-        Check(r, "c10.trunc.rule-accepts-an-exact-fit",
+        Check(r, "trunc.rule-accepts-an-exact-fit",
               !wintcp::bufferWasTooSmall(259, 260), "rc=259 cap=260");
-        Check(r, "c10.trunc.rule-flags-rc-equal-to-capacity",
+        Check(r, "trunc.rule-flags-rc-equal-to-capacity",
               wintcp::bufferWasTooSmall(260, 260),
               "rc=260 cap=260 (GetModuleFileNameW's signature)");
-        Check(r, "c10.trunc.rule-flags-a-required-size",
+        Check(r, "trunc.rule-flags-a-required-size",
               wintcp::bufferWasTooSmall(401, 8),
               "rc=401 cap=8 (GetEnvironmentVariableW's signature)");
 
@@ -5512,12 +5506,12 @@ TestResult RunSelfTest() {
             ::SetEnvironmentVariableW(L"WINTCP_C10", longValue.c_str());
             wchar_t tiny[8] = {0};
             const DWORD rc = ::GetEnvironmentVariableW(L"WINTCP_C10", tiny, 8);
-            Check(r, "c10.trunc.env-var-truncation-is-detected",
+            Check(r, "trunc.env-var-truncation-is-detected",
                   wintcp::bufferWasTooSmall(rc, 8),
                   "rc=" + std::to_string(rc) + " cap=8");
             // And the measured consequence of the old check: the buffer is left
             // EMPTY, not clipped. That is what turned the ledger path relative.
-            Check(r, "c10.trunc.env-var-truncation-leaves-an-empty-buffer",
+            Check(r, "trunc.env-var-truncation-leaves-an-empty-buffer",
                   tiny[0] == L'\0',
                   "first char=" + std::to_string(static_cast<int>(tiny[0])));
             ::SetEnvironmentVariableW(L"WINTCP_C10", nullptr);
@@ -5527,7 +5521,7 @@ TestResult RunSelfTest() {
             wchar_t fits[64] = {0};
             ::SetEnvironmentVariableW(L"WINTCP_C10", L"short");
             const DWORD okRc = ::GetEnvironmentVariableW(L"WINTCP_C10", fits, 64);
-            Check(r, "c10.trunc.env-var-that-fits-is-not-flagged",
+            Check(r, "trunc.env-var-that-fits-is-not-flagged",
                   !wintcp::bufferWasTooSmall(okRc, 64) && ::wcslen(fits) == 5,
                   "rc=" + std::to_string(okRc) + " len=" +
                       std::to_string(::wcslen(fits)));
@@ -5541,18 +5535,18 @@ TestResult RunSelfTest() {
         {
             wchar_t full[1024] = {0};
             const DWORD fullLen = ::GetModuleFileNameW(nullptr, full, 1024);
-            Check(r, "c10.trunc.module-path-fits-in-a-large-buffer",
+            Check(r, "trunc.module-path-fits-in-a-large-buffer",
                   fullLen > 0 && !wintcp::bufferWasTooSmall(fullLen, 1024) &&
                       ::wcslen(full) == fullLen,
                   "len=" + std::to_string(fullLen));
             wchar_t clip[8] = {0};
             const DWORD clipRc = ::GetModuleFileNameW(nullptr, clip, 8);
-            Check(r, "c10.trunc.module-path-truncation-is-detected",
+            Check(r, "trunc.module-path-truncation-is-detected",
                   wintcp::bufferWasTooSmall(clipRc, 8),
                   "rc=" + std::to_string(clipRc) + " cap=8");
             // The specific claim the rule rests on: this API reports the
             // capacity, not a larger required size.
-            Check(r, "c10.trunc.module-path-reports-capacity-not-required-size",
+            Check(r, "trunc.module-path-reports-capacity-not-required-size",
                   clipRc == 8, "rc=" + std::to_string(clipRc) + " (want 8)");
         }
 
@@ -5560,12 +5554,12 @@ TestResult RunSelfTest() {
         {
             wchar_t dir[8] = {0};
             const DWORD rc = ::GetCurrentDirectoryW(8, dir);
-            Check(r, "c10.trunc.current-directory-truncation-is-detected",
+            Check(r, "trunc.current-directory-truncation-is-detected",
                   wintcp::bufferWasTooSmall(rc, 8),
                   "rc=" + std::to_string(rc) + " cap=8");
             wchar_t room[1024] = {0};
             const DWORD okRc = ::GetCurrentDirectoryW(1024, room);
-            Check(r, "c10.trunc.current-directory-that-fits-is-not-flagged",
+            Check(r, "trunc.current-directory-that-fits-is-not-flagged",
                   okRc > 0 && !wintcp::bufferWasTooSmall(okRc, 1024) &&
                       ::wcslen(room) == okRc,
                   "rc=" + std::to_string(okRc));
@@ -5587,13 +5581,13 @@ TestResult RunSelfTest() {
         {
             wchar_t tiny[8] = {0};
             const DWORD rc = ::GetTempPathW(8, tiny);
-            Check(r, "c10.trunc.temp-path-truncation-is-detected",
+            Check(r, "trunc.temp-path-truncation-is-detected",
                   wintcp::bufferWasTooSmall(rc, 8),
                   "rc=" + std::to_string(rc) + " cap=8");
             // The consequence, pinned: the buffer is left EMPTY rather than
             // clipped, so nothing downstream can tell the difference between a
             // temp path and no temp path at all.
-            Check(r, "c10.trunc.temp-path-truncation-leaves-an-empty-buffer",
+            Check(r, "trunc.temp-path-truncation-leaves-an-empty-buffer",
                   tiny[0] == L'\0',
                   "buffer len=" +
                       std::to_string(static_cast<unsigned>(::wcslen(tiny))));
@@ -5601,7 +5595,7 @@ TestResult RunSelfTest() {
             // simply always-true on this API.
             wchar_t room[MAX_PATH] = {0};
             const DWORD okRc = ::GetTempPathW(MAX_PATH, room);
-            Check(r, "c10.trunc.temp-path-that-fits-is-not-flagged",
+            Check(r, "trunc.temp-path-that-fits-is-not-flagged",
                   okRc > 0 && !wintcp::bufferWasTooSmall(okRc, MAX_PATH) &&
                       ::wcslen(room) == okRc,
                   "rc=" + std::to_string(okRc));
@@ -5611,12 +5605,12 @@ TestResult RunSelfTest() {
         {
             wchar_t buf[MAX_PATH] = {0};
             const DWORD rc = ::GetSystemDirectoryW(buf, MAX_PATH);
-            Check(r, "c10.trunc.system-directory-that-fits-is-not-flagged",
+            Check(r, "trunc.system-directory-that-fits-is-not-flagged",
                   rc > 0 && !wintcp::bufferWasTooSmall(rc, MAX_PATH) &&
                       ::wcslen(buf) == rc,
                   "rc=" + std::to_string(rc));
             wchar_t clip[8] = {0};
-            Check(r, "c10.trunc.system-directory-truncation-is-detected",
+            Check(r, "trunc.system-directory-truncation-is-detected",
                   wintcp::bufferWasTooSmall(::GetSystemDirectoryW(clip, 8), 8),
                   "cap=8");
         }
@@ -5630,24 +5624,23 @@ TestResult RunSelfTest() {
         // deliberate one: a test hook in the capture path would be worse than
         // the uncovered line.
     }
-    // 12e. C8/9.2.7 - capture tool probe, decision table, and capability row.
+    // 12e. Capture tool probe, decision table, and capability row.
     //
     //      WHAT THIS PINS. Capture needs BOTH pktmon.exe and etl2pcap.exe, and
-    //      the second is the one the old check missed. Measured on this host
-    //      while writing the check: pktmon.exe IS in System32 and etl2pcap.exe
+    //      the second is the one that is easy to miss. Measured on this host:
+    //      pktmon.exe IS in System32 and etl2pcap.exe
     //      is NOT - so stream capture here runs a capture, writes the ETL, and
-    //      then fails at the conversion step, throwing it away. That is exactly
-    //      the failure this item describes, on the machine the gates run on,
-    //      and it was invisible until the probe named it.
+    //      then fails at the conversion step, throwing it away. That is the
+    //      failure on the machine the gates run on, and it is exactly what the
+    //      probe names.
     {
         // --- the decision table, all four cells ---------------------------------
         //
         // THE ORDERING CHECK, and the reason it is written against the table
         // rather than against CaptureAvailable is measured, not stylistic.
-        // Mutation run while writing this: moving the token check back in front
-        // of the tool check - restoring the pre-9.2.7 order exactly - left the
-        // whole gate GREEN. This process is elevated, and when the token is good
-        // both orders return the same verdict, so no test that went through live
+        // A mutation that moves the token check back in front of the tool check
+        // leaves the whole gate GREEN. This process is elevated, and when the token
+        // is good both orders return the same verdict, so no test that went through live
         // process state could have told the fix from the bug. The table takes
         // both answers as parameters, which makes the bad order observable from
         // any process. The cell below is the one that mutation would break.
@@ -5659,7 +5652,7 @@ TestResult RunSelfTest() {
         {
             const CaptureGate g =
                 EvaluateCaptureGate(false, false, toolWhy, elevWhy);
-            Check(r, "c10.capture-table-missing-tool-outranks-token",
+            Check(r, "captool.table-missing-tool-outranks-token",
                   !g.ok && g.why == toolWhy,
                   "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
         }
@@ -5668,7 +5661,7 @@ TestResult RunSelfTest() {
         {
             const CaptureGate g =
                 EvaluateCaptureGate(false, true, toolWhy, elevWhy);
-            Check(r, "c10.capture-table-missing-tool-with-good-token",
+            Check(r, "captool.table-missing-tool-with-good-token",
                   !g.ok && g.why == toolWhy,
                   "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
         }
@@ -5676,7 +5669,7 @@ TestResult RunSelfTest() {
         {
             const CaptureGate g =
                 EvaluateCaptureGate(true, false, toolWhy, elevWhy);
-            Check(r, "c10.capture-table-elevation-reason-when-tools-present",
+            Check(r, "captool.table-elevation-reason-when-tools-present",
                   !g.ok && g.why == elevWhy,
                   "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
         }
@@ -5686,7 +5679,7 @@ TestResult RunSelfTest() {
         {
             const CaptureGate g =
                 EvaluateCaptureGate(true, true, toolWhy, elevWhy);
-            Check(r, "c10.capture-table-permits-when-both-are-good",
+            Check(r, "captool.table-permits-when-both-are-good",
                   g.ok && g.why.empty(),
                   "ok=" + std::to_string(g.ok) + " why=" + WideToUtf8(g.why));
         }
@@ -5699,7 +5692,7 @@ TestResult RunSelfTest() {
         std::wstring why2;
         const bool present1 = CaptureToolsPresent(&why1);
         const bool present2 = CaptureToolsPresent(&why2);
-        Check(r, "c10.capture-tool-probe-is-consistent",
+        Check(r, "captool.tool-probe-is-consistent",
               present1 == present2 && why1 == why2,
               std::string("first=") + (present1 ? "present" : "absent") +
                   " second=" + (present2 ? "present" : "absent"));
@@ -5708,7 +5701,7 @@ TestResult RunSelfTest() {
         // disabled menu item and nothing for a tooltip, which is the state
         // WinCaps exists to eliminate.
         if (!present1) {
-            Check(r, "c10.capture-tool-refusal-names-the-tool",
+            Check(r, "captool.tool-refusal-names-the-tool",
                   why1.find(L"pktmon.exe") != std::wstring::npos ||
                       why1.find(L"etl2pcap.exe") != std::wstring::npos,
                   "reason=" + WideToUtf8(why1));
@@ -5720,17 +5713,17 @@ TestResult RunSelfTest() {
             // then cannot tell the two reasons apart. So: the tool reason must
             // not contain "administrator", which is the elevation reason's own
             // word, and it must still pre-empt the wrong remedy in words of its
-            // own. Found by the cli.bat half of this item failing, not by
-            // reading: the CLI gate greps the rendered row.
-            Check(r, "c10.capture-tool-reason-borrows-no-elevation-vocabulary",
+            // own. The CLI gate greps the rendered row, so this is not only a
+            // reading rule.
+            Check(r, "captool.tool-reason-borrows-no-elevation-vocabulary",
                   why1.find(L"administrator") == std::wstring::npos &&
                       why1.find(L"Administrator") == std::wstring::npos,
                   "reason=" + WideToUtf8(why1));
-            Check(r, "c10.capture-tool-reason-pre-empts-the-wrong-remedy",
+            Check(r, "captool.tool-reason-pre-empts-the-wrong-remedy",
                   why1.find(L"privilege") != std::wstring::npos,
                   "reason=" + WideToUtf8(why1));
         } else {
-            Check(r, "c10.capture-tools-present-has-no-reason-text",
+            Check(r, "captool.tools-present-has-no-reason-text",
                   why1.empty(),
                   "reason should be empty, got " + WideToUtf8(why1));
         }
@@ -5742,7 +5735,7 @@ TestResult RunSelfTest() {
             const bool avail = CaptureAvailable(&whyAvail);
             const CaptureGate expect = EvaluateCaptureGate(
                 present1, IsElevated(), why1, ElevationUnavailableReason());
-            Check(r, "c10.capture-available-matches-the-table",
+            Check(r, "captool.available-matches-the-table",
                   avail == expect.ok && whyAvail == expect.why,
                   "available=" + std::to_string(avail) + " why=" +
                       WideToUtf8(whyAvail));
@@ -5755,11 +5748,11 @@ TestResult RunSelfTest() {
             for (const Capability& c : caps) {
                 if (c.what == L"Stream capture (pktmon)") capture = &c;
             }
-            Check(r, "c10.capture-capability-row-is-registered",
+            Check(r, "captool.capability-row-is-registered",
                   capture != nullptr,
                   "capability rows=" + std::to_string(caps.size()));
             if (capture != nullptr) {
-                Check(r, "c10.capture-capability-matches-the-probe",
+                Check(r, "captool.capability-matches-the-probe",
                       (capture->state == CapState::Available) == present1,
                       std::string("capability=") +
                           (capture->state == CapState::Available ? "available"
@@ -5768,7 +5761,7 @@ TestResult RunSelfTest() {
                 // A Missing row must carry a detail or it says nothing; an
                 // Available row must not, or it reads as a caveat.
                 if (capture->state == CapState::Missing) {
-                    Check(r, "c10.capture-capability-missing-row-explains",
+                    Check(r, "captool.capability-missing-row-explains",
                           !capture->detail.empty(),
                           "detail=" + WideToUtf8(capture->detail));
                 }
@@ -5986,7 +5979,7 @@ TestResult RunSelfTest() {
     // 20. Elevation.
     //     These assert the decision table, which is the part that can be
     //     wrong; the token queries themselves were verified live on this
-    //     machine, elevated and filtered (see todo.md 4.1).
+    //     machine, elevated and filtered.
     //
     //     The invariant is ONE-WAY and only one-way: "elevated => this user
     //     CAN be elevated". The converse does not hold, and the old checks
@@ -6015,7 +6008,7 @@ TestResult RunSelfTest() {
         Check(r, "elev.not-marker-on-plain-launch", !IsElevatedInstance());
     }
 
-    // 22. Column drag-reorder (7.1). The persisted order is a permutation
+    // 22. Column drag-reorder. The persisted order is a permutation
     //     over ALL columns while the header only ever sees the visible ones;
     //     folding one into the other is where this goes wrong silently, so it
     //     is tested directly rather than through the UI.
@@ -6030,8 +6023,8 @@ TestResult RunSelfTest() {
 
         // Unchanged: folding the current visible order is the identity. This
         // is the property the "did the user actually drag?" check relies on,
-        // and the first implementation of this function failed it by moving
-        // every visible column to the front.
+        // and an implementation that moves every visible column to the front
+        // fails it.
         const std::vector<int> same = FoldVisibleOrder(full, mask, visible);
         Check(r, "colorder.fold-identity", same == full);
 
@@ -6085,7 +6078,7 @@ TestResult RunSelfTest() {
         Check(r, "colorder.perm-rejects-null", !IsColumnPermutation(nullptr, 6));
     }
 
-    // 23. Type-to-jump (7.2). The behaviours worth pinning are the two that
+    // 23. Type-to-jump. The behaviours worth pinning are the two that
     //     make it feel right: repeated characters CYCLE rather than sticking,
     //     and a pause RESETS rather than extending a prefix the user can no
     //     longer see.
@@ -6108,9 +6101,9 @@ TestResult RunSelfTest() {
         // ...and wraps back around.
         Check(r, "jump.repeat-wraps", t.Feed(L'c', now, rows) == 0);
         // A repeat must NOT grow the prefix. Pressing "c" three times is three
-        // navigation steps, not a search for "ccc" - the first version appended
-        // the character, so the second press searched "cc", matched nothing,
-        // and the feature looked completely dead.
+        // navigation steps, not a search for "ccc": appending the character
+        // makes the second press search "cc", match nothing, and the feature
+        // look completely dead.
         Check(r, "jump.repeat-keeps-prefix", t.Prefix() == L"c");
 
         // Multi-character prefix narrows to the right group.
@@ -6173,7 +6166,7 @@ TestResult RunSelfTest() {
         Check(r, "jump.empty-list", t9.Feed(L'a', now, {}) == -1);
     }
 
-    // 24. Row grouping (5.1). The failure modes here are silent - a wrong
+    // 24. Row grouping. The failure modes here are silent - a wrong
     //     count or a wrong total just looks like a rendering bug - so the
     //     arithmetic is pinned directly.
     {
@@ -6259,7 +6252,7 @@ TestResult RunSelfTest() {
         Check(r, "group.saturating-add-normal", SaturatingAdd(2, 3) == 5);
     }
 
-    // 25. Freeze / pause (5.5). The age must be honest, and a clock that
+    // 25. Freeze / pause. The age must be honest, and a clock that
     //     appears to run backwards must not produce a negative age.
     {
         Check(r, "freeze.age", FrozenAgeMs(1000, 4000) == 3000);
@@ -6268,7 +6261,7 @@ TestResult RunSelfTest() {
         Check(r, "freeze.age-huge", FrozenAgeMs(0, UINT64_MAX) == UINT64_MAX);
     }
 
-    // 26. Shortcut sheet (7.6) + About summary (7.5). The sheet is data, so
+    // 26. Shortcut sheet + About summary. The sheet is data, so
     //     it can be checked against what the app actually binds. Every key
     //     listed must be one the accelerator table or the WM_CHAR handler
     //     handles - a sheet documenting a shortcut that does not work is worse
@@ -6320,7 +6313,7 @@ TestResult RunSelfTest() {
         Check(r, "sheet.renders-every-entry", allRendered);
     }
 
-    // G21 - the accessible row text. Pure builders, pinned here so what a
+    // The accessible row text. Pure builders, pinned here so what a
     // screen reader hears is asserted without COM and without a window:
     // the MSAA wrapper only carries these answers, it never re-derives
     // them, and the harness reads the same derivation through accRow.
@@ -6331,16 +6324,16 @@ TestResult RunSelfTest() {
         c.stateLabel = L"ESTABLISHED";
         c.pid = 1234;
         const AccessibleRowText flat = FlatRowAccessibleText(c, 8);
-        Check(r, "g21.acc.flat-name",
+        Check(r, "accessible-name.flat-name",
               flat.name == L"chrome.exe, TCPv4, ESTABLISHED",
               WideToUtf8(flat.name));
-        Check(r, "g21.acc.flat-description",
+        Check(r, "accessible-name.flat-description",
               flat.description == L"PID 1234, 8 connections",
               WideToUtf8(flat.description));
 
         // Singular reads singular: "1 connection", never "1 connections".
         const AccessibleRowText one = FlatRowAccessibleText(c, 1);
-        Check(r, "g21.acc.singular-connection",
+        Check(r, "accessible-name.singular-connection",
               one.description == L"PID 1234, 1 connection",
               WideToUtf8(one.description));
 
@@ -6352,7 +6345,7 @@ TestResult RunSelfTest() {
         ghost.stateLabel = L"\u2014";
         ghost.pid = 5678;
         const AccessibleRowText unk = FlatRowAccessibleText(ghost, 3);
-        Check(r, "g21.acc.unknown-name",
+        Check(r, "accessible-name.unknown-name",
               unk.name == L"(unknown), UDPv4, \u2014",
               WideToUtf8(unk.name));
 
@@ -6365,10 +6358,10 @@ TestResult RunSelfTest() {
         g.hasTcp = true;
         g.hasUdp = true;
         const AccessibleRowText grp = GroupRowAccessibleText(g);
-        Check(r, "g21.acc.group-name",
+        Check(r, "accessible-name.group-name",
               grp.name == L"svchost.exe, TCP+UDP",
               WideToUtf8(grp.name));
-        Check(r, "g21.acc.group-description",
+        Check(r, "accessible-name.group-description",
               grp.description == L"PID 4321, 14 connections",
               WideToUtf8(grp.description));
 
@@ -6379,13 +6372,13 @@ TestResult RunSelfTest() {
         tcpOnly.hasTcp = true;
         tcpOnly.hasUdp = false;
         const AccessibleRowText t1 = GroupRowAccessibleText(tcpOnly);
-        Check(r, "g21.acc.group-tcp-only",
+        Check(r, "accessible-name.group-tcp-only",
               t1.name == L"PID 7, TCP" &&
                   t1.description == L"PID 7, 1 connection",
               WideToUtf8(t1.name + L"|" + t1.description));
     }
 
-    // 27. About summary (7.5). The capability block must reflect the state it
+    // 27. About summary. The capability block must reflect the state it
     //     is given, and must NOT claim a capability it does not have - the
     //     unelevated text is the one a user relies on to understand a blank
     //     Traffic column.
@@ -6424,8 +6417,8 @@ TestResult RunSelfTest() {
               low.find(L"not loaded") != std::wstring::npos &&
               high.find(L"loaded") != std::wstring::npos);
 
-        // D23. A count nobody measured must NOT be printed. The CLI has no
-        // persisted GUI view mask and (before the fix) took no snapshot, and
+        // A count nobody measured must NOT be printed. The CLI has no
+        // persisted GUI view mask and takes no snapshot, and
         // both printed a confident "0 of 23" / "Connections 0" - which reads
         // as a fact about the machine ("this box has no connections") rather
         // than as "nobody looked". An absent number is honest; a wrong one is
@@ -6446,13 +6439,12 @@ TestResult RunSelfTest() {
               bare.find(L"Connections") == std::wstring::npos,
               WideToUtf8(bare));
 
-        // R7. Handle and GDI counts. The interesting case is the zero: a
+        // Handle and GDI counts. The interesting case is the zero: a
         // console-subsystem process holds 0 GDI objects, and
         // GetGuiResources cannot distinguish that from a failure - it
         // returns the count with no success flag. So "0 GDI objects" must be
-        // PRINTED. An earlier version treated 0 as a refusal and the whole
-        // block vanished from `version`, which is the one verb meant to show
-        // it - found by running the binary, not by reading this code.
+        // PRINTED. Treating 0 as a refusal makes the whole block vanish from
+        // `version`, which is the one verb meant to show it.
         {
             BuildSummary r7;
             r7.elevated = false;
@@ -6474,10 +6466,10 @@ TestResult RunSelfTest() {
                   WideToUtf8(t));
             // The zero must appear as a VALUE, not be swallowed by an omission.
             // PadKeys pads the KEY to a fixed column, so the value does not
-            // sit immediately after the label - the first version of this
-            // check assumed it did and failed on its own fixture. The value is
-            // located by skipping the pad, and the line must end right after
-            // it, which is what proves nothing was appended in place of it.
+            // sit immediately after the label - assume it does and the check
+            // fails on its own fixture. The value is located by skipping the
+            // pad, and the line must end right after it, which is what proves
+            // nothing was appended in place of it.
             const size_t gdiLine = t.find(L"GDI objects");
             const std::wstring gdiLabel = L"GDI objects";
             const size_t afterLabel = gdiLine + gdiLabel.size();
@@ -6545,15 +6537,14 @@ TestResult RunSelfTest() {
               fbt.find(L"none (needs administrator)") == std::wstring::npos,
               WideToUtf8(fbt));
 
-        // The combination that shipped broken: ELEVATED with no collector
+        // The combination that was wrong: ELEVATED with no collector
         // running. The CLI never opens a session (correctly - it must not
         // claim one it did not start) and it forces trafficFallback to false
         // when elevated, so both traffic flags ended up false while
         // elevated was true, and the final branch - written only for the
         // unelevated case - answered "none (needs administrator)" to an
         // administrator, two lines under "Administrator yes". Every other
-        // pairing of these flags is covered above; this one was not, which
-        // is how it reached a user.
+        // pairing of these flags is covered above; this one was not.
         BuildSummary ec = un;
         ec.elevated = true;
         ec.etwRunning = false;
@@ -6567,7 +6558,7 @@ TestResult RunSelfTest() {
               WideToUtf8(ect));
     }
 
-    // 28. SetCountry (4.3 join). The filter must be able to search a value the
+    // 28. SetCountry join. The filter must be able to search a value the
     //      column is displaying - a lower-case key that is not rebuilt makes
     //      `country:de` fail while the column reads "DE".
     {
@@ -6614,7 +6605,7 @@ TestResult RunSelfTest() {
               !st.SetCountry(L"", L"US"));
     }
 
-    // F5.4. The ASN join and the `asn:` filter. `asn:` is deliberately both a
+    // The ASN join and the `asn:` filter. `asn:` is deliberately both a
     // NUMBER threshold and a text substring, and both halves plus the unknown
     // rules are pinned here - the unknown rules are the ones that would
     // otherwise select the whole table.
@@ -6717,7 +6708,7 @@ TestResult RunSelfTest() {
               "1.1.1.1 has no country; matched anyway, so this is the bug");
     }
 
-    // F5.4. The Country column carries the ASN rather than taking a 33rd one.
+    // The Country column carries the ASN rather than taking a 33rd one.
     {
         Connection c;
         wchar_t buf[kMaxColumnText + 1] = {0};
@@ -6735,7 +6726,7 @@ TestResult RunSelfTest() {
         ConnectionStore::GetColumnText(asnOnly, COL_COUNTRY, buf, kMaxColumnText);
         const std::wstring asnAlone(buf);
 
-        // An unenriched row must render EXACTLY as it did before F5.4 - no
+        // An unenriched row must render EXACTLY as it did - no
         // separator, no placeholder.
         Check(r, "asn.col-unenriched-unchanged", none.empty());
         Check(r, "asn.col-country-alone-unchanged", onlyCountry == L"US");
@@ -6791,7 +6782,7 @@ TestResult RunSelfTest() {
 
     }
 
-    // 29. JoinBookmarks (5.3). The case that matters is the CLEAR: a row
+    // 29. JoinBookmarks. The case that matters is the CLEAR: a row
     //     whose endpoint is not in the supplied set must lose its pin, or
     //     removing a bookmark leaves a pin stuck on the row forever.
     {
@@ -6800,8 +6791,7 @@ TestResult RunSelfTest() {
         // ConnectionStore::KeyOf builds the row identity from local4/localPort/
         // remote4/remotePort, so rows that share the (default-zero) binary
         // fields are the SAME row to the store no matter what their text says -
-        // the first version of this test created three rows that all collapsed
-        // into one and every count came out wrong.
+        // three such rows collapse into one and every count comes out wrong.
         int nextLocalPort = 50000;
         auto mk = [&nextLocalPort](const wchar_t* remote) {
             Connection c;
@@ -6878,7 +6868,7 @@ TestResult RunSelfTest() {
         empty.JoinBookmarks({BookmarkMark{L"9.9.9.9", 443, kBookmarkTagRed, L""}});
         Check(r, "bm.empty-store-safe", empty.View().empty());
 
-        // THE PORT IS PART OF THE IDENTITY (D22). A bookmark for the same
+        // THE PORT IS PART OF THE IDENTITY. A bookmark for the same
         // address on a DIFFERENT remote port must not mark this row: the join
         // used to match on the address alone, so a bookmark on
         // 107.155.105.90:9999 painted the live :443 row "red" (measured). A
@@ -6916,7 +6906,7 @@ TestResult RunSelfTest() {
         }
     }
 
-    // 32. The `note:` filter field (D26). Before this, "note" was not a field
+    // 32. The `note:` filter field. "note" was not a field
     // name at all, so `--filter note:vendor` degraded to a substring search
     // for the literal text "note:vendor" and could never match: a note was
     // writable and listable but unreachable from the connection table, which
@@ -6991,7 +6981,7 @@ TestResult RunSelfTest() {
     //
     //     PresetView WAS a separate struct and had ZERO test coverage - the
     //     module was exercised only through the GUI's Save/Load, behind a
-    //     modal dialog, which is exactly how 5.1 grouping and GeoIP shipped as
+    //     modal dialog, which is exactly how grouping and GeoIP shipped as
     //     dead code. Merging PresetView into ViewState is therefore a change
     //     that could not have been verified at all. These tests are the
     //     verification: they drive ViewState::ApplyTo against a synthetic
@@ -7033,7 +7023,7 @@ TestResult RunSelfTest() {
         Check(r, "view.grouping-collapses", store.View().size() == 2);
         Check(r, "view.grouping-flag-agrees", store.Grouped());
 
-        // Turning it off restores the flat list exactly - the property 5.1
+        // Turning it off restores the flat list exactly - the property that
         // was verified for, now covered without a window.
         v.grouped = false;
         v.ApplyTo(&store);
@@ -7102,12 +7092,12 @@ TestResult RunSelfTest() {
         Check(r, "preset.delete-is-idempotent", Presets::Delete(kName));
     }
 
-    // 30. Chart export (7.7a) and zoom reset (7.7b). The degenerate-range
+    // 30. Chart export and zoom reset. The degenerate-range
     //     case is the one that produces infinities and NaNs on a live panel,
     //     and the locale case is the one that silently misaligns a whole
     //     file, so both are pinned here rather than only in a scratch test.
     {
-        // --- 7.7b: zoom. A flat series (every sample identical) has
+        // --- zoom. A flat series (every sample identical) has
         // high == low, so anything dividing by the span yields inf/NaN.
         const std::vector<double> flat(10, 42.0);
         ZoomRect z;
@@ -7141,7 +7131,7 @@ TestResult RunSelfTest() {
         Check(r, "zoom.resetall-empty",
               ResetAllPanelZoom({}, {}, {}).empty());
 
-        // --- 7.7a: CSV. A name containing a comma must be quoted, or the
+        // --- CSV. A name containing a comma must be quoted, or the
         // column count silently shifts for every row after it.
         {
             const std::vector<double> a = {1.5, 2.5};
@@ -7177,10 +7167,9 @@ TestResult RunSelfTest() {
             //
             // The number has to live in BOTH places: 'seriesA' is what the
             // panel's own series holds, and each ChartSample is the reading
-            // for one instant. The first version of this test set only the
-            // ChartSample and left seriesA at 2.5, so the column rendered
-            // 2.5 and the assertion correctly failed - the test was measuring
-            // the wrong value, not the code emitting a bad one.
+            // for one instant. Set only the ChartSample and leave seriesA at
+            // 2.5 and the column renders 2.5 - the test measures the wrong
+            // value, not the code emitting a bad one.
             const std::vector<double> bigA = {kChartUnknown, 1234.75};
             std::vector<ChartSeriesInfo> siL;
             ChartSeriesInfo sL;
@@ -7206,7 +7195,7 @@ TestResult RunSelfTest() {
         }
     }
 
-    // 31. Change-log buffer (5.4). The cap is the whole risk here: an
+    // 31. Change-log buffer. The cap is the whole risk here: an
     //     unbounded log on a busy machine is a slow leak that shows up as
     //     the app getting heavier over hours, not as a crash. 20 000 events
     //     in proves the cap holds AND that the NEWEST survive - keeping the
@@ -7260,7 +7249,7 @@ TestResult RunSelfTest() {
               clw.Count() == 0 && clw.Dropped() == 0);
     }
 
-    // 20b. 5.3: the change-log event mask - the GUI half of `--event`.
+    // 20b. The change-log event mask - the GUI half of `--event`.
     //     Pure logic, no window needed: the filter runs in AppendEvents, so it
     //     is fully testable headless and the UI harness only has to prove the
     //     CONTROLS are wired.
@@ -7353,7 +7342,7 @@ TestResult RunSelfTest() {
                   noAppear.EventDisappear() == true);
     }
 
-    // 21. Alerting (4.5). The property that matters is the LATCH: a
+    // 21. Alerting. The property that matters is the LATCH: a
     //     condition that persists must not re-notify, or the feature is noise
     //     and the user turns it off.
     {
@@ -7456,7 +7445,7 @@ TestResult RunSelfTest() {
     // 19. TlsDecode. The ClientHello below is a REAL captured
     //     one, not a hand-rolled synthetic - a synthetic hello only tests the
     //     synthetic case. The full byte sequence was captured with pktmon on
-    //     a live Chrome connection; see todo.md 3.0.
+    //     a live Chrome connection.
     {
         // A REAL ClientHello, captured with pktmon from a live curl request
         // to https://www.cloudflare.com/ and then extracted byte-for-byte
@@ -7742,7 +7731,7 @@ static const unsigned char kClientHello[] = {
                                                : dout.find('\r')));
         }
 
-        // R4: refuse to replace an existing file unless authorised.
+        // Refuse to replace an existing file unless authorised.
         //
         // Driven against a REAL file rather than through the CLI, for the reason
         // recorded in Commands.h: the failure being fixed is silent, and a test
@@ -7762,7 +7751,7 @@ static const unsigned char kClientHello[] = {
                                      CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY,
                                      nullptr);
             if (h == INVALID_HANDLE_VALUE) {
-                Check(r, "r4.temp-file", false, "cannot create");
+                Check(r, "overwrite.temp-file", false, "cannot create");
             } else {
                 DWORD put = 0;
                 ::WriteFile(h, kMarker,
@@ -7788,20 +7777,20 @@ static const unsigned char kClientHello[] = {
                 };
 
                 std::wstring err;
-                Check(r, "r4.existing-refused",
+                Check(r, "overwrite.existing-refused",
                       RefuseExistingOutput(L"export", file, false, &err) &&
                           !err.empty());
                 // The reason must name the path AND the switch that changes it.
                 // A refusal that does not tell you how to proceed is a dead end.
-                Check(r, "r4.reason-names-path",
+                Check(r, "overwrite.reason-names-path",
                       err.find(file) != std::wstring::npos);
-                Check(r, "r4.reason-names-switch",
+                Check(r, "overwrite.reason-names-switch",
                       err.find(L"--force") != std::wstring::npos);
-                Check(r, "r4.file-survived-refusal", stillHasMarker());
+                Check(r, "overwrite.file-survived-refusal", stillHasMarker());
 
                 // --force is the authorisation, and it must not refuse.
                 std::wstring err2;
-                Check(r, "r4.force-allows",
+                Check(r, "overwrite.force-allows",
                       !RefuseExistingOutput(L"export", file, true, &err2) &&
                           err2.empty());
 
@@ -7811,24 +7800,24 @@ static const unsigned char kClientHello[] = {
                 const std::wstring missing = file + L".absent";
                 ::DeleteFileW(missing.c_str());
                 std::wstring err3;
-                Check(r, "r4.absent-path-allowed",
+                Check(r, "overwrite.absent-path-allowed",
                       !RefuseExistingOutput(L"export", missing, false, &err3));
                 ::DeleteFileW(missing.c_str());
 
                 // An empty path is not "existing"; the caller validates that
                 // separately (--out is required) and this must not second-guess.
                 std::wstring err4;
-                Check(r, "r4.empty-path-allowed",
+                Check(r, "overwrite.empty-path-allowed",
                       !RefuseExistingOutput(L"export", L"", false, &err4));
 
                 ::DeleteFileW(file.c_str());
             }
         }
 
-        // W1.2: a TLS 1.3 ServerHello's supported_versions extension carries
+        // A TLS 1.3 ServerHello's supported_versions extension carries
         // the real negotiated version as a single 2-byte field with NO length
-        // prefix. The previous parser read a 1-byte length first and corrupted
-        // the version. Build that exact message and assert the version.
+        // prefix. Reading a 1-byte length first corrupts the version. Build that
+        // exact message and assert the version.
         {
             auto push16 = [](std::string& s, uint16_t v) {
                 s.push_back(static_cast<char>((v >> 8) & 0xFF));
@@ -7992,7 +7981,7 @@ static const unsigned char kClientHello[] = {
         unsigned char frame[128] = {0};
         // dst MAC (first byte deliberately 0x6c: a high nibble of 6 reads as
         // "IPv6 version 6" to a naive version probe - the exact mistake that
-        // made 16488 good packets look malformed during development).
+        // made 16488 good packets look malformed).
         frame[0] = 0x6c; frame[1] = 0x55; frame[5] = 0x08;
         // src MAC: last byte 0x02, so src = 192.0.2.1
         frame[6] = 0xc0; frame[7] = 0x00; frame[8] = 0x02; frame[9] = 0x01;
@@ -8062,7 +8051,7 @@ static const unsigned char kClientHello[] = {
     }
 
     // `capture --text` and `--dir`: the two pure pieces of the CLI stream dump
-    // (todo.md 8.7 G2). Both are pinned here because the reassembly itself
+    // Both are pinned here because the reassembly itself
     // already has coverage above and these are the parts that had never
     // existed - and the ASCII gutter in particular is the kind of detail that
     // is wrong in a way nobody notices by eye.
@@ -8072,9 +8061,8 @@ static const unsigned char kClientHello[] = {
         // The payload is built from an explicit length, NOT from a bare
         // `std::string(const char*)`. That constructor measures with strlen, so
         // a literal containing \x00 silently becomes the 16 bytes before it -
-        // which is exactly how the first version of this check ended up
-        // asserting a one-line dump for an 18-byte stream and failing for
-        // reasons that had nothing to do with the formatter.
+        // which is how a one-line dump gets asserted for an 18-byte stream
+        // and fails for reasons that have nothing to do with the formatter.
         //
         // Bytes: "GET / HTTP/1.1\r\n" then 0x00 and 0xFF.
         const char raw[] = "GET / HTTP/1.1\r\n\x00\xFF";
@@ -8094,8 +8082,7 @@ static const unsigned char kClientHello[] = {
               dump.rfind("00000000  ", 0) == 0 &&
                   dump.find("\r\n00000010  ") != std::string::npos);
 
-        // The hex column. 0x47 is 'G' - the first version wrote 0x48 here,
-        // which is 'H', and so could never match.
+        // The hex column. 0x47 is 'G'; 0x48 is 'H' and could never match.
         Check(r, "streamhex.hex-bytes",
               dump.find("47 45 54 20 2f 20 48 54") != std::string::npos);
 
@@ -8124,9 +8111,9 @@ static const unsigned char kClientHello[] = {
               FormatStreamHex(std::string()).empty());
 
         // bytesPerLine 0 and absurd values fall back rather than misbehaving.
-        // The absurd case mattered: the first version sized a C array FROM the
-        // parameter, which is a VLA - GCC accepts it, MSVC rejects it with
-        // C2131, and the whole file would not compile over a formatter.
+        // The absurd case mattered: sizing a C array FROM the parameter is a
+        // VLA - GCC accepts it, MSVC rejects it with C2131, and the whole file
+        // would not compile over a formatter.
         Check(r, "streamhex.zero-width-falls-back",
               FormatStreamHex("AB", 0) == FormatStreamHex("AB", 16));
         Check(r, "streamhex.absurd-width-falls-back",
@@ -8237,7 +8224,7 @@ static const unsigned char kClientHello[] = {
         Check(r, "captureflags.refusal-leaves-the-target-alone",
               !refused && untouched == 3);
     }
-    // 9.2.8 - DNS resolver budget + pending rendering. The live getnameinfo
+    // DNS resolver budget + pending rendering. The live getnameinfo
     // path depends on the network and cannot be asserted here, so pin the
     // contractable surface: the pending sentinel the renderer keys on, the
     // default budget, and that Lookup rejects unparseable input (it must NOT
@@ -8424,7 +8411,7 @@ static const unsigned char kClientHello[] = {
             Check(r, "details.reallabels-fit-too", widest > 0 && widest <= 24,
                   "widest real label is " + std::to_string(widest) + " chars");
 
-            // 9.4.1: the Details window is tabbed. BuildDetailModel must
+            // The Details window is tabbed. BuildDetailModel must
             // classify every section into one of the five tabs and must always
             // emit the two new sections (Security, Notes) that the rework had
             // no room for - the Security tab holds process trust metadata and
@@ -8518,7 +8505,7 @@ static const unsigned char kClientHello[] = {
             }
         }
 
-        // The connection list must not be truncated (todo.md 8.8 G4). There was
+        // The connection list must not be truncated. There was
         // a hardcoded `kMaxListed = 25` here with the comment "25 sibling lines
         // fit the dossier on one screen", which stopped being true once the
         // window scrolled - and the section it truncated is the only part of
@@ -8532,9 +8519,8 @@ static const unsigned char kClientHello[] = {
         // the list means "this process's connections", not "every connection in
         // the snapshot".
         //
-        // The first version of this check put the siblings on a different PID
-        // from the row it asked about, and failed with "listed 1 of 90" - which
-        // was the fixture being wrong, not the code.
+        // Siblings on a different PID from the row asked about fail with
+        // "listed 1 of 90" - the fixture is wrong, not the code.
         {
             constexpr DWORD kOwnerPid = 4242;
             constexpr DWORD kSiblingCount = 90;
@@ -8596,7 +8582,7 @@ static const unsigned char kClientHello[] = {
         }
     }
 
-    // ---- ProcessThreads (todo.md 8.8 G5) -----------------------------------
+    // ---- ProcessThreads ----------------------------------------------------
     //
     // Unlike most of this file, these checks run against the REAL machine and
     // the REAL current process, because the thing being verified is a kernel
@@ -8697,8 +8683,8 @@ static const unsigned char kClientHello[] = {
         Check(r, "details.threads-section-present", thr != nullptr &&
                   thr->title != L"Threads");
         if (thr != nullptr) {
-            // One row per thread, and no truncation: the lesson of G4 is that a
-            // cap on this section would be the same defect all over again.
+            // One row per thread, and no truncation: a cap on this section
+            // would be the same defect all over again.
             Check(r, "details.threads-not-truncated",
                   thr->fields.size() == thr->title.size() - 9 ||
                       thr->title.size() > 9);
@@ -8794,7 +8780,7 @@ static const unsigned char kClientHello[] = {
               WideToUtf8(label));
     }
 
-    // 5.1 grouping, as the list actually uses it: the store's grouped view and
+    // Grouping, as the list actually uses it: the store's grouped view and
     // the per-cell renderer. The pure aggregation is covered further up; what
     // matters here is that grouping is wired to a view at all - the module was
     // fully implemented and never called, which is the failure this guards.
@@ -8854,7 +8840,7 @@ static const unsigned char kClientHello[] = {
             (g != nullptr) && !GroupColumnText(*g, COL_REMOTE, other, 128);
         Check(r, "group.unknown-column-falls-through", fallsThrough);
 
-        // D27. The fall-through above is correct for a TABLE and for the GUI -
+        // The fall-through above is correct for a TABLE and for the GUI -
         // the row is visibly a group, so one member's remote address is
         // informative - and wrong for an EXPORT, where the header row is a
         // schema claim. These pin the split: per-connection columns are
@@ -8862,7 +8848,7 @@ static const unsigned char kClientHello[] = {
         // stats are explicitly NOT flagged (they fall through to the
         // representative but carry the same value on every member, so the
         // group's answer is already correct).
-        Check(r, "d27.per-connection-flagged",
+        Check(r, "colflag.per-connection-flagged",
               ColumnIsPerConnectionOnly(COL_REMOTE) &&
                   ColumnIsPerConnectionOnly(COL_LOCAL) &&
                   ColumnIsPerConnectionOnly(COL_LPORT) &&
@@ -8871,7 +8857,7 @@ static const unsigned char kClientHello[] = {
                   ColumnIsPerConnectionOnly(COL_TLS) &&
                   ColumnIsPerConnectionOnly(COL_COUNTRY) &&
                   ColumnIsPerConnectionOnly(COL_DURATION));
-        Check(r, "d27.group-answerable-not-flagged",
+        Check(r, "colflag.group-answerable-not-flagged",
               !ColumnIsPerConnectionOnly(COL_PID) &&
                   !ColumnIsPerConnectionOnly(COL_PROCESS) &&
                   !ColumnIsPerConnectionOnly(COL_PROTO) &&
@@ -8887,14 +8873,14 @@ static const unsigned char kClientHello[] = {
         // cpu/mem/disk are per-PROCESS, joined onto every row carrying the PID,
         // so a group row prints the same number whichever member it falls
         // through to. Flagging them would refuse a correct column.
-        Check(r, "d27.proc-stats-not-flagged",
+        Check(r, "colflag.proc-stats-not-flagged",
               !ColumnIsPerConnectionOnly(COL_CPU) &&
                   !ColumnIsPerConnectionOnly(COL_MEM) &&
                   !ColumnIsPerConnectionOnly(COL_DISK));
         // Every flagged column must genuinely have no group answer, i.e.
         // GroupColumnText must NOT handle it. If a future change teaches it
         // one, this fails and the flag should be revisited in the same edit.
-        Check(r, "d27.flagged-are-unhandled",
+        Check(r, "colflag.flagged-are-unhandled",
               !GroupColumnText(*g, COL_REMOTE, other, 128) &&
                   !GroupColumnText(*g, COL_HOST, other, 128) &&
                   !GroupColumnText(*g, COL_DURATION, other, 128) &&
@@ -8987,7 +8973,7 @@ static const unsigned char kClientHello[] = {
         Check(r, "cmd.block-refuses-listen",
               !ConnectionToBlockRequest(lst, &req, &why));
 
-        // 9.2.6: CloseTcpConnection only drives SetTcpEntry, which has no IPv6
+        // CloseTcpConnection only drives SetTcpEntry, which has no IPv6
         // variant - so an IPv6 TCP row must be refused up front with the IPv6
         // reason, before any elevation/API attempt is made. Mirrors the GUI
         // predicate that greys "Close connection" for the same rows.
@@ -9099,7 +9085,7 @@ static const unsigned char kClientHello[] = {
               lr3.exitCode == 0 &&
                   lr3.out.find("\"proto\"") != std::string::npos);
 
-        // F5.12: jsonl is this same serializer with `lines` set - the framing
+        // jsonl is this same serializer with `lines` set - the framing
         // differs, the schema does not. Three properties the array form
         // violates and this form must not, each one a line-at-a-time reader
         // depends on: no wrapper at column 0, every line a complete object,
@@ -9154,7 +9140,7 @@ static const unsigned char kClientHello[] = {
         Check(r, "cmd.renderps-quiet-empty",
               pr2.exitCode == 1 && pr2.out.empty());
 
-        // D14/D15: the aligned table. Synthetic rows with known cell
+        // The aligned table. Synthetic rows with known cell
         // widths, so the expected bytes are exact - padding, the numeric
         // right rule, no tabs anywhere in a table, and the header/body
         // split the streaming path relies on (header first via StreamOut,
@@ -9200,7 +9186,7 @@ static const unsigned char kClientHello[] = {
             Check(r, "table.no-tabs", tr.out.find('\t') == std::string::npos,
                   tr.out);
             // The streamed header plus the skipHeader body must equal the
-            // buffered rendering byte for byte (D15).
+            // buffered rendering byte for byte.
             const size_t cut = tr.out.find("\r\n");
             const CommandResult th =
                 RenderList(ts, ta, /*skipHeader=*/true);
@@ -9255,8 +9241,8 @@ static const unsigned char kClientHello[] = {
             Check(r, "table.group-fallthrough-exact", gt.out == gwant,
                   gt.out);
 
-            // F5.12: the GROUPED shape carries the same two framings, and the
-            // D27 refusal has to reach jsonl. jsonl is `json` with a different
+            // The GROUPED shape carries the same two framings, and the
+            // per-connection refusal has to reach jsonl. jsonl is `json` with a
             // renderer, so every rule written against `json` - group-safe
             // columns included - applies to it unchanged. Proving it here
             // rather than in the CLI is what makes the claim structural: the
@@ -9355,7 +9341,7 @@ static const unsigned char kClientHello[] = {
             Check(r, "table.no-trailing-space", er2.out == ewant, er2.out);
         }
 
-        // ps: the same table machinery (D14), and CSV quoting that a comma
+        // ps: the same table machinery, and CSV quoting that a comma
         // in a process name can actually use.
         {
             ConnectionStore pss;
@@ -9434,9 +9420,9 @@ static const unsigned char kClientHello[] = {
         Check(r, "cmd.events-filtered-empty",
               FormatChangeEvents(ev, "table", L"stamp", &prog).empty());
 
-        // The event-kind gate (D25). Before this there was NO way to select a
-        // kind, so the question an event feed exists for - what OPENED - could
-        // not be asked. `--filter event:appear` did not help either: "event"
+        // The event-kind gate. There was NO way to select a kind, so the
+        // question an event feed exists for - what OPENED - could not be
+        // asked. `--filter event:appear` did not help either: "event"
         // was not a field name, so the token degraded to a substring search
         // for the literal text "event:appear" and matched nothing at all.
         {
@@ -9523,7 +9509,7 @@ static const unsigned char kClientHello[] = {
     CheckBookmarkFile(r);
     CheckPresetFile(r);
     CheckIniFile(r);
-    CheckDnsCache(r);   // F5.5
+    CheckDnsCache(r);
     CheckEmptyState(r);
     CheckProcessTree(r);
     CheckKillTree(r);
@@ -9532,10 +9518,10 @@ static const unsigned char kClientHello[] = {
     r.output += "selftest: ";
     r.output += (r.exitCode == 0) ? "all checks passed" : "FAILURES detected";
     r.output += "\r\n";
-    // V3. The count by area, printed at the end where a reader finishing the
+    // The count by area, printed at the end where a reader finishing the
     // log sees it. Deliberately labelled "checks", never "coverage": the
     // harness has no instrumentation, and presenting a check count as branch
-    // coverage is the vanity this ticket was written to stop.
+    // coverage is the vanity this count exists to stop.
     r.output += FormatCheckAreas(r.checkArea);
     r.output += "\r\n";
     return r;
@@ -9679,8 +9665,8 @@ std::string RunBench(unsigned rows, unsigned iters) {
     // ProcessTrace drives it, over a synthetic classic-MOF stream (half send
     // opcodes, half receive, 64 distinct PIDs). It times classify + payload
     // parse + the totals lock + the per-PID std::map update - the whole
-    // per-event cost W3.5 proposes to optimise. The plan requires a number
-    // before that hot path is touched, so this is the number. Reported as
+    // per-event cost the optimisation targets. A number is required before
+    // that hot path is touched, so this is the number. Reported as
     // ns/event rather than ms/op because it is the unit the claim is made in
     // (100k events per second).
     double nsG = 0;

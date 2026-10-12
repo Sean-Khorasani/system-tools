@@ -15,7 +15,7 @@
 //   8. delete both temp files
 //
 // --pkt-size 0 is not optional: the default truncates each packet and a
-// truncated stream cannot be reassembled. See todo.md 3.0.
+// truncated stream cannot be reassembled.
 
 #pragma once
 
@@ -80,7 +80,7 @@ struct CaptureResult {
     std::wstring dir2Label;
 };
 
-// 9.2.7: are pktmon.exe AND etl2pcap.exe present in the system directory?
+// Are pktmon.exe AND etl2pcap.exe present in the system directory?
 // Probed once and cached; no elevation involved.
 //
 // SEPARATE FROM CaptureAvailable ON PURPOSE. This answers "does this machine

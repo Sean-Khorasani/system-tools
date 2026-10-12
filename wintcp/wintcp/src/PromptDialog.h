@@ -31,7 +31,7 @@
 #include <windows.h>
 
 #include <string>
-#include <vector>   // C7: TemplateFits hands back the built bytes
+#include <vector>   // TemplateFits hands back the built bytes
 
 namespace wintcp {
 
@@ -52,7 +52,7 @@ bool PromptForText(HWND owner, const wchar_t* title, const wchar_t* label,
                    const wchar_t* initial, size_t maxChars,
                    std::wstring* out);
 
-// C7: build the DLGTEMPLATE that PromptForText would use, into the buffer the
+// Build the DLGTEMPLATE that PromptForText would use, into the buffer the
 // caller supplies, IN PLACE. Returns true when the template was built.
 //
 // Exposed for one reason: this layout is the part of the module most likely to
@@ -86,7 +86,7 @@ bool TemplateFits(DWORD style, DWORD exStyle, short x, short y, short cx,
 // asserts the boundary instead of restating the number.
 constexpr size_t kTemplateMaxChars = 128;   // a prompt title
 constexpr size_t kCaptionMaxChars = 32;     // "OK" / "Cancel"
-// G4: the instruction line above the edit (e.g. the numbered preset list a
+// The instruction line above the edit (e.g. the numbered preset list a
 // Load/Delete prompt shows). Longer than a button caption by design, still
 // bounded so one prompt cannot size the template without limit.
 constexpr size_t kLabelMaxChars = 512;

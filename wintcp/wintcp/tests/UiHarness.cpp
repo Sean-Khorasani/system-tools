@@ -10,10 +10,9 @@
 // check below is labelled SMOKE, and CI treats this suite as advisory:
 // a FAIL here means "look at the window", never "the build is red".
 //
-// Why this file exists: the previous round proved the new menu items exist.
-// That is not the same as proving they work, and the review was right to
-// reject it. This harness presses the real controls and reads back what
-// actually changed.
+// Why this file exists: proving the new menu items exist is not the same as
+// proving they work. This harness presses the real controls and reads back
+// what actually changed.
 //
 // Why in-process rather than a second test executable poking the window with
 // SendMessage: there is no interactive desktop available here, so a window
@@ -55,7 +54,7 @@
 #include "Bookmarks.h"
 #include "Settings.h"
 #include "Columns.h"
-#include "TypeToJump.h"   // 7.2: the product's label predicate, not a copy
+#include "TypeToJump.h"   // the product's label predicate, not a copy
 #include "resource.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -280,7 +279,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         return L"UI HARNESS ABORTED (empty list)";
     }
 
-    // ---- G21: every row exposes an accessible name|description -----------
+    // ---- every row exposes an accessible name|description ----------------
     // What a screen reader hears for row 0, read without COM through the
     // same builders the MSAA wrapper serves. A missing separator means the
     // probe degenerated; an empty answer means the row names nothing.
@@ -288,22 +287,22 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
     {
         const std::string acc0 = Of(w, "accRow", "0");
         std::snprintf(line, sizeof(line),
-                      "SMOKE G21 acc: row 0 names itself (%s)",
+                      "SMOKE accessible acc: row 0 names itself (%s)",
                       acc0.empty() ? "empty" : acc0.c_str());
         Check(!acc0.empty() && acc0.find('|') != std::string::npos, line,
               "row 0 has no accessible name|description");
         const std::string accBad = Of(w, "accRow", "999999");
-        Check(accBad.empty(), "SMOKE G21 acc: out-of-range row names nothing",
+        Check(accBad.empty(), "SMOKE accessible acc: out-of-range row names nothing",
               accBad.c_str());
     }
 
-    // ---- Roadmap: the process-tree view mode -----------------------------
-    // The item the user reported as missing: "I can't see any process tree".
-    // The roadmap asked for a tree WHERE THE LIST VIEW IS, and this drives
-    // the real menu command rather than calling the window's method, so a
-    // menu id that lost its registration fails here rather than in front of
-    // a user. The item count is read from the CONTROL, not from the store,
-    // so an empty tree on a populated machine is a failure and not a pass.
+    // ---- the process-tree view mode --------------------------------------
+    // The missing item was "I can't see any process tree". The tree belongs
+    // WHERE THE LIST VIEW IS, and this drives the real menu command rather
+    // than calling the window's method, so a menu id that lost its
+    // registration fails here rather than in front of a user. The item count
+    // is read from the CONTROL, not from the store, so an empty tree on a
+    // populated machine is a failure and not a pass.
     Mark("tree-mode");
     {
         const bool off = Is(w, "treeMode", 0);
@@ -329,19 +328,25 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // 32 processes and almost none of them holds a connection at any
         // instant, so a tree built from the connection table showed a browser
         // as one or two nodes and nothing else. Machine-independent by
-        // construction - it compares the tree against the same machine's
-        // enumeration, so it means the same thing on a VM and on a busy
-        // desktop.
-        const long enumerated = Num(w, "enumeratedProcesses");
+        // construction - it compares the tree against the same fill's own
+        // snapshot of the machine, so it means the same thing on a VM and on
+        // a busy desktop.
+        //
+        // The snapshot has to be the FILL's, not a fresh enumeration: two
+        // enumerations of a live machine differ by whatever started in
+        // between, which is a process appearing, not a defect. The first
+        // version of this check enumerated twice and failed on exactly that.
+        const long enumerated = Num(w, "enumeratedAtFill");
         const long connectedPids = Num(w, "distinctConnectionPids");
         std::snprintf(line, sizeof(line),
                       "SMOKE tree mode: the tree is the machine's process "
-                      "list (%ld of %ld processes; %ld own a connection)",
+                      "list (%ld items from %ld processes; %ld own a "
+                      "connection)",
                       items, enumerated, connectedPids);
         if (enumerated <= 0) {
             Skip("tree mode: the machine's process enumeration",
-                 "EnumerateProcesses returned nothing, so the comparison "
-                 "cannot be made");
+                 "the last fill enumerated nothing, so the comparison cannot "
+                 "be made");
         } else if (enumerated <= connectedPids) {
             // Every process on this machine owns a connection. Rare but
             // legitimate (a small VM, or a tool-heavy host), and a skip that
@@ -502,7 +507,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         }
     }
 
-    // ---- every column must be reachable from the menu (C3) ---------------
+    // ---- every column must be reachable from the menu --------------------
     // Not cosmetic. The visible-column mask has exactly one writer in the GUI
     // (ToggleColumn, reached only by a View > Columns command), so a ColumnId
     // with no menu item is a column no user can ever switch on.
@@ -536,17 +541,17 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         Check(after > 0, line, "list emptied by a refresh");
     }
 
-    // ---- 5.5 freeze -------------------------------------------------------
+    // ---- freeze -----------------------------------------------------------
     Mark("freeze");
     {
         const long base = Num(w, "rowCount");
         Cmd(hwnd, IDM_VIEW_FREEZE);
         Pump(300);
-        Check(Is(w, "frozen", 1), "SMOKE 5.5 freeze: the toggle sets frozen_",
+        Check(Is(w, "frozen", 1), "SMOKE freeze: the toggle sets frozen_",
               "frozen still 0 after ID_VIEW_FREEZE");
         const long afterFreeze = Num(w, "rowCount");
         std::snprintf(line, sizeof(line),
-                      "SMOKE 5.5 freeze: rows are held at the frozen count "
+                      "SMOKE freeze: rows are held at the frozen count "
                       "(%ld -> %ld)", base, afterFreeze);
         Check(afterFreeze == base, line, "the list changed on entering freeze");
 
@@ -555,23 +560,23 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         Pump(4000);
         const long during = Num(w, "rowCount");
         std::snprintf(line, sizeof(line),
-                      "SMOKE 5.5 freeze: F5 does not replace the list while "
+                      "SMOKE freeze: F5 does not replace the list while "
                       "frozen (%ld -> %ld)", afterFreeze, during);
         Check(during == afterFreeze, line, "rows moved while frozen");
 
         Cmd(hwnd, IDM_VIEW_FREEZE);
         Pump(300);
-        Check(Is(w, "frozen", 0), "SMOKE 5.5 freeze: the toggle clears frozen_",
+        Check(Is(w, "frozen", 0), "SMOKE freeze: the toggle clears frozen_",
               "still frozen after a second ID_VIEW_FREEZE");
         Cmd(hwnd, IDM_FILE_REFRESH);
         Pump(4000);
         std::snprintf(line, sizeof(line),
-                      "SMOKE 5.5 freeze: resuming restores a live view (%ld rows)",
+                      "SMOKE freeze: resuming restores a live view (%ld rows)",
                       Num(w, "rowCount"));
         Check(Num(w, "rowCount") > 0, line, "no rows after unfreeze");
     }
 
-    // ---- 5.1 group by process (SMOKE: toggle only) -------------------------
+    // ---- group by process (SMOKE: toggle only) ----------------------------
     // The aggregates (one row per PID, max-not-sum traffic, names) are
     // proven headless by the group.* selftests and live by `list --group`;
     // here the window only has to switch shape and switch back.
@@ -579,36 +584,36 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
     {
         Cmd(hwnd, IDM_VIEW_GROUP);
         Pump(500);
-        Check(Is(w, "grouped", 1), "SMOKE 5.1 group: the toggle sets grouped",
+        Check(Is(w, "grouped", 1), "SMOKE group: the toggle sets grouped",
               "grouped still 0 after ID_VIEW_GROUP");
-        Check(Num(w, "rowCount") > 0, "SMOKE 5.1 group: grouped list non-empty",
+        Check(Num(w, "rowCount") > 0, "SMOKE group: grouped list non-empty",
               "grouped view shows no rows");
 
         Cmd(hwnd, IDM_VIEW_GROUP);
         Pump(500);
-        Check(Is(w, "grouped", 0), "SMOKE 5.1 group: the toggle clears grouped",
+        Check(Is(w, "grouped", 0), "SMOKE group: the toggle clears grouped",
               "still grouped after a second ID_VIEW_GROUP");
-        Check(Num(w, "rowCount") > 0, "SMOKE 5.1 group: flat list restored",
+        Check(Num(w, "rowCount") > 0, "SMOKE group: flat list restored",
               "flat view shows no rows");
     }
 
-    // ---- 7.4 preserve selection ------------------------------------------
+    // ---- preserve selection ----------------------------------------------
     Mark("preserve-selection");
     {
         Check(Is(w, "preserveSelection", 1),
-              "SMOKE 7.4: preserve-selection defaults to ON",
+              "SMOKE preserve-selection: defaults to ON",
               "default is off");
         Cmd(hwnd, IDM_VIEW_PRESERVE_SEL);
         Pump(200);
-        Check(Is(w, "preserveSelection", 0), "SMOKE 7.4: the toggle turns it OFF",
+        Check(Is(w, "preserveSelection", 0), "SMOKE preserve-selection: the toggle turns it OFF",
               "unchanged after the command");
         Cmd(hwnd, IDM_VIEW_PRESERVE_SEL);
         Pump(200);
-        Check(Is(w, "preserveSelection", 1), "SMOKE 7.4: the toggle turns it back ON",
+        Check(Is(w, "preserveSelection", 1), "SMOKE preserve-selection: the toggle turns it back ON",
               "did not return to ON");
     }
 
-    // ---- 7.2 type-to-jump -------------------------------------------------
+    // ---- type-to-jump -----------------------------------------------------
     Mark("type-to-jump");
     // The product only treats WM_CHAR as a jump when the list holds focus.
     // This section now ESTABLIES that focus itself (see below) instead of
@@ -641,7 +646,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         Pump(50);
         const bool listHasFocus = (::GetFocus() == list);
         if (!listHasFocus) {
-            Say("  [skip] 7.2 type-to-jump: the list cannot take focus without an "
+            Say("  [skip] type-to-jump: the list cannot take focus without an "
                 "interactive desktop; the matching logic itself is covered by the "
                 "TypeToJump selftests\n");
         }
@@ -656,7 +661,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             }
         }
         std::snprintf(line, sizeof(line),
-                      "SMOKE 7.2 type-to-jump: located the PROCESS column (slot %d)",
+                      "SMOKE type-to-jump: located the PROCESS column (slot %d)",
                       procSlot);
         Check(procSlot >= 0, line, "the PROCESS column is not on screen");
 
@@ -726,13 +731,13 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // missing precondition rather than guessing at the product's
         // behaviour. Not a pass: a pass would claim the jump was verified.
         if (listHasFocus && pick == 0) {
-            Skip("SMOKE 7.2 type-to-jump: no row label starts with an ASCII "
+            Skip("SMOKE type-to-jump: no row label starts with an ASCII "
                  "letter, so there is no letter to type",
                  "precondition not met on this machine");
         }
         if (listHasFocus && pick != 0) {
             std::snprintf(line, sizeof(line),
-                          "SMOKE 7.2 type-to-jump: typing '%lc' jumps to a matching row "
+                          "SMOKE type-to-jump: typing '%lc' jumps to a matching row "
                           "(row %ld, process '%s')",
                           pick ? pick : L'?', firstRow, firstLabel.c_str());
             // The letter was derived from a label on screen and the jump was
@@ -747,7 +752,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                 const unsigned char c0 =
                     static_cast<unsigned char>(firstLabel[0]);
                 std::snprintf(line, sizeof(line),
-                              "SMOKE 7.2 type-to-jump: the selected row really starts "
+                              "SMOKE type-to-jump: the selected row really starts "
                               "with '%lc' (label '%s', first char 0x%02X)",
                               pick, firstLabel.c_str(), static_cast<unsigned>(c0));
                 Check(LabelStartsWith(firstLabel, pick), line,
@@ -763,7 +768,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                 list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_FOCUSED);
             const std::string secondLabel = Of(w, "jumpLabel");
             std::snprintf(line, sizeof(line),
-                          "SMOKE 7.2 type-to-jump: repeating '%lc' moves to another match "
+                          "SMOKE type-to-jump: repeating '%lc' moves to another match "
                           "(%ld -> %ld, '%s')",
                           pick, firstRow, secondRow, secondLabel.c_str());
             Check(secondRow != firstRow || secondLabel == firstLabel, line,
@@ -771,7 +776,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         }   // listHasFocus
     }
 
-    // ---- 9.4.8: `/` focuses the filter box (vim-style) -----------------------
+    // ---- `/` focuses the filter box (vim-style) ------------------------------
     Mark("slash-focus");
     {
         // Establish list focus (mirrors the type-to-jump section's setup so this
@@ -781,11 +786,11 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         ::SetFocus(list);
         Pump(50);
         if (::GetFocus() != list) {
-            Say("  [skip] 9.4.8 / focus: the list cannot take focus without an "
+            Say("  [skip] slash focus: the list cannot take focus without an "
                 "interactive desktop\n");
         } else {
             Check(Of(w, "focusTarget") == "list",
-                  "SMOKE 9.4.8 / focus: filter box is reachable via /",
+                  "SMOKE slash focus: filter box is reachable via /",
                   "list did not hold focus before the keystroke");
             // `/` while the LIST has focus must move focus to the filter edit,
             // not be eaten by type-to-jump (which would consume it as a no-op
@@ -793,15 +798,15 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             ::SendMessageW(hwnd, WM_CHAR, static_cast<WPARAM>('/'), 1);
             Pump(50);
             Check(Of(w, "focusTarget") == "filter",
-                  "SMOKE 9.4.8 / focus: typing / moved focus to the filter",
+                  "SMOKE slash focus: typing / moved focus to the filter",
                   "focus stayed on the list or moved elsewhere");
             Check(edit != nullptr && ::GetFocus() == edit,
-                  "SMOKE 9.4.8 / focus: the filter edit really has focus",
+                  "SMOKE slash focus: the filter edit really has focus",
                   "GetFocus() did not land on IDC_EDIT_SEARCH");
         }
     }
 
-    // ---- 9.4.8: `*` toggles a bookmark on the selected row -------------------
+    // ---- `*` toggles a bookmark on the selected row --------------------------
     Mark("star-bookmark");
     {
         // `*` (VK_MULTIPLY) maps to IDM_CTX_BOOKMARK, the same toggle the
@@ -812,7 +817,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // SAFETY: the ADD path opens a modal note prompt (PromptForText) that
         // hangs a headless harness, so this section NEVER lets the toggle hit
         // add. It plants a bookmark for row 0's remote endpoint directly, then
-        // the toggle can only hit remove (no dialog). Mirrors section 11.
+        // the toggle can only hit remove (no dialog).
         HWND list = ::GetDlgItem(hwnd, IDC_LIST);
         LVITEMW sel = {};
         sel.mask = LVIF_STATE;
@@ -878,34 +883,34 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             }
         }
         if (!planted) {
-            Say("  [skip] 9.4.8 * bookmark: no bookable remote endpoint found in "
+            Say("  [skip] star bookmark: no bookable remote endpoint found in "
                 "the first 4 rows; toggle semantics are covered by the bookmark.* "
                 "selftests and the `bookmark` CLI verb\n");
         } else {
             const long before = Num(w, "bookmarkCount");
             Check(before >= 0 && Bookmarks::IsBookmarked(plantedAddr, plantedPort),
-                  "SMOKE 9.4.8 * bookmark: planted bookmark is live",
+                  "SMOKE star bookmark: planted bookmark is live",
                   "registry did not reflect the Add() above");
             // The toggle now removes the planted one (no dialog on remove).
             Cmd(hwnd, IDM_CTX_BOOKMARK);
             Pump(500);
             const long after = Num(w, "bookmarkCount");
             std::snprintf(line, sizeof(line),
-                          "SMOKE 9.4.8 * bookmark: toggle removed the planted "
+                          "SMOKE star bookmark: toggle removed the planted "
                           "bookmark (%ld -> %ld)", before, after);
             Check(after == before - 1, line, "the count did not drop by one");
             Check(!Bookmarks::IsBookmarked(plantedAddr, plantedPort),
-                  "SMOKE 9.4.8 * bookmark: the planted bookmark is gone",
+                  "SMOKE star bookmark: the planted bookmark is gone",
                   "registry still lists it after the toggle");
         }
     }
 
-    // ---- 16 / 7.1 column visibility + order --------------------------------
+    // ---- column visibility + order -----------------------------------------
     Mark("columns");
     {
         // Hiding a VISIBLE column must shrink the list's column set; showing
         // it again must put it back. This is the observable consequence of
-        // the column machinery that 7.1 reorders.
+        // the column machinery that the column-order probe below checks.
         const int v0 = static_cast<int>(Num(w, "visibleCol", "0"));
         const int v1 = static_cast<int>(Num(w, "visibleCol", "1"));
         Check(v0 >= 0 && v1 >= 0, "SMOKE column machinery: visible columns resolve",
@@ -927,7 +932,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             }
         }
         std::snprintf(line, sizeof(line),
-                      "SMOKE 16 columns: found a visible column to toggle "
+                      "SMOKE columns: found a visible column to toggle "
                       "(ColumnId %d at slot %d)", shownCol, shownSlot);
         Check(shownCol >= 0, line, "no visible column could be located");
 
@@ -937,7 +942,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         const int hidden = static_cast<int>(Num(w, "visibleCol",
                                     std::to_string(shownSlot).c_str()));
         std::snprintf(line, sizeof(line),
-                      "SMOKE 16 columns: hiding ColumnId %d removes it from the "
+                      "SMOKE columns: hiding ColumnId %d removes it from the "
                       "visible mapping (slot %d now -> %d)",
                       shownCol, shownSlot, hidden);
         Check(hidden != shownCol, line,
@@ -948,17 +953,17 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         const int back = static_cast<int>(Num(w, "visibleCol",
                                   std::to_string(shownSlot).c_str()));
         std::snprintf(line, sizeof(line),
-                      "SMOKE 16 columns: showing it again restores the mapping "
+                      "SMOKE columns: showing it again restores the mapping "
                       "(slot %d -> %d)", shownSlot, back);
         Check(back == shownCol, line, "the column did not come back");
 
         const long o0 = Num(w, "colOrderSize");
         std::snprintf(line, sizeof(line),
-                      "SMOKE 7.1 column order: the permutation is fully sized (%ld "
+                      "SMOKE column order: the permutation is fully sized (%ld "
                       "entries, expected %d)", o0, static_cast<int>(COL_COUNT));
         Check(o0 == static_cast<long>(COL_COUNT), line, "colOrder_ is not COL_COUNT long");
 
-        // ---- C8: the error-reporting counters the window now exposes --------
+        // ---- the error-reporting counters the window now exposes ------------
         // Three new read ops, and this checks the only thing checkable about
         // them: that they answer a number at all, that the pair that must be
         // ordered actually is, and that they are ZERO for a window that has
@@ -975,7 +980,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             const long tmo = Num(w, "trafficTimeouts");
             const long fail = Num(w, "trafficScanFailures");
             std::snprintf(line, sizeof(line),
-                          "C8 traffic diagnostics answer: timeouts=%ld "
+                          "traffic diagnostics answer: timeouts=%ld "
                           "scan-failures=%ld", tmo, fail);
             // Num() answers -1 for an op the window does not implement, so a
             // non-negative answer is what distinguishes "reports zero" from
@@ -985,7 +990,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                       (tmo < 0 ? "absent" : "present") +
                       " scanFailures=" + (fail < 0 ? "absent" : "present"));
             std::snprintf(line, sizeof(line),
-                          "C8 no traffic scan failed during the harness run "
+                          "traffic diagnostics: no traffic scan failed during the harness run "
                           "(timeouts=%ld scan-failures=%ld)", tmo, fail);
             // Only the SCAN-FAILURE count is asserted zero, and NOT the timeout
             // count. The first version of this check asserted both and failed
@@ -1002,53 +1007,46 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             const long attempts = Num(w, "settingsSaveAttempts");
             const long badWrites = Num(w, "settingsSaveFailures");
             std::snprintf(line, sizeof(line),
-                          "C8 settings persistence counters answer: attempts=%ld "
+                          "settings persistence counters answer: attempts=%ld "
                           "failures=%ld", attempts, badWrites);
             Check(attempts >= 0 && badWrites >= 0, line,
                   std::string("an op is missing: attempts=") +
                       (attempts < 0 ? "absent" : "present") + " failures=" +
                       (badWrites < 0 ? "absent" : "present"));
             std::snprintf(line, sizeof(line),
-                          "C8 failures never exceed attempts (%ld attempts, %ld "
+                          "failures never exceed attempts (%ld attempts, %ld "
                           "failures)", attempts, badWrites);
             Check(badWrites <= attempts, line,
                   "more failures than writes - the counters are not paired");
             std::snprintf(line, sizeof(line),
-                          "C8 no settings write has failed in this session "
+                          "settings persistence: no settings write has failed "
                           "(%ld of %ld)", badWrites, attempts);
             Check(badWrites == 0, line, "a settings write failed");
         }
     }
 
-    // ---- 5.4 change-log window (SMOKE: open/close only) --------------------
+    // ---- change-log window (SMOKE: open/close only) ------------------------
     // Buffer caps and CSV shape are proven headless by the changelog.*
     // selftests; here the menu item only has to show and hide the window.
     Mark("change-log");
     {
         Check(!Is(w, "changeLogVisible", 1),
-              "SMOKE 5.4 change log: closed before the command", "already open");
+              "SMOKE change log: closed before the command", "already open");
         Cmd(hwnd, IDM_FILE_CHANGELOG_WIN);
         Pump(800);
         Check(Is(w, "changeLogVisible", 1),
-              "SMOKE 5.4 change log: the command opens the window",
+              "SMOKE change log: the command opens the window",
               std::string("created=") + (Is(w, "changeLogCreated", 1) ? "yes" : "no") +
                   " visible=" + (Is(w, "changeLogVisible", 1) ? "yes" : "no"));
         Cmd(hwnd, IDM_FILE_CHANGELOG_WIN);
         Pump(500);
         Check(!Is(w, "changeLogVisible", 1),
-              "SMOKE 5.4 change log: the command toggles it closed",
+              "SMOKE change log: the command toggles it closed",
               "window stayed open");
     }
 
-    // ---- 5.3 change-log event mask (SMOKE: the filter actually filters) ----
-    // The one capability D25 added to the CLI with no GUI surface. The
-    // filtering logic is pure and belongs in selftest (changelog.mask.*); what
-    // only a window can prove is that the checkboxes exist, are wired, and that
-    // ticking one does not throw the window out of step. So this drives the
-    // real WM_COMMAND through the real controls and asks the window what it
-    // now believes - which is exactly the kind of check the harness exists for.
-    // ---- D29: the self-kill must be unreachable (SMOKE: the real rule) -------
-    // The bug report was "wintcp.exe closed when I killed something else". Two
+    // ---- the self-kill must be unreachable (SMOKE: the real rule) ------------
+    // The defect: "wintcp.exe closed when I killed something else". Two
     // things were wrong: a use-after-free handing KillPid() a garbage PID, and
     // an "End process..." item that was enabled on wintcp.exe's OWN rows - which
     // a network tool necessarily has.
@@ -1058,11 +1056,13 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
     // the only place it can be tested honestly: the harness runs inside
     // wintcp.exe, so GetCurrentProcessId() here is the self PID the bug was
     // about, checked against the real rule rather than a synthetic stand-in.
-    // ---- 5.3 change-log event mask (SMOKE: the filter actually filters) ----
-    // The one capability D25 added to the CLI with no GUI surface. The
+    // ---- change-log event mask (SMOKE: the filter actually filters) --------
+    // The one capability added to the CLI with no GUI surface. The
     // filtering logic is pure and belongs in selftest (changelog.mask.*); what
     // only a window can prove is that the checkboxes exist, are wired, and that
-    // ticking one does not throw the window out of step.
+    // ticking one does not throw the window out of step. So this drives the
+    // real WM_COMMAND through the real controls and asks the window what it
+    // now believes - which is exactly the kind of check the harness exists for.
     Mark("change-log mask");
     {
         // Of() takes a narrow arg and widens it, so the PID is formatted narrow
@@ -1071,13 +1071,13 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         ::sprintf_s(selfBuf, "%lu",
                     static_cast<unsigned long>(::GetCurrentProcessId()));
         Check(Of(w, "killVerdict", selfBuf) == "self",
-              "SMOKE D29: wintcp's own PID is refused as a kill target",
+              "SMOKE self-kill guard: wintcp's own PID is refused as a kill target",
               "verdict=" + Of(w, "killVerdict", selfBuf) +
                   " (self pid " + selfBuf + ")");
         // 4 is the System pseudo-process: also refused, and it is the case a
         // wildcard listening row produces on every machine.
         Check(Of(w, "killVerdict", "4") == "pseudo",
-              "SMOKE D29: the System pseudo-PID is refused",
+              "SMOKE self-kill guard: the System pseudo-PID is refused",
               "verdict=" + Of(w, "killVerdict", "4"));
         // And an ordinary foreign PID must still be ALLOWED - a guard that
         // refuses everything passes the two checks above and is useless. 999999
@@ -1085,18 +1085,18 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // verdict is about the RULE, not about liveness, and a live target
         // would make this test depend on what the machine happens to be doing.
         Check(Of(w, "killVerdict", "999999") == "ok",
-              "SMOKE D29: the guard does not refuse foreign PIDs",
+              "SMOKE self-kill guard: the guard does not refuse foreign PIDs",
               "999999 -> " + Of(w, "killVerdict", "999999"));
     }
     {
         ChangeLogWindow* log = w.ChangeLogForTest();
         Check(log != nullptr,
-              "SMOKE 5.3 change log: the window object is reachable");
+              "SMOKE change log: the window object is reachable");
         if (log != nullptr) {
             Cmd(hwnd, IDM_FILE_CHANGELOG_WIN);   // open it
             Pump(700);
             Check(log->IsVisible(),
-                  "SMOKE 5.3 change log: reopened for the mask check");
+                  "SMOKE change log: reopened for the mask check");
             // Read Handle() AFTER opening. The previous section closed the log
             // with the menu item, which calls Close() -> DestroyWindow, so the
             // window and all its child controls were destroyed and Show() has to
@@ -1106,13 +1106,13 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             // with an empty detail while the checkbox was present and working.
             const HWND loghwnd = log->Handle();
             Check(loghwnd != nullptr,
-                  "SMOKE 5.3 change log: the reopened window has a handle");
+                  "SMOKE change log: the reopened window has a handle");
 
             // Default is everything on - the behaviour must be unchanged for
             // anyone who never touches the boxes.
             Check(log->EventAppear() && log->EventDisappear() &&
                       log->EventState() && log->EventMaskIsFull(),
-                  "SMOKE 5.3 change log: the mask starts fully on");
+                  "SMOKE change log: the mask starts fully on");
 
             // Ticking "appear" OFF, through the real control.
             // Find the Appear checkbox by CAPTION, walking the direct children.
@@ -1167,7 +1167,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             // which would say "no checkbox" and hide the real fault.
             const HWND anyChild = ::GetWindow(loghwnd, GW_CHILD);
             Check(anyChild != nullptr,
-                  "SMOKE 5.3 change log: WM_CREATE built the window's controls",
+                  "SMOKE change log: WM_CREATE built the window's controls",
                   "WM_CREATE has run " +
                       std::string(Of(w, "changeLogCreates", "")) +
                       " time(s); children made: " +
@@ -1175,7 +1175,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                       ", first CreateWindowExW GetLastError=" +
                       std::string(Of(w, "changeLogLastError", "")) + "; " +
                       caps);
-            Check(found, "SMOKE 5.3 change log: the Appear checkbox exists", caps);
+            Check(found, "SMOKE change log: the Appear checkbox exists", caps);
             if (found) {
                 // Click it the way a user does: BM_CLICK, which sets the check
                 // state AND posts the BN_CLICKED notification to the parent -
@@ -1190,13 +1190,13 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                 Pump(400);
                 Check(!log->EventAppear() && log->EventDisappear() &&
                           log->EventState(),
-                      "SMOKE 5.3 change log: unticking Appear narrows the mask",
+                      "SMOKE change log: unticking Appear narrows the mask",
                       std::string("after the click the window reports appear=") +
                           (log->EventAppear() ? "ON" : "off") + " disappear=" +
                           (log->EventDisappear() ? "ON" : "off") + " state=" +
                           (log->EventState() ? "ON" : "off"));
                 Check(!log->EventMaskIsFull(),
-                      "SMOKE 5.3 change log: a narrowed mask is reported as "
+                      "SMOKE change log: a narrowed mask is reported as "
                       "narrowed");
                 // ...and events of the excluded kind are now dropped, which is
                 // the whole point: the status line must stop counting them.
@@ -1224,7 +1224,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
                 log->AppendEvents(onlyAppear);
                 Pump(200);
                 Check(log->Count() == before,
-                      "SMOKE 5.3 change log: an excluded event is not recorded",
+                      "SMOKE change log: an excluded event is not recorded",
                       "count went " + std::to_string(before) + " -> " +
                           std::to_string(log->Count()));
             }
@@ -1232,13 +1232,13 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             log->SetEventMask(true, true, true);
             Pump(200);
             Check(log->EventMaskIsFull(),
-                  "SMOKE 5.3 change log: the mask can be restored");
+                  "SMOKE change log: the mask can be restored");
             Cmd(hwnd, IDM_FILE_CHANGELOG_WIN);   // close again
             Pump(400);
         }
     }
 
-    // ---- 5.3 bookmarks (SMOKE: menu wiring + survival, no dialogs) --------
+    // ---- bookmarks (SMOKE: menu wiring + survival, no dialogs) ------------
     // Pin/note/colour semantics are proven headless by the bookmark.*
     // selftests and live by the `bookmark` CLI verbs; here the menu item
     // only has to run without disturbing the list. The ADD path always
@@ -1265,7 +1265,7 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         const long chosen = (long)::SendMessageW(
             list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_FOCUSED);
         std::snprintf(line, sizeof(line),
-                      "SMOKE 5.3 bookmark: a row is selected for the command "
+                      "SMOKE bookmark: a row is selected for the command "
                       "(%ld)", chosen);
         Check(chosen >= 0, line, "could not select a row");
 
@@ -1307,28 +1307,28 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
             Pump(500);
             const long after = Num(w, "rowCount");
             std::snprintf(line, sizeof(line),
-                          "SMOKE 5.3 bookmark: the command removes a planted "
+                          "SMOKE bookmark: the command removes a planted "
                           "bookmark and leaves the list intact "
                           "(%ld -> %ld rows)", before, after);
             Check(after > 0, line, "the list emptied during the command");
             Check(!Bookmarks::IsBookmarked(addr, static_cast<UINT>(port)),
-                  "SMOKE 5.3 bookmark: the pin is really gone",
+                  "SMOKE bookmark: the pin is really gone",
                   "registry still lists it");
         } else {
-            Say("  [skip] SMOKE 5.3 bookmark: row 0 has no bookable remote "
+            Say("  [skip] SMOKE bookmark: row 0 has no bookable remote "
                 "endpoint; add/remove semantics are covered by the `bookmark` "
                 "CLI verb and the bookmark.* selftests\n");
         }
     }
 
-    // ---- 4.3 GeoIP --------------------------------------------------------
+    // ---- GeoIP ------------------------------------------------------------
     {
         Check(!Is(w, "geoLoaded", 1),
-              "SMOKE 4.3 GeoIP: not loaded until a database is chosen",
+              "SMOKE GeoIP: not loaded until a database is chosen",
               "unexpectedly already loaded");
     }
 
-    // ---- 7.5 / 7.6 About and the shortcut sheet ---------------------------
+    // ---- About and the shortcut sheet -------------------------------------
     Mark("command-path");
     {
         // About and the shortcut sheet open MODAL dialogs, which cannot be

@@ -63,7 +63,7 @@ struct Capability {
 
 // Probe every optional capability once and cache the answer. Cheap: each probe
 // is one LoadLibrary of a DLL the loader already mapped, one function lookup, or
-// - for the capture row added in 9.2.7 - two GetFileAttributes calls on exes
+    // - for the capture row - two GetFileAttributes calls on exes
 // that are always mapped into the loader's search path anyway.
 //
 // CALLED FROM exactly one place: BuildInfo.cpp's "This run" block, which both

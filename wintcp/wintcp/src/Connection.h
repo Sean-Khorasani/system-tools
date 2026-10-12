@@ -120,27 +120,27 @@ struct Connection {
     FILETIME processCreate = {};
     bool processCreateKnown = false;
 
-    // --- per-process security metadata (F5.1 / F5.2 / F5.3) ---------------
+    // --- per-process security metadata ---------------
     // All three are properties of the PROCESS, resolved once per distinct PID
     // and copied onto each of its rows - the same relationship PID and the
     // process name already have. That is why they are columns rather than a
     // separate process view: the unit that matters ("who owns this socket") is
     // the row, so a reader looking at one socket should not have to go looking
     // for its process elsewhere.
-    DWORD ppid = 0;                 // F5.1: parent PID
+    DWORD ppid = 0;                 // parent PID
     bool ppidKnown = false;
     std::wstring parentName;       // parent's image name; "" when the snapshot
                                     // did not contain it (which is NOT the same
                                     // as "has no parent")
-    unsigned integrity = 0;         // F5.2: IntegrityLevel, 0 = unknown
-    bool appContainer = false;      // F5.2: sandboxed, whatever the level says
-    unsigned signature = 0;         // F5.3: SignatureState, 0 = not checked
+    unsigned integrity = 0;         // IntegrityLevel, 0 = unknown
+    bool appContainer = false;      // sandboxed, whatever the level says
+    unsigned signature = 0;         // SignatureState, 0 = not checked
 
     // --- traffic counters --------------------------
     ULONGLONG trafficRx = 0;
     ULONGLONG trafficTx = 0;
 
-    // --- per-connection rate (task: bandwidth column) ---------------------
+    // --- per-connection rate (bandwidth column) ---------------------
     // Bytes/second between the previous and current snapshot. Only the
     // per-socket source can attribute bytes to a single row; the ETW source
     // is per-PID, so those rows keep bpsKnown false and the column shows
@@ -158,7 +158,7 @@ struct Connection {
     ULONGLONG lastRxBytes = 0;       // per-row counters at that sample
     ULONGLONG lastTxBytes = 0;
 
-    // --- per-connection rate, summed over the socket's PROCESS (G5) --------
+    // --- per-connection rate, summed over the socket's PROCESS --------
     // rxBps/txBps above are this ONE socket's rate. A `--group` row stands for
     // a whole process, so it needs the process's total, and the two are not
     // interchangeable: a process with 20 connections has 20 sockets, and a
@@ -169,7 +169,7 @@ struct Connection {
     // which is the exact failure `perRowBytes` exists to prevent - and it is
     // worse here, because a group has a denominator that varies per refresh.
     // The sum is only as correct as the socket set it adds up, which is why
-    // D20's duplicate-identity work (PID in the row key, plus a per-key queue)
+    // The duplicate-identity work (PID in the row key, plus a per-key queue)
     // is load-bearing here and not merely tidy.
     //
     // groupBpsKnown is SEPARATE from bpsKnown on purpose: per-connection Speed
@@ -193,7 +193,7 @@ struct Connection {
     ULONGLONG lastGroupTxBytes = 0;
     ULONGLONG lastGroupTick = 0;
 
-    // --- TCP congestion state (G6, from TCP_INFO_v0) ----------------------
+    // --- TCP congestion state (from TCP_INFO_v0) ----------------------
     // Per-connection, like the rate above, and only ever set from the
     // per-socket source: a process-level view of an RTT is not a thing. In
     // MILLISECONDS, normalised at the SocketTcpInfo boundary - see the note on
@@ -224,7 +224,7 @@ struct Connection {
     // unknown (e.g. a row that appeared before this field existed).
     ULONGLONG firstSeenTick = 0;
 
-    // --- ghost retention (F5.7) ---------------------------------------------
+    // --- ghost retention ---------------------------------------------
     // firstSeenTick is the row's birth; deathTick is the snapshot tick at which
     // the socket left the table, set once when the row is first marked kRowRemoved.
     // finalRx/finalTx freeze the last byte counters at the moment of death, so a
@@ -249,7 +249,7 @@ struct Connection {
     TlsInfo tls;
     std::wstring country;            // GeoIP, empty when no database loaded
 
-    // F5.4 ASN. Two fields rather than one formatted string, because the two
+    // ASN. Two fields rather than one formatted string, because the two
     // halves are filtered differently: `asn:15169` is a number comparison and
     // `asn:google` a substring one. Deliberately plain rather than an
     // AsnInfo - that type belongs to GeoIp.h, and Connection.h must not have to
@@ -287,7 +287,7 @@ struct Connection {
     std::wstring lowerLocal;
     std::wstring lowerRemote;
     std::wstring lowerProcess;
-    std::wstring lowerParent;           // F5.1: lower-cased parent image name
+    std::wstring lowerParent;           // lower-cased parent image name
     std::wstring lowerPath;
     std::wstring lowerService;
     std::wstring lowerHost;

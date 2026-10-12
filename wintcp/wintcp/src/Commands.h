@@ -30,7 +30,7 @@
 #include "Connection.h"
 #include "ConnectionStore.h"
 #include "DetailModel.h"
-#include "ProcessTree.h"   // 9.5.6: CmdKillTree's plan
+#include "ProcessTree.h"   // CmdKillTree's plan
 #include "Snapshot.h"
 #include "SysStats.h"
 #include "TcpReasm.h"
@@ -115,7 +115,7 @@ struct CommandResult {
 };
 
 // Write straight to stdout WHILE a command is still running (the CLI's
-// streaming path, D15: the table's fixed header goes out before the slow
+// streaming path: the table's fixed header goes out before the slow
 // enrichment joins, the rows follow in CommandResult.out when they are
 // ready). Defined in CliCommands.cpp next to the writer it wraps; a verb
 // only calls it when its own options opt in (ListOptions::streamHeader), so
@@ -129,7 +129,7 @@ bool BuildStoreSnapshot(SnapshotSource& source, ConnectionStore& store,
                         bool procStats, bool resolveDns, bool geoIp,
                         const wchar_t* geoIpPath, std::wstring* error);
 
-// 9.2.4: the process-lifetime traffic sampler, or nullptr if no --traffic verb
+// the process-lifetime traffic sampler, or nullptr if no --traffic verb
 // has created one yet. Lets a caller REPORT what the scan could not measure
 // without creating a sampler to ask - creating one would probe SIO_TCP_INFO
 // (a loopback connect) and would answer about a different object than the one
@@ -145,7 +145,7 @@ struct ListOptions {
     bool sortAsc = true;
     bool grouped = false;
     size_t limit = 0;             // 0 = no limit
-    // Output shape: "table" (aligned columns for humans - D14), "csv",
+    // Output shape: "table" (aligned columns for humans), "csv",
     // "tsv" (raw tabs, the machine shape table used to be) or "json".
     // There is deliberately no "jsonl" VALUE here: --format jsonl is this
     // same "json" with jsonLines set, so every rule keyed on the format -
@@ -168,19 +168,19 @@ struct ListOptions {
     //   traffic: per-PID byte totals via the bounded socket sampler
     //   dns:     blocking reverse-DNS for the printed rows (use --limit!)
     //   geoIpPath: load this .mmdb and join country codes ("" = off)
-    //   signatures: verify each distinct process image (F5.3, "" = off)
+    //   signatures: verify each distinct process image ("" = off)
     bool traffic = false;
     bool dns = false;
-    // 9.2.8: per-lookup budget (ms) for the CLI --dns one-shot join. A lookup
+    // per-lookup budget (ms) for the CLI --dns one-shot join. A lookup
     // that exceeds it is shown as `host: pending` instead of stalling the run;
     // the count of such stalls is reported on stderr. 0 = DnsResolver default.
     unsigned dnsTimeoutMs = 0;
     std::wstring geoIpPath;
-    // F5.4: the ASN database, which is a SEPARATE file from the country one.
+    // the ASN database, which is a SEPARATE file from the country one.
     // GeoLite2-Country and GeoLite2-ASN are different products with different
     // record shapes, so one --db cannot supply both; "" = off.
     std::wstring asnIpPath;
-    // F5.3: verify each distinct process image with WinVerifyTrust, so the
+    // verify each distinct process image with WinVerifyTrust, so the
     // Signature column and the `signed:` filter have something to report.
     // Opt-in because the trust provider is far too slow to run per pass by
     // default; cached per image path, so the cost is once per binary.
@@ -190,7 +190,7 @@ struct ListOptions {
     bool changes = false;
     // Stream the fixed column header to stdout as soon as the snapshot is
     // built - before the (potentially multi-second) enrichment joins - and
-    // send the rows along in CommandResult.out afterwards (D15). The CLI's
+    // send the rows along in CommandResult.out afterwards. The CLI's
     // list verb sets it; json has no header line, --quiet prints nothing,
     // and in-process callers leave it false so their CommandResult.out stays
     // a complete, self-contained rendering.
@@ -251,7 +251,7 @@ std::vector<FilterClause> PreJoinClauses(const std::wstring& filter);
 // nothing is missing or --quiet is set. Pure: no snapshot, no network.
 std::string MissingEnrichmentAdvice(const ListOptions& opt);
 
-// 9.2.2: the FILTER half of that advice - no quiet gate, no column half.
+// the FILTER half of that advice - no quiet gate, no column half.
 // The CLI refuses a `--quiet` run whose filter needs a switch that is off
 // (exit 2) and calls this to see exactly what the advisory path suppresses.
 // Only filter clauses qualify: `--quiet`'s exit code answers "does the
@@ -260,9 +260,9 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt);
 // View-scoped enrichment for list/export: DNS + GeoIP + traffic over the
 // printed rows only. False + err when the GeoIP database fails. 'advice'
 // (optional) receives advisory hints - the missing-switch note above and the
-// D3 unenrichable-window hint - never fatal, never on stdout. When the filter
+// unenrichable-window hint - never fatal, never on stdout. When the filter
 // holds an enrichment clause the view is (re)applied here, AFTER the joins,
-// so the caller renders - and D3 inspects - the rows the joins actually
+// so the caller renders - and the hint inspects - the rows the joins actually
 // filled (an export otherwise wrote a silent 0-row file).
 bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
                        std::wstring* err, std::string* advice = nullptr);
@@ -276,14 +276,14 @@ struct EnrichOptions {
     bool procStats = true;
     bool traffic = false;
     bool dns = false;
-    // 9.2.8: per-lookup budget for --dns (ms). 0 = resolver default.
+    // per-lookup budget for --dns (ms). 0 = resolver default.
     unsigned dnsTimeoutMs = 0;
     std::wstring geoIpPath;
-    // F5.4: the ASN database, which is a SEPARATE file from the country one.
+    // the ASN database, which is a SEPARATE file from the country one.
     // GeoLite2-Country and GeoLite2-ASN are different products with different
     // record shapes, so one --db cannot supply both; "" = off.
     std::wstring asnIpPath;
-    // F5.3, for `details`, which shares this shape with `list`.
+    // for `details`, which shares this shape with `list`.
     bool signatures = false;
 };
 
@@ -319,7 +319,7 @@ void ApplyPresetViewToStore(const ViewState& v, ConnectionStore& store,
 struct MutateOptions {
     bool yes = false;             // confirmed
     bool dryRun = false;          // print plan, change nothing
-    // 9.3.6: how `kill` ends the process. Neither set = the documented
+    // how `kill` ends the process. Neither set = the documented
     // hybrid (WM_CLOSE, wait kKillGraceMs, then TerminateProcess).
     bool closeOnly = false;       // WM_CLOSE + wait only; never terminate
     bool forceNow = false;        // terminate immediately; no WM_CLOSE
@@ -327,7 +327,7 @@ struct MutateOptions {
 
 // Can this process be ended, and if not, why.
 //
-// D29. A pure function on purpose: the decision belongs to the abstract layer
+// A pure function on purpose: the decision belongs to the abstract layer
 // so the GUI's context menu, the GUI's handler and the CLI all apply ONE rule,
 // and so the rule can be pinned by a selftest with no window and no real
 // process. "Can it be ended" sounds like a property of the process, but it is
@@ -364,7 +364,7 @@ CommandResult BlockNow(const BlockRequest& req, const MutateOptions& mo);
 // copy paths, so the two front ends cannot drift. 'cols' is any ColumnId
 // list (usually the visible columns in display order, or a CLI column set).
 // includeHeader=false suppresses the title line so the streaming CLI can
-// print it first (D15); the default keeps the historical one-shot output.
+// print it first; the default keeps the historical one-shot output.
 std::string RenderDelimitedRows(const std::vector<Connection>& rows,
                                 const std::vector<int>& cols, char delim,
                                 bool rfcCsv, bool includeHeader = true);
@@ -381,7 +381,7 @@ std::vector<int> DefaultExportColumns();
 
 CommandResult CmdKill(SnapshotSource& source, DWORD pid,
                        const MutateOptions& mo);
-// 9.5.6: kill a process and everything under it. Best-effort by contract -
+// kill a process and everything under it. Best-effort by contract -
 // it ends what it can and reports what survived, where `kill` is
 // all-or-nothing. The plan's shape lives in ProcessTree (pure, tested); this
 // builds it from the snapshot and works it deepest-first, re-checking the
@@ -399,7 +399,7 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
 // `blocks`: the count by default. With 'listRules' the rules themselves are
 // listed instead, in 'format' (table, csv or json). The listing path never
 // calls CountWinTcpRules, so looking cannot change the number the count
-// prints - that is the property 9.2.9 has to preserve.
+// prints - that is the property that has to be preserved.
 CommandResult CmdBlocks(bool listRules = false,
                         const std::string& format = "table");
 
@@ -409,7 +409,7 @@ CommandResult CmdBlocks(bool listRules = false,
 bool ConnectionToBlockRequest(const Connection& c, BlockRequest* out,
                               std::wstring* whyNot);
 
-// ---- 9.5.5: a stated policy rule --------------------------------------------
+// ---- a stated policy rule --------------------------------------------
 // What `block --rule` sends to the engine. Deliberately the CLI's shape rather
 // than FwRule itself: the CLI speaks in words ("tcp", "any") and the engine in
 // the firewall's own constants, and that one mapping is easier to review in one
@@ -434,7 +434,7 @@ CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes);
 // ---- bookmark --------------------------------------------------------------
 CommandResult CmdBookmarkList(const std::string& format);
 
-// 9.2.10: the bookmark file. Export writes every bookmark as a Version=1 JSON
+// the bookmark file. Export writes every bookmark as a Version=1 JSON
 // document; import reads one and adds what it holds, refusing the WHOLE file
 // when the codec refuses it (so a partial import cannot happen).
 //
@@ -456,7 +456,7 @@ CommandResult CmdBookmarkColour(const std::wstring& address, UINT port,
 // ---- preset ----------------------------------------------------------------
 CommandResult CmdPresetList(const std::string& format);
 
-// 9.2.10: the preset file. Same codec shape and the same all-or-nothing rule as
+// the preset file. Same codec shape and the same all-or-nothing rule as
 // the bookmark one - a preset that loads half is a view the user never saved,
 // and unlike a bookmark the failure is subtle, because it is believed.
 CommandResult CmdPresetExport(const std::wstring& outPath,
@@ -510,7 +510,7 @@ CommandResult CmdGeoIpInfo(SnapshotSource& source,
 // WinTCP firewall-rule ledger, and capture availability (tools + elevation).
 // Text here reuses AboutText/BuildSummary so `version` and `doctor` can never
 // disagree about process state.
-// 9.2.11 / F5.6. Every field is tri-state: -1 or unset means "leave alone", so a
+// Every field is tri-state: -1 or unset means "leave alone", so a
 // caller can change one switch without restating the whole configuration.
 // Values are in the domain the engine applies them in, so rates are bytes/sec.
 struct AlertFlags {
@@ -526,7 +526,7 @@ struct AlertFlags {
     std::string format;
 };
 
-// F5.6. Rule sub-commands: `alert rule add/list/remove`. add is the only one that
+// Rule sub-commands: `alert rule add/list/remove`. add is the only one that
 // carries a rule; the rest identify one by name.
 struct AlertRuleFlags {
     std::wstring name;
@@ -549,8 +549,8 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
 // ---- capture (follow stream) -----------------------------------------------
 //
 // `capture` grew from "print some counters" into the command-line replacement
-// for the GUI's Follow TCP stream, which was removed 2026-10-05 (todo.md 8.7
-// G2). The three switches below are that replacement, and the reasons they are
+// for the GUI's Follow TCP stream, which was removed 2026-10-05.
+// The three switches below are that replacement, and the reasons they are
 // switches rather than defaults are worth keeping:
 //
 //   text  - the payload was already in memory and was being thrown away. On the
@@ -583,7 +583,7 @@ struct CaptureOptions {
     // default stays a literal 0 so this header does not need to include it.
     unsigned eventFlags = 0;
 
-    // 9.3.7: an extra `pktmon filter add -i <ip>` address pin, passed through
+    // an extra `pktmon filter add -i <ip>` address pin, passed through
     // verbatim. Empty = do not add one, keeping the default single-connection
     // filter pktmon derives from the selected row. Validated as an IP in
     // CmdCapture, so the executor never ships a malformed token to pktmon.
@@ -607,7 +607,7 @@ bool ResolveColumnSpec(const std::wstring& spec, std::vector<int>& out);
 // ColumnId for a single column name, or -1 when unknown.
 int ColumnIdForName(const std::wstring& name);
 
-// 9.3.2: `help columns` / `help filters` text, generated from the same tables
+// `help columns` / `help filters` text, generated from the same tables
 // (ColumnTitle, JsonKeyFor, ColumnIsPerConnectionOnly, kColumnSet*) the parser
 // uses, so the reference can never drift from accepted spellings.
 std::string HelpColumnsText();

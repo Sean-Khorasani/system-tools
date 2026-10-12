@@ -4,7 +4,7 @@
 //
 // Every function here has the SAME signature and semantics as the original
 // it replaces, and is measured against a copy of that original by the A/B
-// bench in wintcp/tests/asm (see wintcp/tests/asm/AGENTS.md for the per-
+// bench in wintcp/tests/asm (see its documentation for the per-
 // candidate results). Only the functions that measured FASTER are wired
 // into the product; the ones that measured slower are kept here purely as
 // evidence and are not called from anywhere.
@@ -285,8 +285,8 @@ bool IsGlobalUnicastV6Opt(const unsigned char a[16]);
 // Original: ConnectionStore.cpp:1304-1326 ReplaceSnapshot PrevKeyIndex
 // (unordered_map key -> FIFO queue, backwards build + pop_back).
 //
-// Optimization: same algorithm, faster key hash (FNV-1a lanes from
-// P1 #11 instead of std::hash<string_view>) + reserve. A sort-merge
+// Optimization: same algorithm, faster key hash (FNV-1a lanes
+// instead of std::hash<string_view>) + reserve. A sort-merge
 // variant was measured 2.4-3x SLOWER at these sizes (short keys hash
 // in ~2 lanes; sort pays O(n log n) full-key compares) and removed.
 // out[i] = previous index or -1.

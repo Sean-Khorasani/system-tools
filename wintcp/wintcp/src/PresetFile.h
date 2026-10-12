@@ -1,6 +1,6 @@
 // PresetFile.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.2.10 - preset export and import.
+// preset export and import.
 //
 // The sibling of BookmarkFile: a preset is a ViewState, and ViewState is a
 // value, so a preset file is a value too. That is what makes the codec pure -

@@ -6,7 +6,7 @@
 // original defect number in a comment).
 
 #include "ChartsWindow.h"
-#include "Alerts.h"   // FormatBps (C1: RateText removed, one rate formatter)
+#include "Alerts.h"   // FormatBps (RateText removed, one rate formatter)
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -29,16 +29,16 @@
 
 #include "Utils.h"
 #include "WinCaps.h"   // DllAvailable: pdh.dll is delay-loaded (see kDelayedDlls)
-#include "FontCache.h"   // F5.15: shared, DPI-correct fonts
-#include "Theme.h"       // G12/G23: shared system palette + HighContrastActive()
-#include "ChartExport.h"   // G34: in-window Export writes the existing CSV form
-#include <commdlg.h>     // G34: GetSaveFileNameW for the export picker
+#include "FontCache.h"   // shared, DPI-correct fonts
+#include "Theme.h"       // shared system palette + HighContrastActive()
+#include "ChartExport.h"   // in-window Export writes the existing CSV form
+#include <commdlg.h>     // GetSaveFileNameW for the export picker
 
 namespace wintcp {
 namespace {
 
 const UINT_PTR kChartsTimerId = 1;
-const UINT kChartsIntervalMs = 1000;   // B4: dev constant (with its ChartExport
+const UINT kChartsIntervalMs = 1000;   // dev constant (with its ChartExport
                                        // twin below): 1 s sampling is the panels'
                                        // contract, not a preference.
 
@@ -65,7 +65,7 @@ const double kPctScale = 100.0;
 const double kNetRateCapBitsPerSec = 100.0e9;
 const double kBitsPerByte = 8.0;
 
-// G12/G23: the background, text and grid colours are no
+// The background, text and grid colours are no
 // longer baked in here - LivePalette() (Theme.h) reads them
 // from the live system colours, so the charts follow the OS
 // theme (light, dark and high contrast) exactly as the main
@@ -103,7 +103,7 @@ const double kMinAutoScale = 64.0 * 1024.0;
 constexpr size_t kCaptionChars = 160;
 constexpr size_t kScaleLabelChars = 64;
 
-// G34: the button row's logical metrics. The row is reserved in OnPaint's
+// the button row's logical metrics. The row is reserved in OnPaint's
 // plot area and the buttons are positioned in WM_SIZE from the same
 // numbers, so paint and layout cannot disagree about where the charts end.
 constexpr int kBtnRowH96 = 36;
@@ -136,7 +136,7 @@ double MaxOf(const std::vector<double>& a, const std::vector<double>& b) {
     return m;
 }
 
-// C1: RateText lived here and did FormatBytes(x) + "/s" — the same job as
+// RateText lived here and did FormatBytes(x) + "/s" — the same job as
 // FormatBps (Alerts.h), with a different rounding ("2.0 KB/s" vs "2 KB/s").
 // Two same-job formatters is how one surface prints "2.0" and another "2" for
 // the same reading. Removed; the three call sites below use FormatBps, whose
@@ -287,7 +287,7 @@ LRESULT ChartsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE:
             CreateFonts();
             Sample();   // establish baselines immediately (no history yet)
-            // G34: focusable Export/Copy buttons. Positioned in WM_SIZE;
+            // focusable Export/Copy buttons. Positioned in WM_SIZE;
             // a null after a failed creation only loses the buttons, and
             // every use site below checks before touching them.
             hwndExport_ = ::CreateWindowExW(
@@ -317,7 +317,7 @@ LRESULT ChartsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             OnPaint();
             return 0;
         case WM_SIZE: {
-            // G34: the button row lives at the bottom-right; the plot area
+            // the button row lives at the bottom-right; the plot area
             // in OnPaint reserves the same row height, so the buttons never
             // cover a trace.
             const UINT dpi = QueryDpiForWindow(hwnd_);
@@ -341,7 +341,7 @@ LRESULT ChartsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case WM_SYSCOLORCHANGE:
-            // G23: the palette is read live from the system
+            // the palette is read live from the system
             // colours on every paint, so a theme or
             // high-contrast change only needs a repaint to
             // take effect - no cached colours to refresh.
@@ -372,7 +372,7 @@ LRESULT ChartsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_ERASEBKGND:
             return 1;   // fully painted in OnPaint (double-buffered)
         case WM_KEYDOWN:
-            // G22: Esc hides like every other secondary window (the 1 s
+            // Esc hides like every other secondary window (the 1 s
             // sampler stops with it, same as the X path, so a hidden
             // window costs nothing).
             if (wParam == VK_ESCAPE) {
@@ -413,7 +413,7 @@ void ChartsWindow::OnTimer() {
     Sample();
     if (hwnd_ == nullptr) return;
     ::InvalidateRect(hwnd_, nullptr, FALSE);
-    // G21: the values move every tick, so the accessible name follows
+    // the values move every tick, so the accessible name follows
     // them - the same derivation the captions paint (ValuesText), for
     // screen readers and UIA agents that cannot scrape the traces.
     SetAccessibleName(hwnd_, ValuesText());
@@ -603,7 +603,7 @@ void ChartsWindow::OnPaint() {
     const int bmpH = (std::max)(rc.bottom, 1L);
     HBITMAP bmp = ::CreateCompatibleBitmap(hdc, bmpW, bmpH);
     HGDIOBJ oldBmp = ::SelectObject(mem, bmp);
-    // G12/G23: base colours come from the shared palette (Theme.h), so
+    // base colours come from the shared palette (Theme.h), so
     // the charts follow the OS theme exactly as the main window does.
     // Light and high-contrast read the live system colours; dark reads
     // the one shared dark substitute every self-painting window uses -
@@ -620,7 +620,7 @@ void ChartsWindow::OnPaint() {
     const int pad = px(10);
     const int gap = px(8);
     const int panels = 4;
-    // G34: the bottom row belongs to the Export/Copy buttons (positioned
+    // the bottom row belongs to the Export/Copy buttons (positioned
     // in WM_SIZE from the same kBtnRowH96), so the four traces end above
     // them instead of painting underneath.
     const int plotBottom = rc.bottom - px(kBtnRowH96);
@@ -634,7 +634,7 @@ void ChartsWindow::OnPaint() {
         std::wstring caption;           // current value(s); empty = none yet
         double fixedMax;                // > 0 = fixed 0..fixedMax scale
         const wchar_t* emptyMsg;        // override for "collecting…"
-        // Legend labels for the two-line panels (G11). A single-line
+        // Legend labels for the two-line panels. A single-line
         // panel has no legend - one line needs no key - so these are
         // null for CPU and Memory and non-null for Disk (R/W) and
         // Network (down/up), where two differently-coloured lines
@@ -693,13 +693,13 @@ void ChartsWindow::OnPaint() {
 
     const int titleH = px(20);
     // The dim caption tone follows the same dark branch as the base
-    // palette above, from the same shared constants (G12).
+    // palette above, from the same shared constants.
     const COLORREF dim =
         dark ? kSharedDarkDim : RGB(0x66, 0x66, 0x66);
-    // G23: under high contrast the fixed brand blues/oranges can sit on
+    // under high contrast the fixed brand blues/oranges can sit on
     // the scheme's own background unreadably, so the two series borrow
     // the system's contrast-picked highlight pair instead. Anywhere else
-    // they stay the app's own semantic colours (G12 documents why).
+    // they stay the app's own semantic colours.
     const bool hc = HighContrastActive();
     const COLORREF lineA =
         hc ? ::GetSysColor(COLOR_HIGHLIGHT) : kLineA;
@@ -714,7 +714,7 @@ void ChartsWindow::OnPaint() {
         // spaces when there is no value yet); ellipsize instead of
         // overflowing. On a two-line panel the right end of the row
         // is reserved for the colour legend, so a long caption
-        // ellipsizes before it rather than running under it (G11).
+        // ellipsizes before it rather than running under it.
         std::wstring line = d.name;
         if (!d.caption.empty()) {
             line += L"   ";
@@ -814,7 +814,7 @@ void ChartsWindow::OnPaint() {
         } else {
             double yMax = d.fixedMax;
             if (yMax <= 0.0) {
-                // G11's "per-series scale" suggestion, assessed and
+                // The "per-series scale" suggestion, assessed and
                 // rejected: the two-line panels exist so a reader can
                 // COMPARE the two series - disk read against disk write,
                 // network send against receive. Scaling each series to
@@ -880,7 +880,7 @@ void ChartsWindow::OnPaint() {
         ::DeleteObject(gridPen);
     }
 
-    // G35: before the first baselines land every panel says "collecting…"
+    // before the first baselines land every panel says "collecting…"
     // and nothing says what happens next. One line over the plot area
     // names the wait, so a blank window reads as working rather than
     // broken. (A source that stays dark - the disk "n/a" case - keeps its
@@ -907,7 +907,7 @@ void ChartsWindow::OnPaint() {
 }
 
 std::wstring ChartsWindow::ValuesText() const {
-    // G21/G34: the one derivation of "what the window currently says".
+    // the one derivation of "what the window currently says".
     // Captions paint it, Copy puts it on the clipboard, and the
     // accessible name announces it - so the three cannot disagree about
     // a value. A panel with no reading yet says so explicitly rather
@@ -950,7 +950,7 @@ std::wstring ChartsWindow::ValuesText() const {
 }
 
 void ChartsWindow::CopyValues() {
-    // G34: the keyboard/SR path to the numbers. The same table the
+    // the keyboard/SR path to the numbers. The same table the
     // captions paint and the accessible name announces, so copying is
     // reading, not a second derivation.
     const std::wstring text = ValuesText();
@@ -973,7 +973,7 @@ void ChartsWindow::CopyValues() {
 }
 
 void ChartsWindow::ExportCharts() {
-    // G34: the full histories as CSV through the existing ChartExport
+    // the full histories as CSV through the existing ChartExport
     // module - the window feeds it the same buffers it paints from, so
     // the file holds the numbers on screen. Same picker contract as the
     // change log's SaveToFile.

@@ -22,7 +22,7 @@
 #include <cstring>
 #include <limits>
 
-#include "Opt.h"   // 9.5.7: IsGlobalUnicastV4Opt / IsGlobalUnicastV6Opt
+#include "Opt.h"   // IsGlobalUnicastV4Opt / IsGlobalUnicastV6Opt
 
 // Only for the file mapping in Load() (CreateFileW, CreateFileMappingW,
 // MapViewOfFile). Deliberately not in
@@ -487,7 +487,7 @@ private:
     //
     // Size 3 is the 4-byte form, where the payload is a plain 32-bit offset and
     // the control byte's low three bits are IGNORED. It used to be refused
-    // outright as unimplemented, which is what the review flagged; all four
+    // outright as unimplemented; all four
     // forms are implemented now, and the two larger ones keep their spec bases
     // (2048 = 2^11, past every 11-bit size-0 value; 526336 = 2^19 + 2048, past
     // every 19-bit size-1 value) so the ranges cannot overlap.
@@ -675,7 +675,7 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     };
     if (error != nullptr) error->clear();
 
-    // 9.1.5: remember the path so the caller can persist it. Set BEFORE the
+    // Remember the path so the caller can persist it. Set BEFORE the
     // success/fail branches, so a failed load still records what was tried -
     // a stale path is the honest thing to hand back, and the only reader
     // (MainWindow) asks Loaded() first and persists "" when it is false.
@@ -785,7 +785,7 @@ bool GeoIpDatabase::Load(const std::wstring& path, std::wstring* error) {
     // Two DISTINCT faults, reported separately: a file with no tree at all and
     // a file whose records this reader cannot address have different causes and
     // different fixes, and collapsing them into one sentence is what made both
-    // reach the user as an unactionable "cannot load database" (F5.13).
+    // reach the user as an unactionable "cannot load database".
     if (nodeCount == 0) {
         return fail(L"The GeoIP database declares node_count = 0, so it contains "
                     L"no search tree.");
@@ -1255,7 +1255,7 @@ bool IsGlobalUnicastV6(const unsigned char a[16]) {
     return IsGlobalUnicastV6Opt(a);
 }
 
-// F5.11. `local:private` and `remote:private`. Defined as the exact inverse of
+// `local:private` and `remote:private`. Defined as the exact inverse of
 // the GeoIP predicate, so the two can never disagree: an address the Country
 // layer refuses to name is the same address a filter calls private.
 bool IsPrivateAddrV4(uint32_t a) { return !IsGlobalUnicastV4(a); }

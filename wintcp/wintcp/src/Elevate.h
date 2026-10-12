@@ -8,7 +8,7 @@
 // exist: neither SIO_TLS_INFO nor TLS_INFO_v0 appears anywhere in the
 // Windows Kits or Visual Studio trees, and TCP_INFO_v0/v1 carry no TLS
 // field. So there is no unelevated way to learn that a live connection is
-// TLS. See todo.md.
+// TLS.
 //
 // That leaves two real options, and this module serves the first: run
 // elevated and get the answer from ETW Schannel, which observes the

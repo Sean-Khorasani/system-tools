@@ -1,6 +1,6 @@
 // Sha256.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.5.7 - SHA-256 over a file image, plus the helpers the details view needs.
+// SHA-256 over a file image, plus the helpers the details view needs.
 //
 // WHY A LOCAL IMPLEMENTATION AND NOT BCrypt. Windows ships SHA-256 in
 // bcrypt.dll, and in principle one call would do: BCryptOpenAlgorithmProvider

@@ -1,10 +1,10 @@
 // BenchSync.cpp
 // SPDX-License-Identifier: Apache-2.0
 // The sync-and-hardening half of the selftest, split out of Bench.cpp under
-// the C12 constraint that permits it ("tests only, MAY split ... as an
-// optional standalone task").
+// the constraint that permits it ("tests only, MAY split ... as an optional
+// standalone task").
 //
-// These eight Check* functions are the batch landed after 9.2.9 (bookmark
+// These eight Check* functions are the batch that landed with the bookmark
 // and preset file codecs, the portable wintcp.ini grammar, the empty-state
 // button decision, the process tree and its kill plan, the SHA-256 image
 // hash and the exposure predicate). They share one property the older
@@ -30,7 +30,7 @@
 #include <iphlpapi.h>   // MIB_TCP_STATE_LISTEN, IPPROTO_TCP
 
 #include "BookmarkFile.h"
-#include "DnsCache.h"   // F5.5
+#include "DnsCache.h"
 #include "EmptyStateActions.h"
 #include "IniFile.h"
 #include "Opt.h"
@@ -90,13 +90,13 @@ void CheckBookmarkFile(TestResult& r) {
     SerialiseBookmarks(items, &json);
     std::string json2;
     SerialiseBookmarks(items, &json2);
-    Check(r, "9.2.10.serialise.deterministic", json == json2,
+    Check(r, "serialise.deterministic", json == json2,
           "len=" + std::to_string(json.size()));
-    Check(r, "9.2.10.serialise.declares-its-version",
+    Check(r, "serialise.declares-its-version",
           json.find("\"version\": 1") != std::string::npos, "");
     std::string empty;
     SerialiseBookmarks({}, &empty);
-    Check(r, "9.2.10.serialise.empty-list-is-valid",
+    Check(r, "serialise.empty-list-is-valid",
           empty.find("\"count\": 0") != std::string::npos, empty);
 
     // Round trip, including a note with a quote, a backslash, a newline and a
@@ -111,21 +111,21 @@ void CheckBookmarkFile(TestResult& r) {
     SerialiseBookmarks({tricky}, &tj);
     std::vector<Bookmark> back;
     std::wstring err;
-    Check(r, "9.2.10.roundtrip.parse-ok", ParseBookmarks(tj, &back, &err),
+    Check(r, "roundtrip.parse-ok", ParseBookmarks(tj, &back, &err),
           WideToUtf8(err));
-    Check(r, "9.2.10.roundtrip.one-record", back.size() == 1,
+    Check(r, "roundtrip.one-record", back.size() == 1,
           "n=" + std::to_string(back.size()));
     if (back.size() == 1) {
         const Bookmark& q = back[0];
-        Check(r, "9.2.10.roundtrip.address", q.address == tricky.address,
+        Check(r, "roundtrip.address", q.address == tricky.address,
               WideToUtf8(q.address));
-        Check(r, "9.2.10.roundtrip.port", q.port == tricky.port,
+        Check(r, "roundtrip.port", q.port == tricky.port,
               std::to_string(q.port));
-        Check(r, "9.2.10.roundtrip.tag", q.tag == tricky.tag,
+        Check(r, "roundtrip.tag", q.tag == tricky.tag,
               std::to_string(q.tag));
-        Check(r, "9.2.10.roundtrip.note-with-escapes",
+        Check(r, "roundtrip.note-with-escapes",
               q.note == tricky.note, WideToUtf8(q.note));
-        Check(r, "9.2.10.roundtrip.when", q.when == tricky.when,
+        Check(r, "roundtrip.when", q.when == tricky.when,
               std::to_string(q.when));
     }
 
@@ -139,71 +139,71 @@ void CheckBookmarkFile(TestResult& r) {
     std::string uj;
     SerialiseBookmarks({uni}, &uj);
     std::vector<Bookmark> ub;
-    Check(r, "9.2.10.roundtrip.unicode-note",
+    Check(r, "roundtrip.unicode-note",
           ParseBookmarks(uj, &ub, nullptr) && ub.size() == 1 &&
               ub[0].note == uni.note,
           WideToUtf8(ub.empty() ? L"no record" : ub[0].note));
 
     std::vector<Bookmark> nv;
-    Check(r, "9.2.10.refuse.missing-version",
+    Check(r, "refuse.missing-version",
           !ParseBookmarks("{\"schema\":\"wintcp-bookmarks\",\"bookmarks\":[]}",
                           &nv, &err) && !err.empty(),
           WideToUtf8(err));
-    Check(r, "9.2.10.refuse.future-version",
+    Check(r, "refuse.future-version",
           !ParseBookmarks("{\"version\":2,\"bookmarks\":[]}", &nv, &err) &&
               WideToUtf8(err).find("2") != std::string::npos,
           WideToUtf8(err));
-    Check(r, "9.2.10.refuse.non-numeric-version",
+    Check(r, "refuse.non-numeric-version",
           !ParseBookmarks("{\"version\":\"1\",\"bookmarks\":[]}", &nv, nullptr),
           "");
-    Check(r, "9.2.10.refuse.missing-array",
+    Check(r, "refuse.missing-array",
           !ParseBookmarks("{\"version\":1}", &nv, nullptr), "");
 
     // THE ONE THAT MATTERS: a corrupt LAST record must not let the good
     // records before it through.
-    Check(r, "9.2.10.refuse.bad-last-record-refuses-the-whole-file",
+    Check(r, "refuse.bad-last-record-refuses-the-whole-file",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                           "\"203.0.113.7\",\"port\":443,\"tag\":0,\"note\":"
                           "\"\"},{\"address\":\"198.51.100.22\",\"port\":"
                           "\"nope\",\"tag\":0,\"note\":\"\"}]}",
                           &nv, &err) && nv.empty(),
           "arrived=" + std::to_string(nv.size()));
-    Check(r, "9.2.10.refuse.missing-required-field",
+    Check(r, "refuse.missing-required-field",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"port\":443}]}", &nv,
                           &err) &&
               WideToUtf8(err).find("missing") != std::string::npos,
           WideToUtf8(err));
-    Check(r, "9.2.10.refuse.record-not-an-object",
+    Check(r, "refuse.record-not-an-object",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[\"203.0.113.7\"]}",
                           &nv, nullptr), "");
-    Check(r, "9.2.10.refuse.unterminated-array",
+    Check(r, "refuse.unterminated-array",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[}", &nv, nullptr), "");
-    Check(r, "9.2.10.refuse.unterminated-string",
+    Check(r, "refuse.unterminated-string",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[\"abc]}", &nv,
                           nullptr), "");
-    Check(r, "9.2.10.refuse.unterminated-document",
+    Check(r, "refuse.unterminated-document",
           !ParseBookmarks("{\"version\":1", &nv, nullptr), "");
-    Check(r, "9.2.10.refuse.trailing-content",
+    Check(r, "refuse.trailing-content",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[]} garbage", &nv,
                           nullptr), "");
-    Check(r, "9.2.10.refuse.not-an-object",
+    Check(r, "refuse.not-an-object",
           !ParseBookmarks("[1,2,3]", &nv, nullptr), "");
-    Check(r, "9.2.10.refuse.empty-document",
+    Check(r, "refuse.empty-document",
           !ParseBookmarks("", &nv, nullptr), "");
 
     // A control character inside a string is not valid JSON.
     std::string ctrl = "{\"version\":1,\"bookmarks\":[{\"address\":\"a\tb\","
                        "\"port\":1,\"tag\":0,\"note\":\"\"}]}";
-    Check(r, "9.2.10.refuse.control-char-in-string",
+    Check(r, "refuse.control-char-in-string",
           !ParseBookmarks(ctrl, &nv, nullptr), "");
     // An unpaired surrogate has no UTF-8 encoding.
-    Check(r, "9.2.10.refuse.unpaired-surrogate",
+    Check(r, "refuse.unpaired-surrogate",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                           "\"\\ud800\",\"port\":1,\"tag\":0,\"note\":\"\"}]}",
                           &nv, nullptr), "");
     // A correct surrogate PAIR is accepted.
     std::vector<Bookmark> pr;
-    Check(r, "9.2.10.accepts.a-surrogate-pair",
+    Check(r, "accepts.a-surrogate-pair",
           ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                          "\"1.2.3.4\",\"port\":1,\"tag\":0,\"note\":"
                          "\"\\ud83d\\ude00\"}]}",
@@ -215,16 +215,16 @@ void CheckBookmarkFile(TestResult& r) {
 
     // A fractional tag is refused rather than truncated to 1, which would be
     // a bookmark with a colour the user never picked.
-    Check(r, "9.2.10.refuse.fractional-tag",
+    Check(r, "refuse.fractional-tag",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                           "\"1.2.3.4\",\"port\":1,\"tag\":1.5,\"note\":\"\"}]}",
                           &nv, nullptr), "");
-    Check(r, "9.2.10.refuse.port-out-of-range",
+    Check(r, "refuse.port-out-of-range",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                           "\"1.2.3.4\",\"port\":70000,\"tag\":0,\"note\":"
                           "\"\"}]}",
                           &nv, nullptr), "");
-    Check(r, "9.2.10.refuse.negative-port",
+    Check(r, "refuse.negative-port",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                           "\"1.2.3.4\",\"port\":-1,\"tag\":0,\"note\":\"\"}]}",
                           &nv, nullptr), "");
@@ -232,7 +232,7 @@ void CheckBookmarkFile(TestResult& r) {
     // An address that does not normalise. Importing a bookmark whose key
     // differs from the key the GUI computes is importing a bookmark that can
     // never be found again.
-    Check(r, "9.2.10.refuse.address-does-not-normalise",
+    Check(r, "refuse.address-does-not-normalise",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[{\"address\":"
                           "\"not-an-ip\",\"port\":1,\"tag\":0,\"note\":\"\"}]}",
                           &nv, &err) && !WideToUtf8(err).empty(),
@@ -242,11 +242,11 @@ void CheckBookmarkFile(TestResult& r) {
     // fields, and a reader that rejected unknown keys would make every future
     // addition a breaking change.
     std::vector<Bookmark> ek;
-    Check(r, "9.2.10.accepts.unknown-top-level-key",
+    Check(r, "accepts.unknown-top-level-key",
           ParseBookmarks("{\"version\":1,\"future\":{\"x\":[1,2]},"
                          "\"bookmarks\":[]}",
                          &ek, nullptr), "");
-    Check(r, "9.2.10.refuse.null-output",
+    Check(r, "refuse.null-output",
           !ParseBookmarks("{\"version\":1,\"bookmarks\":[]}", nullptr,
                           nullptr), "");
 }
@@ -270,13 +270,13 @@ void CheckPresetFile(TestResult& r) {
     SerialisePresets(items, &json);
     std::string json2;
     SerialisePresets(items, &json2);
-    Check(r, "9.2.10.preset.deterministic", json == json2,
+    Check(r, "preset.deterministic", json == json2,
           "len=" + std::to_string(json.size()));
-    Check(r, "9.2.10.preset.declares-its-version",
+    Check(r, "preset.declares-its-version",
           json.find("\"version\": 1") != std::string::npos, "");
     std::string empty;
     SerialisePresets({}, &empty);
-    Check(r, "9.2.10.preset.empty-list-is-valid",
+    Check(r, "preset.empty-list-is-valid",
           empty.find("\"count\": 0") != std::string::npos, empty);
 
     // Round trip: every axis of ViewState survives, including the two that
@@ -284,27 +284,27 @@ void CheckPresetFile(TestResult& r) {
     // that dropped one of those would open a view the user did not save.
     std::vector<PresetRecord> back;
     std::wstring err;
-    Check(r, "9.2.10.preset.roundtrip.parse-ok",
+    Check(r, "preset.roundtrip.parse-ok",
           ParsePresets(json, &back, &err), WideToUtf8(err));
-    Check(r, "9.2.10.preset.roundtrip.two-records", back.size() == 2,
+    Check(r, "preset.roundtrip.two-records", back.size() == 2,
           "n=" + std::to_string(back.size()));
     if (back.size() == 2) {
         const PresetRecord& x = back[0];
-        Check(r, "9.2.10.preset.roundtrip.name", x.name == a.name,
+        Check(r, "preset.roundtrip.name", x.name == a.name,
               WideToUtf8(x.name));
-        Check(r, "9.2.10.preset.roundtrip.grouped", x.view.grouped, "");
-        Check(r, "9.2.10.preset.roundtrip.filter", x.view.filter == a.view.filter,
+        Check(r, "preset.roundtrip.grouped", x.view.grouped, "");
+        Check(r, "preset.roundtrip.filter", x.view.filter == a.view.filter,
               WideToUtf8(x.view.filter));
         const PresetRecord& y = back[1];
-        Check(r, "9.2.10.preset.roundtrip.sort-column",
+        Check(r, "preset.roundtrip.sort-column",
               y.view.sortColumn == COL_TRAFFIC,
               std::to_string(y.view.sortColumn));
-        Check(r, "9.2.10.preset.roundtrip.sort-asc",
+        Check(r, "preset.roundtrip.sort-asc",
               !y.view.sortAsc, "");
-        Check(r, "9.2.10.preset.roundtrip.col-visible",
+        Check(r, "preset.roundtrip.col-visible",
               y.view.colVisible == b.view.colVisible,
               std::to_string(y.view.colVisible));
-        Check(r, "9.2.10.preset.roundtrip.sources",
+        Check(r, "preset.roundtrip.sources",
               y.view.sources == b.view.sources,
               std::to_string(y.view.sources));
     }
@@ -314,7 +314,7 @@ void CheckPresetFile(TestResult& r) {
     const char* kFrozenNoTime =
         "{\"version\":1,\"presets\":[{\"name\":\"x\",\"frozen\":true}]}";
     std::vector<PresetRecord> nv;
-    Check(r, "9.2.10.preset.refuse.frozen-without-time",
+    Check(r, "preset.refuse.frozen-without-time",
           !ParsePresets(kFrozenNoTime, &nv, &err) && !WideToUtf8(err).empty(),
           WideToUtf8(err));
 
@@ -324,11 +324,11 @@ void CheckPresetFile(TestResult& r) {
     // a dialog.
     const char* kBadName =
         "{\"version\":1,\"presets\":[{\"name\":\"a\\\\b\",\"filter\":\"\"}]}";
-    Check(r, "9.2.10.preset.refuse.name-with-a-backslash",
+    Check(r, "preset.refuse.name-with-a-backslash",
           !ParsePresets(kBadName, &nv, nullptr), "");
     const char* kEmptyName =
         "{\"version\":1,\"presets\":[{\"name\":\"\",\"filter\":\"\"}]}";
-    Check(r, "9.2.10.preset.refuse.empty-name",
+    Check(r, "preset.refuse.empty-name",
           !ParsePresets(kEmptyName, &nv, nullptr), "");
 
     // A sort column outside the table is a view the renderer could not draw,
@@ -336,57 +336,57 @@ void CheckPresetFile(TestResult& r) {
     const char* kBadSort =
         "{\"version\":1,\"presets\":[{\"name\":\"x\",\"filter\":\"\","
         "\"sortColumn\":9999}]}";
-    Check(r, "9.2.10.preset.refuse.sort-column-out-of-range",
+    Check(r, "preset.refuse.sort-column-out-of-range",
           !ParsePresets(kBadSort, &nv, nullptr), "");
     const char* kNegSort =
         "{\"version\":1,\"presets\":[{\"name\":\"x\",\"filter\":\"\","
         "\"sortColumn\":-1}]}";
-    Check(r, "9.2.10.preset.refuse.negative-sort-column",
+    Check(r, "preset.refuse.negative-sort-column",
           !ParsePresets(kNegSort, &nv, nullptr), "");
 
     // THE ONE THAT MATTERS: a corrupt last record refuses the whole file.
     const char* kBadTail =
         "{\"version\":1,\"presets\":[{\"name\":\"good\",\"filter\":\"\"},"
         "{\"name\":\"bad\",\"filter\":123}]}";
-    Check(r, "9.2.10.preset.refuse.bad-last-record-refuses-the-whole-file",
+    Check(r, "preset.refuse.bad-last-record-refuses-the-whole-file",
           !ParsePresets(kBadTail, &nv, &err) && nv.empty(),
           "arrived=" + std::to_string(nv.size()));
-    Check(r, "9.2.10.preset.refuse.missing-required-field",
+    Check(r, "preset.refuse.missing-required-field",
           !ParsePresets("{\"version\":1,\"presets\":[{\"name\":\"x\"}]}", &nv,
                         &err) &&
               WideToUtf8(err).find("missing") != std::string::npos,
           WideToUtf8(err));
 
     // Version and document rules, same as the bookmark file's.
-    Check(r, "9.2.10.preset.refuse.missing-version",
+    Check(r, "preset.refuse.missing-version",
           !ParsePresets("{\"presets\":[]}", &nv, &err) && !err.empty(),
           WideToUtf8(err));
-    Check(r, "9.2.10.preset.refuse.future-version",
+    Check(r, "preset.refuse.future-version",
           !ParsePresets("{\"version\":2,\"presets\":[]}", &nv, nullptr), "");
-    Check(r, "9.2.10.preset.refuse.missing-array",
+    Check(r, "preset.refuse.missing-array",
           !ParsePresets("{\"version\":1}", &nv, nullptr), "");
-    Check(r, "9.2.10.preset.refuse.record-not-an-object",
+    Check(r, "preset.refuse.record-not-an-object",
           !ParsePresets("{\"version\":1,\"presets\":[\"x\"]}", &nv, nullptr),
           "");
-    Check(r, "9.2.10.preset.refuse.unterminated-array",
+    Check(r, "preset.refuse.unterminated-array",
           !ParsePresets("{\"version\":1,\"presets\":[}", &nv, nullptr), "");
-    Check(r, "9.2.10.preset.refuse.unterminated-document",
+    Check(r, "preset.refuse.unterminated-document",
           !ParsePresets("{\"version\":1", &nv, nullptr), "");
-    Check(r, "9.2.10.preset.refuse.trailing-content",
+    Check(r, "preset.refuse.trailing-content",
           !ParsePresets("{\"version\":1,\"presets\":[]} junk", &nv, nullptr),
           "");
-    Check(r, "9.2.10.preset.refuse.not-an-object",
+    Check(r, "preset.refuse.not-an-object",
           !ParsePresets("[1,2,3]", &nv, nullptr), "");
-    Check(r, "9.2.10.preset.refuse.empty-document",
+    Check(r, "preset.refuse.empty-document",
           !ParsePresets("", &nv, nullptr), "");
     std::string ctrl = "{\"version\":1,\"presets\":[{\"name\":\"a\tb\","
                        "\"filter\":\"\"}]}";
-    Check(r, "9.2.10.preset.refuse.control-char-in-string",
+    Check(r, "preset.refuse.control-char-in-string",
           !ParsePresets(ctrl, &nv, nullptr), "");
 
     // A boolean field must be true or false, not a number: "frozen":1 is not
     // a state anything can act on.
-    Check(r, "9.2.10.preset.refuse.boolean-as-a-number",
+    Check(r, "preset.refuse.boolean-as-a-number",
           !ParsePresets("{\"version\":1,\"presets\":[{\"name\":\"x\","
                         "\"filter\":\"\",\"grouped\":1}]}",
                         &nv, nullptr), "");
@@ -394,10 +394,10 @@ void CheckPresetFile(TestResult& r) {
     // An unknown extra key is accepted, so adding an axis later is not a
     // breaking change.
     std::vector<PresetRecord> ek;
-    Check(r, "9.2.10.preset.accepts.unknown-top-level-key",
+    Check(r, "preset.accepts.unknown-top-level-key",
           ParsePresets("{\"version\":1,\"future\":1,\"presets\":[]}", &ek,
                        nullptr), "");
-    Check(r, "9.2.10.preset.refuse.null-output",
+    Check(r, "preset.refuse.null-output",
           !ParsePresets("{\"version\":1,\"presets\":[]}", nullptr, nullptr), "");
 }
 
@@ -410,7 +410,7 @@ void CheckEmptyState(TestResult& r) {
     {
         const EmptyStateOffer o = DecideEmptyState(0, 0, false, false, false, true,
                                                    true, false, false);
-        Check(r, "9.4.2.quiet-machine-is-not-a-state",
+        Check(r, "quiet-machine-is-not-a-state",
               o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0,
               "caze=" + std::to_string((int)o.caze));
     }
@@ -418,7 +418,7 @@ void CheckEmptyState(TestResult& r) {
     {
         const EmptyStateOffer o = DecideEmptyState(100, 100, false, true, false,
                                                    false, true, false, true);
-        Check(r, "9.4.2.full-table-is-not-a-state",
+        Check(r, "full-table-is-not-a-state",
               o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
     }
 
@@ -426,9 +426,9 @@ void CheckEmptyState(TestResult& r) {
     {
         const EmptyStateOffer o = DecideEmptyState(50, 0, false, true, false,
                                                    false, true, false, true);
-        Check(r, "9.4.2.filter-match.picked-first",
+        Check(r, "filter-match.picked-first",
               o.caze == EmptyStateCase::kNoFilterMatch, "");
-        Check(r, "9.4.2.filter-match.offers-clear-and-edit",
+        Check(r, "filter-match.offers-clear-and-edit",
               o.offerClear && o.offerEdit && !o.offerPickGeo &&
                   !o.offerRunAdmin && o.ButtonCount() == 2,
               "n=" + std::to_string(o.ButtonCount()));
@@ -438,7 +438,7 @@ void CheckEmptyState(TestResult& r) {
         // answers are a question nobody asked, so it must not be shadowed.
         const EmptyStateOffer o = DecideEmptyState(10, 0, true, false, false, true,
                                                    false, false, false);
-        Check(r, "9.4.2.filter-match.outranks-geo-and-traffic",
+        Check(r, "filter-match.outranks-geo-and-traffic",
               o.caze == EmptyStateCase::kNoFilterMatch, "");
     }
 
@@ -446,10 +446,10 @@ void CheckEmptyState(TestResult& r) {
     {
         const EmptyStateOffer o = DecideEmptyState(20, 20, true, false, false,
                                                    false, true, false, false);
-        Check(r, "9.4.2.geo.picked-when-country-shown",
+        Check(r, "geo.picked-when-country-shown",
               o.caze == EmptyStateCase::kNoGeoIp, "");
         // No elevation button here: elevating does not install a database.
-        Check(r, "9.4.2.geo.offers-only-pick-mmdb",
+        Check(r, "geo.offers-only-pick-mmdb",
               o.offerPickGeo && !o.offerRunAdmin && !o.offerClear &&
                   o.ButtonCount() == 1,
               "n=" + std::to_string(o.ButtonCount()));
@@ -461,7 +461,7 @@ void CheckEmptyState(TestResult& r) {
             DecideEmptyState(20, 20, true, true, false, false, true, false, false);
         const EmptyStateOffer withAsn =
             DecideEmptyState(20, 20, true, false, true, false, true, false, false);
-        Check(r, "9.4.2.geo.either-database-satisfies",
+        Check(r, "geo.either-database-satisfies",
               withGeo.caze == EmptyStateCase::kNone &&
                   withAsn.caze == EmptyStateCase::kNone,
               "");
@@ -470,7 +470,7 @@ void CheckEmptyState(TestResult& r) {
         // A country column nobody is looking at is not an empty state.
         const EmptyStateOffer o = DecideEmptyState(20, 20, false, false, false,
                                                    false, true, false, false);
-        Check(r, "9.4.2.geo.hidden-column-is-not-a-state",
+        Check(r, "geo.hidden-column-is-not-a-state",
               o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
     }
 
@@ -479,9 +479,9 @@ void CheckEmptyState(TestResult& r) {
         // NOT elevated: the one click that helps is a relaunch, so it appears.
         const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, true,
                                                    false, false, false);
-        Check(r, "9.4.2.traffic.picked-when-column-shown",
+        Check(r, "traffic.picked-when-column-shown",
               o.caze == EmptyStateCase::kNoTraffic, "");
-        Check(r, "9.4.2.traffic.unelevated-gets-the-relaunch",
+        Check(r, "traffic.unelevated-gets-the-relaunch",
               o.offerRunAdmin && o.ButtonCount() == 1,
               "n=" + std::to_string(o.ButtonCount()));
     }
@@ -491,7 +491,7 @@ void CheckEmptyState(TestResult& r) {
         // so the button would do nothing and the click would be a lie.
         const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, true,
                                                    false, false, true);
-        Check(r, "9.4.2.traffic.elevated-gets-no-button",
+        Check(r, "traffic.elevated-gets-no-button",
               o.caze == EmptyStateCase::kNoTraffic && !o.offerRunAdmin &&
                   o.ButtonCount() == 0,
               "n=" + std::to_string(o.ButtonCount()));
@@ -502,7 +502,7 @@ void CheckEmptyState(TestResult& r) {
             20, 20, false, true, false, true, true, false, false);
         const EmptyStateOffer withSockets = DecideEmptyState(
             20, 20, false, true, false, true, false, true, true);
-        Check(r, "9.4.2.traffic.either-source-satisfies",
+        Check(r, "traffic.either-source-satisfies",
               withEtw.caze == EmptyStateCase::kNone &&
                   withSockets.caze == EmptyStateCase::kNone,
               "");
@@ -511,7 +511,7 @@ void CheckEmptyState(TestResult& r) {
         // Nobody is looking at a traffic column.
         const EmptyStateOffer o = DecideEmptyState(20, 20, false, true, false, false,
                                                    false, false, false);
-        Check(r, "9.4.2.traffic.hidden-column-is-not-a-state",
+        Check(r, "traffic.hidden-column-is-not-a-state",
               o.caze == EmptyStateCase::kNone && o.ButtonCount() == 0, "");
     }
 
@@ -524,7 +524,7 @@ void CheckEmptyState(TestResult& r) {
             10, 10, true, false, false, false, true, false, false);
         const EmptyStateOffer c = DecideEmptyState(
             10, 10, false, true, false, true, false, false, false);
-        Check(r, "9.4.2.every-case-carries-a-message",
+        Check(r, "every-case-carries-a-message",
               a.message[0] != L'\0' && b.message[0] != L'\0' &&
                   c.message[0] != L'\0',
               "");
@@ -545,16 +545,16 @@ void CheckProcessTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             node(100, 1), node(200, 100), node(300, 200), node(900, 1)};
         const ProcessTree t = BuildProcessTree(rows);
-        Check(r, "9.5.6.chain.root-count", t.rootCount == 2,
+        Check(r, "chain.root-count", t.rootCount == 2,
               "roots=" + std::to_string(t.rootCount));
-        Check(r, "9.5.6.chain.no-depth-exceeded", !t.depthExceeded, "");
+        Check(r, "chain.no-depth-exceeded", !t.depthExceeded, "");
         const std::vector<size_t> d = ProcessTreeDescendants(rows, 200);
-        Check(r, "9.5.6.chain.descendants-of-middle",
+        Check(r, "chain.descendants-of-middle",
               d.size() == 2 && d[0] == 1 && d[1] == 2,
               "n=" + std::to_string(d.size()));
         // Roots: the two whose parent pid is not in the set.
         const std::vector<size_t> roots = ProcessTreeRoots(rows);
-        Check(r, "9.5.6.chain.roots-in-row-order",
+        Check(r, "chain.roots-in-row-order",
               roots.size() == 2 && roots[0] == 0 && roots[1] == 3,
               "n=" + std::to_string(roots.size()));
     }
@@ -584,15 +584,15 @@ void CheckProcessTree(TestResult& r) {
                     if (o.pid == n.ppid) claimed = true;
             if (claimed) allRootsAreRoots = false;
         }
-        Check(r, "9.5.6.roots-first.range-is-roots", allRootsAreRoots,
+        Check(r, "roots-first.range-is-roots", allRootsAreRoots,
               "rootCount=" + std::to_string(t.rootCount));
-        Check(r, "9.5.6.roots-first.root-is-pid-100",
+        Check(r, "roots-first.root-is-pid-100",
               t.rootCount == 1 && t.nodes[0].info.pid == 100,
               "rootPid=" + std::to_string(t.rootCount ? t.nodes[0].info.pid
                                                       : 0));
         // Every node is still reachable from the roots, so reordering lost
         // nothing: node count is the process count.
-        Check(r, "9.5.6.roots-first.nothing-lost", t.nodes.size() == 3,
+        Check(r, "roots-first.nothing-lost", t.nodes.size() == 3,
               "n=" + std::to_string(t.nodes.size()));
         // And the child moved to a non-root index with its parent's link
         // remapped, not pointing at a stale slot. (auto, because this file's
@@ -604,7 +604,7 @@ void CheckProcessTree(TestResult& r) {
             if (c < t.rootCount || c >= t.nodes.size()) childLinksOk = false;
             else if (t.nodes[c].info.ppid != 100) childLinksOk = false;
         }
-        Check(r, "9.5.6.roots-first.children-remapped", childLinksOk,
+        Check(r, "roots-first.children-remapped", childLinksOk,
               "children=" + std::to_string(root.children.size()));
     }
 
@@ -622,7 +622,7 @@ void CheckProcessTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             node(0, 0), node(10, 0), node(11, 10), node(12, 10)};
         const KillTreePlan plan = PlanKillTree(rows, 10, 0);
-        Check(r, "9.5.6.plan.row-indices-with-skipped-row",
+        Check(r, "plan.row-indices-with-skipped-row",
               plan.targets.size() == 3 &&
                   Pids(rows, plan) == std::vector<DWORD>({11, 12, 10}),
               PidsText(rows, plan));
@@ -637,12 +637,12 @@ void CheckProcessTree(TestResult& r) {
         const std::vector<size_t> d = ProcessTreeDescendants(rows, 100);
         // The whole set is reachable, so the set is the answer - but the walk
         // must still TERMINATE, which is what reaching here proves.
-        Check(r, "9.5.6.cycle.walk-terminates",
+        Check(r, "cycle.walk-terminates",
               d.size() == 3, "n=" + std::to_string(d.size()));
         const ProcessTree t = BuildProcessTree(rows);
         // No node in a pure cycle can be a root, so nothing is visited and
         // nothing is rendered - the cycle is reported rather than drawn.
-        Check(r, "9.5.6.cycle.build-does-not-loop",
+        Check(r, "cycle.build-does-not-loop",
               t.nodes.size() == 3, "n=" + std::to_string(t.nodes.size()));
     }
     {
@@ -650,7 +650,7 @@ void CheckProcessTree(TestResult& r) {
         // child, which would make it its own root and its own subtree.
         const std::vector<TreeNodeInfo> rows = {node(100, 100)};
         const ProcessTree t = BuildProcessTree(rows);
-        Check(r, "9.5.6.cycle.self-parent-is-not-a-parent",
+        Check(r, "cycle.self-parent-is-not-a-parent",
               t.rootCount == 1 && t.nodes[0].children.empty(),
               "roots=" + std::to_string(t.rootCount));
     }
@@ -661,14 +661,14 @@ void CheckProcessTree(TestResult& r) {
         // defined by observation ("nobody claims me") rather than by PPID.
         const std::vector<TreeNodeInfo> rows = {node(200, 999), node(100, 1)};
         const std::vector<size_t> roots = ProcessTreeRoots(rows);
-        Check(r, "9.5.6.roots.parent-exited-makes-a-root",
+        Check(r, "roots.parent-exited-makes-a-root",
               roots.size() == 2, "n=" + std::to_string(roots.size()));
     }
     {
         // ppid NOT known: still a root, and never claimed.
         const std::vector<TreeNodeInfo> rows = {node(200, 0, false)};
         const std::vector<size_t> roots = ProcessTreeRoots(rows);
-        Check(r, "9.5.6.roots.unknown-ppid-is-a-root",
+        Check(r, "roots.unknown-ppid-is-a-root",
               roots.size() == 1, "n=" + std::to_string(roots.size()));
     }
 
@@ -676,23 +676,23 @@ void CheckProcessTree(TestResult& r) {
     {
         const std::vector<TreeNodeInfo> rows = {
             node(100, 1), node(200, 100), node(300, 200), node(400, 300)};
-        Check(r, "9.5.6.ancestor.direct-and-transitive",
+        Check(r, "ancestor.direct-and-transitive",
               IsAncestorOf(rows, 100, 200) && IsAncestorOf(rows, 100, 400) &&
                   !IsAncestorOf(rows, 200, 100),
               "");
         // A PID we have never heard of is not an ancestor: refusing to walk
         // into a process outside the set is what stops the answer being a
         // guess.
-        Check(r, "9.5.6.ancestor.unknown-pid-is-not-one",
+        Check(r, "ancestor.unknown-pid-is-not-one",
               !IsAncestorOf(rows, 999, 300) && !IsAncestorOf(rows, 100, 999), "");
         // A self cannot be its own ancestor, and 0 is never a process.
-        Check(r, "9.5.6.ancestor.self-and-zero-rejected",
+        Check(r, "ancestor.self-and-zero-rejected",
               !IsAncestorOf(rows, 300, 300) && !IsAncestorOf(rows, 0, 300),
               "");
         // An ancestor cycle terminates too: 100 -> 300 -> 100 must not loop.
         const std::vector<TreeNodeInfo> cyclic = {
             node(100, 300), node(200, 100), node(300, 200)};
-        Check(r, "9.5.6.ancestor.cycle-terminates",
+        Check(r, "ancestor.cycle-terminates",
               IsAncestorOf(cyclic, 100, 200) &&
                   !IsAncestorOf(cyclic, 300, 300) &&
                   IsAncestorOf(cyclic, 100, 300)   /* via the cycle back to 300 */
@@ -703,11 +703,11 @@ void CheckProcessTree(TestResult& r) {
     // ---- a PID that is not in the set ----
     {
         const std::vector<TreeNodeInfo> rows = {node(100, 1)};
-        Check(r, "9.5.6.descendants.unknown-root-is-empty",
+        Check(r, "descendants.unknown-root-is-empty",
               ProcessTreeDescendants(rows, 999).empty() &&
                   ProcessTreeDescendants(rows, 0).empty(),
               "");
-        Check(r, "9.5.6.tree.empty-set-is-empty",
+        Check(r, "tree.empty-set-is-empty",
               BuildProcessTree({}).nodes.empty() &&
                   ProcessTreeDescendants({}, 100).empty() &&
                   ProcessTreeRoots({}).empty(),
@@ -722,11 +722,11 @@ void CheckProcessTree(TestResult& r) {
         rows.push_back(node(1, 0));
         for (DWORD i = 2; i < 82; ++i) rows.push_back(node(i, 1));
         const std::vector<size_t> d = ProcessTreeDescendants(rows, 1);
-        Check(r, "9.5.6.fanout.every-child-is-a-descendant",
+        Check(r, "fanout.every-child-is-a-descendant",
               d.size() == rows.size(),
               "n=" + std::to_string(d.size()));
         const ProcessTree t = BuildProcessTree(rows);
-        Check(r, "9.5.6.fanout.one-root-many-children",
+        Check(r, "fanout.one-root-many-children",
               t.rootCount == 1, "roots=" + std::to_string(t.rootCount));
     }
 
@@ -740,7 +740,7 @@ void CheckProcessTree(TestResult& r) {
         }
         const ProcessTree t = BuildProcessTree(rows);
         const std::vector<size_t> d = ProcessTreeDescendants(rows, 1);
-        Check(r, "9.5.6.deep.whole-chain-reachable",
+        Check(r, "deep.whole-chain-reachable",
               d.size() == rows.size() && !t.depthExceeded,
               "n=" + std::to_string(d.size()));
     }
@@ -752,7 +752,7 @@ void CheckProcessTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             node(100, 1), node(200, 100), node(100, 1)};
         const std::vector<size_t> d = ProcessTreeDescendants(rows, 100);
-        Check(r, "9.5.6.duplicate-pid.first-row-wins",
+        Check(r, "duplicate-pid.first-row-wins",
               d.size() >= 2 && d[0] == 0,
               "n=" + std::to_string(d.size()));
     }
@@ -767,12 +767,12 @@ void CheckSha256(TestResult& r) {
         return Sha256HexA(Sha256Bytes(p, n));
     };
 
-    Check(r, "9.5.7.sha256.fips-empty", HS("") ==
+    Check(r, "sha256.fips-empty", HS("") ==
           "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-    Check(r, "9.5.7.sha256.fips-abc", HS("abc") ==
+    Check(r, "sha256.fips-abc", HS("abc") ==
           "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     // The FIPS 56-byte vector (FIPS 180-4 Example 1).
-    Check(r, "9.5.7.sha256.fips-56",
+    Check(r, "sha256.fips-56",
           HS("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
               "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
 
@@ -786,17 +786,17 @@ void CheckSha256(TestResult& r) {
         const std::string s119(119, 'a');
         const std::string s120(120, 'a');
         const std::string s128(128, 'a');
-        Check(r, "9.5.7.sha256.block-multiple-55", HS(s55) ==
+        Check(r, "sha256.block-multiple-55", HS(s55) ==
               "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318");
-        Check(r, "9.5.7.sha256.block-multiple-64", HS(s64) ==
+        Check(r, "sha256.block-multiple-64", HS(s64) ==
               "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
-        Check(r, "9.5.7.sha256.block-multiple-119", HS(s119) ==
+        Check(r, "sha256.block-multiple-119", HS(s119) ==
               "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb");
-        Check(r, "9.5.7.sha256.block-multiple-128", HS(s128) ==
+        Check(r, "sha256.block-multiple-128", HS(s128) ==
               "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e");
         // 56/120 differ only in the last byte's position relative to the pad,
         // so they must differ.
-        Check(r, "9.5.7.sha256.block-multiple-pairs-differ",
+        Check(r, "sha256.block-multiple-pairs-differ",
               HS(s56) != HS(s55) && HS(s120) != HS(s119) && HS(s56) != HS(s64));
     }
 
@@ -831,7 +831,7 @@ void CheckSha256(TestResult& r) {
         const std::string mem =
             H(reinterpret_cast<const unsigned char*>(blob.data()), blob.size());
         const ImageHashResult fh = HashImageFile(expanded);
-        Check(r, "9.5.7.sha256.file-path-agrees-with-memory",
+        Check(r, "sha256.file-path-agrees-with-memory",
               ok && fh.ok && fh.bytesHashed == blob.size() &&
                   Sha256HexA(fh.digest) == mem,
               "ok=" + std::string(ok ? "1" : "0") + " mem=" + mem +
@@ -851,19 +851,19 @@ void CheckSha256(TestResult& r) {
         }
         fmt = fmt && h == "000102030405060708090a0b0c0d0e0f1011121314"
                           "15161718191a1b1c1d1e1f";
-        Check(r, "9.5.7.sha256.hex-is-lowercase-64-no-separators", fmt, h);
+        Check(r, "sha256.hex-is-lowercase-64-no-separators", fmt, h);
     }
 
     // Empty and unusable paths fail with a reason, never silently.
     {
         const ImageHashResult e = HashImageFile(L"");
-        Check(r, "9.5.7.sha256.empty-path-refused",
+        Check(r, "sha256.empty-path-refused",
               !e.ok && e.reason == HashFailReason::kEmptyPath &&
                   !e.message.empty(),
               "");
         const ImageHashResult missing =
             HashImageFile(L"%TEMP%\\benoot_no_such_image_xyz.exe");
-        Check(r, "9.5.7.sha256.missing-file-refused",
+        Check(r, "sha256.missing-file-refused",
               !missing.ok && missing.reason == HashFailReason::kOpenFailed &&
                   !missing.message.empty(),
               "");
@@ -888,7 +888,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow b =
             ScoreListener(kV4Wild, 4, false, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_CLOSE_WAIT, true);
-        Check(r, "9.5.5.exposure.non-listener-is-never-exposed",
+        Check(r, "exposure.non-listener-is-never-exposed",
               a.level == ExposureLevel::kNone &&
                   b.level == ExposureLevel::kNone,
               "");
@@ -899,7 +899,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow a =
             ScoreListener(kV4Loop, 4, false, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, true);
-        Check(r, "9.5.5.exposure.loopback-is-not-exposed",
+        Check(r, "exposure.loopback-is-not-exposed",
               a.level == ExposureLevel::kPrivate, "");
     }
 
@@ -908,7 +908,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow a =
             ScoreListener(kV4Priv, 4, false, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, false);
-        Check(r, "9.5.5.exposure.rfc1918-is-private",
+        Check(r, "exposure.rfc1918-is-private",
               a.level == ExposureLevel::kPrivate, "");
     }
 
@@ -917,7 +917,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow a =
             ScoreListener(kV4Wild, 4, false, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, true);
-        Check(r, "9.5.5.exposure.wildcard-443-is-exposed",
+        Check(r, "exposure.wildcard-443-is-exposed",
               a.level == ExposureLevel::kExposed && !a.reason.empty(),
               "");
     }
@@ -927,7 +927,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow a =
             ScoreListener(kV4Wild, 4, false, 51593, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, true);
-        Check(r, "9.5.5.exposure.wildcard-high-port-is-public",
+        Check(r, "exposure.wildcard-high-port-is-public",
               a.level == ExposureLevel::kPublic, "");
     }
 
@@ -936,7 +936,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow a =
             ScoreListener(kV4Pub, 4, false, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, false);
-        Check(r, "9.5.5.exposure.specific-public-address-is-public",
+        Check(r, "exposure.specific-public-address-is-public",
               a.level == ExposureLevel::kPublic, "");
     }
 
@@ -954,7 +954,7 @@ void CheckExposure(TestResult& r) {
         ok = ok && !IsPrivilegedExposurePort(1024);
         ok = ok && !IsPrivilegedExposurePort(51593);
         ok = ok && !IsPrivilegedExposurePort(65535);
-        Check(r, "9.5.5.exposure.privileged-port-ladder", ok, "");
+        Check(r, "exposure.privileged-port-ladder", ok, "");
     }
 
     // ---- IPv6 ----
@@ -972,11 +972,11 @@ void CheckExposure(TestResult& r) {
         const ExposureRow pub =
             ScoreListener(v6Pub, 16, true, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, false);
-        Check(r, "9.5.5.exposure.v6-wildcard-443-is-exposed",
+        Check(r, "exposure.v6-wildcard-443-is-exposed",
               wild.level == ExposureLevel::kExposed, "");
-        Check(r, "9.5.5.exposure.v6-loopback-is-private",
+        Check(r, "exposure.v6-loopback-is-private",
               loop.level == ExposureLevel::kPrivate, "");
-        Check(r, "9.5.5.exposure.v6-public-is-public",
+        Check(r, "exposure.v6-public-is-public",
               pub.level == ExposureLevel::kPublic, "");
     }
 
@@ -989,7 +989,7 @@ void CheckExposure(TestResult& r) {
                           MIB_TCP_STATE_LISTEN, true);
         row.isSystem = true;
         row.isUnsigned = true;
-        Check(r, "9.5.5.exposure.owner-axes-travel-with-the-row",
+        Check(r, "exposure.owner-axes-travel-with-the-row",
               row.isSystem && row.isUnsigned && row.isSystem == true, "");
     }
 
@@ -1015,7 +1015,7 @@ void CheckExposure(TestResult& r) {
             rows.push_back(x);
         }
         const ExposureSummary s = SummariseExposure(rows);
-        Check(r, "9.5.5.exposure.summary-counts-every-level",
+        Check(r, "exposure.summary-counts-every-level",
               s.exposed == 2 && s.publicRows == 1 && s.privateRows == 3,
               "exposed=" + std::to_string(s.exposed) +
                   " public=" + std::to_string(s.publicRows) +
@@ -1024,7 +1024,7 @@ void CheckExposure(TestResult& r) {
         // address, privileged port" is the recipe-24 wording, and "exposed"
         // alone would not tell the user which of the two severity lines it is.
         // Assert on both the severity keyword and the reason.
-        Check(r, "9.5.5.exposure.summary-leads-with-red",
+        Check(r, "exposure.summary-leads-with-red",
               WideToUtf8(s.line).find("privileged port") != std::string::npos,
               WideToUtf8(s.line));
 
@@ -1032,7 +1032,7 @@ void CheckExposure(TestResult& r) {
         std::vector<ExposureRow> pubOnly(2);
         for (auto& x : pubOnly) x.level = ExposureLevel::kPublic;
         const ExposureSummary sp = SummariseExposure(pubOnly);
-        Check(r, "9.5.5.exposure.summary-public-wording",
+        Check(r, "exposure.summary-public-wording",
               WideToUtf8(sp.line).find("reachable") != std::string::npos, WideToUtf8(sp.line));
 
         // All private, or empty: the bar stays SILENT. This is the check that
@@ -1040,7 +1040,7 @@ void CheckExposure(TestResult& r) {
         // of loopback listeners.
         std::vector<ExposureRow> privOnly(3);
         for (auto& x : privOnly) x.level = ExposureLevel::kPrivate;
-        Check(r, "9.5.5.exposure.summary-silent-when-healthy",
+        Check(r, "exposure.summary-silent-when-healthy",
               SummariseExposure(privOnly).line.empty() &&
                   SummariseExposure({}).line.empty(),
               "");
@@ -1053,7 +1053,7 @@ void CheckExposure(TestResult& r) {
         const ExposureRow a =
             ScoreListener(nullptr, 0, false, 443, IPPROTO_TCP,
                           MIB_TCP_STATE_LISTEN, true);
-        Check(r, "9.5.5.exposure.unknown-address-is-not-safe",
+        Check(r, "exposure.unknown-address-is-not-safe",
               a.level != ExposureLevel::kNone && !a.reason.empty(), "");
     }
 }
@@ -1067,18 +1067,18 @@ void CheckKillTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 1), TreeNode(4, 2)};
         const KillTreePlan plan = PlanKillTree(rows, 1, 0);
-        Check(r, "9.5.6.kill.targets-are-post-order",
+        Check(r, "kill.targets-are-post-order",
               plan.targets.size() == 4 && Pids(rows, plan) == std::vector<DWORD>({4, 2, 3, 1}),
               PidsText(rows, plan));
-        Check(r, "9.5.6.kill.root-is-remembered", plan.rootPid == 1, "");
-        Check(r, "9.5.6.kill.complete-plan", !plan.partial, "");
+        Check(r, "kill.root-is-remembered", plan.rootPid == 1, "");
+        Check(r, "kill.complete-plan", !plan.partial, "");
     }
     {
         // A chain 1 -> 2 -> 3 -> 4: the deepest dies first.
         const std::vector<TreeNodeInfo> rows = {
             TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 2), TreeNode(4, 3)};
         const KillTreePlan plan = PlanKillTree(rows, 1, 0);
-        Check(r, "9.5.6.kill.deep-chain-last-in",
+        Check(r, "kill.deep-chain-last-in",
               plan.targets.size() == 4 &&
                   Pids(rows, plan) == std::vector<DWORD>({4, 3, 2, 1}),
               PidsText(rows, plan));
@@ -1089,7 +1089,7 @@ void CheckKillTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 1), TreeNode(4, 2)};
         const KillTreePlan plan = PlanKillTree(rows, 2, 0);
-        Check(r, "9.5.6.kill.middle-node-takes-only-its-subtree",
+        Check(r, "kill.middle-node-takes-only-its-subtree",
               plan.targets.size() == 2 &&
                   Pids(rows, plan) == std::vector<DWORD>({4, 2}),
               PidsText(rows, plan));
@@ -1100,7 +1100,7 @@ void CheckKillTree(TestResult& r) {
             TreeNode(10, 0), TreeNode(11, 10), TreeNode(20, 0),
             TreeNode(21, 20)};
         const KillTreePlan plan = PlanKillTree(rows, 20, 0);
-        Check(r, "9.5.6.kill.one-root-of-a-forest",
+        Check(r, "kill.one-root-of-a-forest",
               plan.targets.size() == 2 &&
                   Pids(rows, plan) == std::vector<DWORD>({21, 20}),
               PidsText(rows, plan));
@@ -1111,7 +1111,7 @@ void CheckKillTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             TreeNode(1, 3), TreeNode(2, 1), TreeNode(3, 2)};
         const KillTreePlan plan = PlanKillTree(rows, 1, 0);
-        Check(r, "9.5.6.kill.cycle-terminates-and-covers-each-node",
+        Check(r, "kill.cycle-terminates-and-covers-each-node",
               plan.targets.size() == 3,
               PidsText(rows, plan));
     }
@@ -1122,7 +1122,7 @@ void CheckKillTree(TestResult& r) {
         const std::vector<TreeNodeInfo> rows = {
             TreeNode(1, 0), TreeNode(2, 1), TreeNode(3, 2)};
         const KillTreePlan plan = PlanKillTree(rows, 1, 1);
-        Check(r, "9.5.6.kill.self-is-last-not-absent",
+        Check(r, "kill.self-is-last-not-absent",
               plan.targets.size() == 3 &&
                   Pids(rows, plan) == std::vector<DWORD>({3, 2, 1}),
               PidsText(rows, plan));
@@ -1131,14 +1131,14 @@ void CheckKillTree(TestResult& r) {
         // An unknown root plans nothing, rather than planning everything.
         const std::vector<TreeNodeInfo> rows = {TreeNode(1, 0)};
         const KillTreePlan plan = PlanKillTree(rows, 999, 0);
-        Check(r, "9.5.6.kill.unknown-root-plans-nothing",
+        Check(r, "kill.unknown-root-plans-nothing",
               plan.targets.empty(), std::to_string(plan.targets.size()));
     }
     {
         // A single-node tree is a one-target plan.
         const std::vector<TreeNodeInfo> rows = {TreeNode(7, 0)};
         const KillTreePlan plan = PlanKillTree(rows, 7, 0);
-        Check(r, "9.5.6.kill.single-node",
+        Check(r, "kill.single-node",
               plan.targets.size() == 1 &&
                   Pids(rows, plan) == std::vector<DWORD>({7}),
               PidsText(rows, plan));
@@ -1153,7 +1153,7 @@ void CheckKillTree(TestResult& r) {
         for (DWORD p : Pids(rows, plan)) {
             if (p == 1) ++ones;
         }
-        Check(r, "9.5.6.kill.duplicate-pid-is-one-target",
+        Check(r, "kill.duplicate-pid-is-one-target",
               ones == 1 && plan.targets.size() == 2, PidsText(rows, plan));
     }
 }
@@ -1167,16 +1167,16 @@ void CheckIniFile(TestResult& r) {
         "resolveHosts = 0\r\n"
         "topMost = on\r\n";
     const std::vector<IniValue> v = ParseIniSection(good, "wintcp", &err);
-    Check(r, "9.2.10.ini.parse-ok",
+    Check(r, "ini.parse-ok",
           err.empty() && v.size() == 4,
           "n=" + std::to_string(v.size()) + " err=" +
               std::string(err.begin(), err.end()));
     if (v.size() == 4) {
-        Check(r, "9.2.10.ini.interval", v[0].key == "interval" && v[0].value == "1500",
+        Check(r, "ini.interval", v[0].key == "interval" && v[0].value == "1500",
               v[0].key + "=" + v[0].value);
-        Check(r, "9.2.10.ini.boolean-spelling", v[1].value == "yes" && v[2].value == "0",
+        Check(r, "ini.boolean-spelling", v[1].value == "yes" && v[2].value == "0",
               v[1].key + "=" + v[1].value);
-        Check(r, "9.2.10.ini.on-spelling", v[3].value == "on",
+        Check(r, "ini.on-spelling", v[3].value == "on",
               v[3].key + "=" + v[3].value);
     }
 
@@ -1188,12 +1188,12 @@ void CheckIniFile(TestResult& r) {
         "[wintcp]\r\n"
         "interval = 3000\r\n";
     const std::vector<IniValue> w = ParseIniSection(others, "wintcp", &err);
-    Check(r, "9.2.10.ini.other-sections-are-skipped",
+    Check(r, "ini.other-sections-are-skipped",
           err.empty() && w.size() == 1 && w[0].value == "3000",
           "n=" + std::to_string(w.size()));
 
     // No [wintcp] section at all: empty, not an error.
-    Check(r, "9.2.10.ini.no-section-is-empty",
+    Check(r, "ini.no-section-is-empty",
           ParseIniSection("[other]\r\na=1\r\n", "wintcp", &err).empty() &&
               err.empty(),
           "");
@@ -1210,7 +1210,7 @@ void CheckIniFile(TestResult& r) {
         "autoRefresh=true";
     const std::vector<IniValue> lv = ParseIniSection(loose, "wintcp", &err);
     const std::string lvFirst = lv.empty() ? std::string() : lv[0].value;
-    Check(r, "9.2.10.ini.comments-blanks-and-tight-spacing",
+    Check(r, "ini.comments-blanks-and-tight-spacing",
           err.empty() && lv.size() == 2 && lv[0].value == "2500" &&
               lv[1].value == "true",
           "n=" + std::to_string(lv.size()) + " v0=" + lvFirst);
@@ -1219,14 +1219,14 @@ void CheckIniFile(TestResult& r) {
     // expects.
     const std::vector<IniValue> dup =
         ParseIniSection("[wintcp]\r\ninterval=1\r\ninterval=2\r\n", "wintcp", &err);
-    Check(r, "9.2.10.ini.repeated-key-last-wins",
+    Check(r, "ini.repeated-key-last-wins",
           err.empty() && dup.size() == 1 && dup[0].value == "2", "");
 
     // A value containing '=' keeps the part after the FIRST one, so a filter
     // or a path cannot be truncated at its own '='.
     const std::vector<IniValue> eq =
         ParseIniSection("[wintcp]\r\nk=a=b=c\r\n", "wintcp", &err);
-    Check(r, "9.2.10.ini.value-keeps-its-own-equals",
+    Check(r, "ini.value-keeps-its-own-equals",
           err.empty() && eq.size() == 1 && eq[0].value == "a=b=c",
           eq.empty() ? "" : eq[0].value);
 
@@ -1236,20 +1236,20 @@ void CheckIniFile(TestResult& r) {
     // the file looks fine.
     const std::vector<IniValue> bad =
         ParseIniSection("[wintcp]\r\ninterval\r\n", "wintcp", &err);
-    Check(r, "9.2.10.ini.refuse.a-line-with-no-equals",
+    Check(r, "ini.refuse.a-line-with-no-equals",
           !err.empty() && bad.empty(), "");
-    Check(r, "9.2.10.ini.refuse.no-key-before-equals",
+    Check(r, "ini.refuse.no-key-before-equals",
           ParseIniSection("[wintcp]\r\n=5\r\n", "wintcp", &err).empty() &&
               !err.empty(),
           "");
-    Check(r, "9.2.10.ini.refuse.unterminated-section-header",
+    Check(r, "ini.refuse.unterminated-section-header",
           ParseIniSection("[wintcp\r\ninterval=1\r\n", "wintcp", &err).empty(),
           "");
-    Check(r, "9.2.10.ini.refuse.empty-section-name",
+    Check(r, "ini.refuse.empty-section-name",
           ParseIniSection("[]\r\ninterval=1\r\n", "wintcp", &err).empty(), "");
 
     // The size bound, the same shape the other files use.
-    Check(r, "9.2.10.ini.refuse.over-the-size-bound",
+    Check(r, "ini.refuse.over-the-size-bound",
           ParseIniSection(std::string(70 * 1024, 'x'), "wintcp", &err).empty() &&
               !err.empty(),
           "");
@@ -1257,21 +1257,21 @@ void CheckIniFile(TestResult& r) {
     // Known keys are the six behaviour ones, and an unknown key is refused
     // NOWHERE - a newer build may have added it, and refusing over it would be
     // this reader's guess made into the user's problem.
-    Check(r, "9.2.10.ini.known-keys", IsKnownIniKey("interval") &&
+    Check(r, "ini.known-keys", IsKnownIniKey("interval") &&
               IsKnownIniKey("autoRefresh") && IsKnownIniKey("resolveHosts") &&
               IsKnownIniKey("topMost") && IsKnownIniKey("trayEnabled") &&
               IsKnownIniKey("trafficEnabled"), "");
-    Check(r, "9.2.10.ini.unknown-key-is-not-known",
+    Check(r, "ini.unknown-key-is-not-known",
           !IsKnownIniKey("windowWidth"), "");
     const std::vector<IniValue> extra =
         ParseIniSection("[wintcp]\r\ninterval=1\r\nsomeFutureKey=7\r\n", "wintcp",
                         &err);
-    Check(r, "9.2.10.ini.accepts.an-unknown-key",
+    Check(r, "ini.accepts.an-unknown-key",
           err.empty() && extra.size() == 2, "n=" + std::to_string(extra.size()));
 }
 
 // ---------------------------------------------------------------------------
-// F5.5: the reverse-DNS answer cache.
+// The reverse-DNS answer cache.
 //
 // The rule this file exists to test is not "does it parse" - it is "can it
 // answer WRONG". Every check below is about a way a cache could hand back a
@@ -1285,44 +1285,44 @@ void CheckDnsCache(TestResult& r) {
     const int64_t now = NowEpoch();
 
     // --- What an entry is allowed to be ----------------------------------
-    Check(r, "f5.5.dns.address.v4-ok", IsCacheableAddress(L"1.2.3.4"), "");
-    Check(r, "f5.5.dns.address.v6-ok",
+    Check(r, "dns.address.v4-ok", IsCacheableAddress(L"1.2.3.4"), "");
+    Check(r, "dns.address.v6-ok",
           IsCacheableAddress(L"2001:db8::8a2e:370:7334"), "");
     // A scope suffix is stripped, so fe80::1%12 and fe80::1 are one peer.
-    Check(r, "f5.5.dns.address.scope-stripped",
+    Check(r, "dns.address.scope-stripped",
           IsCacheableAddress(L"fe80::1%12") &&
               StripAddressScope(L"fe80::1%12") == L"fe80::1", "");
     // Never a name: the cache answers addresses, and a line naming a host
     // would let a file redirect a query it was never asked.
-    Check(r, "f5.5.dns.address.rejects-a-hostname",
+    Check(r, "dns.address.rejects-a-hostname",
           !IsCacheableAddress(L"localhost") && !IsCacheableAddress(L"a.b.c"), "");
-    Check(r, "f5.5.dns.address.rejects-empty", !IsCacheableAddress(L""), "");
+    Check(r, "dns.address.rejects-empty", !IsCacheableAddress(L""), "");
 
-    Check(r, "f5.5.dns.hostname.plain", IsCacheableHostname(L"host.example.com"),
+    Check(r, "dns.hostname.plain", IsCacheableHostname(L"host.example.com"),
           "");
     // A trailing dot is what a resolver may hand back, so it must survive.
-    Check(r, "f5.5.dns.hostname.trailing-dot",
+    Check(r, "dns.hostname.trailing-dot",
           IsCacheableHostname(L"host.example.com."), "");
     // Punycode, which is the ASCII form of a non-ASCII name, is the answer
     // that actually arrives.
-    Check(r, "f5.5.dns.hostname.punycode",
+    Check(r, "dns.hostname.punycode",
           IsCacheableHostname(L"xn--e1afmkfd.xn--p1ai"), "");
     // Rejected: empty is the negative case and is never recorded; a hyphen
     // edge is not a legal host name; an empty label is not a name at all.
-    Check(r, "f5.5.dns.hostname.rejects-empty", !IsCacheableHostname(L""), "");
-    Check(r, "f5.5.dns.hostname.rejects-hyphen-edge",
+    Check(r, "dns.hostname.rejects-empty", !IsCacheableHostname(L""), "");
+    Check(r, "dns.hostname.rejects-hyphen-edge",
           !IsCacheableHostname(L"-host.example.com") &&
               !IsCacheableHostname(L"host-.example.com"), "");
-    Check(r, "f5.5.dns.hostname.rejects-empty-label",
+    Check(r, "dns.hostname.rejects-empty-label",
           !IsCacheableHostname(L"a..b") && !IsCacheableHostname(L".a"), "");
     // Non-ASCII is refused so a hand-edited file cannot widen what is
     // displayed: the resolver hands back punycode, never raw letters.
-    Check(r, "f5.5.dns.hostname.rejects-non-ascii",
+    Check(r, "dns.hostname.rejects-non-ascii",
           !IsCacheableHostname(L"hos\U000000e9.example.com"), "");
-    Check(r, "f5.5.dns.hostname.rejects-shell-metacharacters",
+    Check(r, "dns.hostname.rejects-shell-metacharacters",
           !IsCacheableHostname(L"host;rm -rf.example.com") &&
               !IsCacheableHostname(L"host$(x).example.com"), "");
-    Check(r, "f5.5.dns.hostname.rejects-over-253",
+    Check(r, "dns.hostname.rejects-over-253",
           !IsCacheableHostname(std::wstring(63, L'a') + L"." +
                               std::wstring(63, L'b') + L"." +
                               std::wstring(63, L'c') + L"." +
@@ -1344,69 +1344,69 @@ void CheckDnsCache(TestResult& r) {
     const std::string text = SerializeDnsCache(entries);
     std::vector<DnsCacheEntry> back;
     std::wstring err;
-    Check(r, "f5.5.dns.roundtrip.serializes",
+    Check(r, "dns.roundtrip.serializes",
           ParseDnsCacheText(text, &back, &err) && err.empty(), "");
-    Check(r, "f5.5.dns.roundtrip.entries-survive",
+    Check(r, "dns.roundtrip.entries-survive",
           back.size() == 2 && back[0].address == L"8.8.8.8" &&
               back[0].hostname == L"dns.google" &&
               back[1].address == L"2001:4860:4860::8888" &&
               back[1].solvedEpoch == now - 3600,
           "n=" + std::to_string(back.size()));
     // CRLF in, CRLF out: a file written on Windows must read back identically.
-    Check(r, "f5.5.dns.roundtrip.stable",
+    Check(r, "dns.roundtrip.stable",
           SerializeDnsCache(back) == text, "");
 
     // --- What the parser is willing to believe ---------------------------
     // A comment and a blank line are not entries and not errors.
-    Check(r, "f5.5.dns.parse.skips-comments-and-blanks",
+    Check(r, "dns.parse.skips-comments-and-blanks",
           ParseDnsCacheText("# a comment\r\n\r\n", &back, &err) &&
               back.empty() && err.empty(), "");
     // A line with the wrong field count is one we did not write. Skipped,
     // not fatal: a single odd line costs one entry, while failing the file
     // would let one byte disable the cache entirely.
-    Check(r, "f5.5.dns.parse.skips-wrong-field-count",
+    Check(r, "dns.parse.skips-wrong-field-count",
           ParseDnsCacheText("no-tabs-here\r\n1.2.3.4\tok.example\r\n", &back, &err) &&
               back.empty(), "");
-    Check(r, "f5.5.dns.parse.skips-too-many-fields",
+    Check(r, "dns.parse.skips-too-many-fields",
           ParseDnsCacheText("1.2.3.4\tok.example\t" +
                             std::to_string(now) + "\textra\r\n", &back, &err) &&
               back.empty(), "");
-    Check(r, "f5.5.dns.parse.skips-non-ascii-bytes",
+    Check(r, "dns.parse.skips-non-ascii-bytes",
           ParseDnsCacheText("1.2.3.4\th\366St.example.com\t" +
                             std::to_string(now) + "\r\n", &back, &err) &&
               back.empty(), "");
-    Check(r, "f5.5.dns.parse.skips-non-digit-timestamp",
+    Check(r, "dns.parse.skips-non-digit-timestamp",
           ParseDnsCacheText("1.2.3.4\tok.example\tnotanumber\r\n", &back, &err) &&
               back.empty(), "");
-    Check(r, "f5.5.dns.parse.skips-hostname-field",
+    Check(r, "dns.parse.skips-hostname-field",
           ParseDnsCacheText("1.2.3.4\t-not-a-name-\t" +
                             std::to_string(now) + "\r\n", &back, &err) &&
               back.empty(), "");
     // An implausible address in the address field is a line about something
     // this module never wrote.
-    Check(r, "f5.5.dns.parse.skips-hostname-in-address-field",
+    Check(r, "dns.parse.skips-hostname-in-address-field",
           ParseDnsCacheText("some.host.example\tok.example\t" +
                             std::to_string(now) + "\r\n", &back, &err) &&
               back.empty(), "");
     // A repeated address: the later line is what a human reader intends.
-    Check(r, "f5.5.dns.parse.duplicate-address-later-wins",
+    Check(r, "dns.parse.duplicate-address-later-wins",
           ParseDnsCacheText("1.2.3.4\tfirst.example\t" +
                             std::to_string(now - 10) + "\r\n1.2.3.4\tsecond.example\t" +
                             std::to_string(now) + "\r\n", &back, &err) &&
               back.size() == 1 && back[0].hostname == L"second.example",
           "");
     // Valid lines among corrupt ones: the valid ones are still honoured.
-    Check(r, "f5.5.dns.parse.valid-survives-among-corrupt",
+    Check(r, "dns.parse.valid-survives-among-corrupt",
           ParseDnsCacheText("garbage\r\n\r\n1.2.3.4\tok.example\t" +
                             std::to_string(now) + "\r\nmore garbage\r\n", &back,
                             &err) &&
               back.size() == 1 && back[0].hostname == L"ok.example", "");
     // A file over the size limit is refused WHOLE rather than read in part.
-    Check(r, "f5.5.dns.parse.refuses-oversized",
+    Check(r, "dns.parse.refuses-oversized",
           ParseDnsCacheText(std::string(kMaxCacheBytes + 1, 'x'), &back, &err) ==
                   false &&
               !err.empty(), "");
-    Check(r, "f5.5.dns.parse.oversized-leaves-output-alone",
+    Check(r, "dns.parse.oversized-leaves-output-alone",
           back.empty(), "");
 
     // --- Freshness: the rule that keeps the cache from answering wrong ----
@@ -1415,34 +1415,34 @@ void CheckDnsCache(TestResult& r) {
     fresh.hostname = L"dns.google";
     fresh.solvedEpoch = now;
     // Just inside the window.
-    Check(r, "f5.5.dns.fresh.at-the-ttl",
+    Check(r, "dns.fresh.at-the-ttl",
           DnsEntryFresh(fresh, now + kPositiveTtlHours * 3600 - 1), "");
     // One second past it.
     fresh.solvedEpoch = now - kPositiveTtlHours * 3600 - 1;
-    Check(r, "f5.5.dns.stale.past-the-ttl",
+    Check(r, "dns.stale.past-the-ttl",
           !DnsEntryFresh(fresh, now), "");
     // The one way a file could pin an answer forever: a timestamp in the
     // future, so the age never reaches the TTL. Refused - there is no skew
     // allowance to permit it, because one would be exactly that loophole.
     fresh.solvedEpoch = now + 400LL * 24 * 3600;
-    Check(r, "f5.5.dns.stale.implausibly-future-timestamp",
+    Check(r, "dns.stale.implausibly-future-timestamp",
           !DnsEntryFresh(fresh, now), "");
     // A modestly future date is refused on the same rule, not tolerated: the
     // cost of refusing is one re-query, and the answer is then re-recorded
     // against this machine's clock.
     fresh.solvedEpoch = now + 3600;
-    Check(r, "f5.5.dns.stale.any-future-timestamp",
+    Check(r, "dns.stale.any-future-timestamp",
           !DnsEntryFresh(fresh, now), "");
     // An entry with no answer is the negative case, which is never recorded
     // in the first place and is not believed if it somehow lands there.
     fresh.solvedEpoch = now;
     fresh.hostname.clear();
-    Check(r, "f5.5.dns.stale.no-answer-recorded",
+    Check(r, "dns.stale.no-answer-recorded",
           !DnsEntryFresh(fresh, now), "");
     // A zero timestamp means "never recorded", not "recorded at the epoch".
     fresh.hostname = L"dns.google";
     fresh.solvedEpoch = 0;
-    Check(r, "f5.5.dns.stale.zero-timestamp", !DnsEntryFresh(fresh, now), "");
+    Check(r, "dns.stale.zero-timestamp", !DnsEntryFresh(fresh, now), "");
 }
 
 }  // namespace wintcp

@@ -87,7 +87,7 @@ std::wstring DetailModel::ToPlainText() const {
     return out;
 }
 
-// 9.4.1: tab vocabulary, exposed so the renderer and selftests share one
+// tab vocabulary, exposed so the renderer and selftests share one
 // definition and a renamed tab is caught immediately. The order matches the
 // enum - the renderer walks DetailTab in ascending ordinal and skips tabs
 // that have no section, which is how an uncached TLS row simply drops the

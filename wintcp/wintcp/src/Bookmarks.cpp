@@ -8,7 +8,7 @@
 // IsBookmarked looks for" cannot be two different strings.
 
 #include "Bookmarks.h"
-#include "Settings.h"   // RegReadBoundedString (C6: the one string-read policy)
+#include "Settings.h"   // RegReadBoundedString (the one string-read policy)
 
 #include <algorithm>
 #include <cstring>
@@ -80,7 +80,7 @@ bool OpenKey(const std::wstring& path, REGSAM access, HKEY* out) {
 // copied in. The wrong type, a length over the cap, a byte count that is not
 // whole wchar_t, or a missing terminator are all a clean false rather than a
 // truncated string.
-// Trust rules live in Settings::RegReadBoundedString (C6): this was a
+// Trust rules live in Settings::RegReadBoundedString: this was a
 // byte-identical clone of the same copy in Presets.cpp, and a registry string
 // read is exactly the place where two copies of one security check become a
 // silent disagreement.

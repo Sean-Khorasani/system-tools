@@ -31,7 +31,7 @@
 #include <thread>
 
 #include "SocketTraffic.h"
-#include "Utils.h"   // RunGuarded (R2 worker containment)
+#include "Utils.h"   // RunGuarded (worker containment)
 
 namespace wintcp {
 namespace {
@@ -80,7 +80,7 @@ using NtQuerySystemInformation_t = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
 // counters (the support probe) pays nothing extra, and TCP_INFO_v0 predates
 // the age field being useful everywhere, so a zero is a real answer meaning
 // "not reported" rather than a failure.
-// G6: what TCP_INFO_v0 carries beyond the byte counters.
+// What TCP_INFO_v0 carries beyond the byte counters.
 //
 // UNITS, AND THE MISTAKE THIS STRUCTURE MAKES IMPOSSIBLE. RttUs and MinRttUs
 // are MICROseconds - ConnectionTimeMs is the only Ms field in the struct - while
@@ -138,7 +138,7 @@ bool QueryTcpInfo(HANDLE h, ULONGLONG* in, ULONGLONG* out,
     DWORD returned = 0;
     // version = 0, NOT 1. Measured: this kernel returns WSAEINVAL for
     // TCP_INFO_v1, so asking for it makes EVERY ioctl fail - which reads as
-    // "Windows does not populate these fields" and would have retired G6 on a
+    // "Windows does not populate these fields" and would have been dropped on a
     // false negative. v0 is also a prefix of every later version, so it is the
     // safe request; the extras that only v1 adds (the send-throttle
     // breakdown) are not worth an ioctl that does not come back.
@@ -185,7 +185,7 @@ bool QueryTcpInfo(HANDLE h, ULONGLONG* in, ULONGLONG* out,
 // Capacity of the address text buffer below, in wchar_t (NOT bytes).
 //
 // WHY THIS EXISTS, because the four call sites used to say `sizeof(buf) / 2`
-// and that is the "reconstruct a buffer size from far away" problem C7 names:
+// and that is the "reconstruct a buffer size from far away" problem:
 // the /2 is only correct because sizeof(wchar_t) == 2, which is a platform
 // assumption stated nowhere, and a reader has to work it out to check the
 // bound. InetNtopW counts wchar_t, not bytes, so the argument must be a
@@ -406,7 +406,7 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
     if (supported_ && !pids.empty()) {
         // One pass at a time, run ON THIS THREAD.
         //
-        // Before D2 this function started a detached thread and then waited up
+        // Previously this function started a detached thread and then waited up
         // to the budget for it, because the walk itself issued the ioctls and
         // could therefore be wedged. Now the walk only does bookkeeping, which
         // always terminates; the ioctls run on kProbeWorkers detached threads,
@@ -424,7 +424,7 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
     // worker does not finish: a worker still inside the kernel holds this
     // pointer, so a stack local would dangle the moment Sample returns.
 //
-// C9: ScratchOwner, not a bare pointer, and not a plain unique_ptr either -
+// ScratchOwner, not a bare pointer, and not a plain unique_ptr either -
 // see its definition for why the "is a worker still live" test has to live in
     // a destructor. The short version: it is now freed on an unwind when the
 // // free is safe, which the raw `new`/`delete` pair could not do.
@@ -493,7 +493,7 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
         ::Sleep(kScanPollMs);
     }
 
-    // D2: a target whose slot was handed out but never finished is a socket
+    // A target whose slot was handed out but never finished is a socket
     // whose SIO_TCP_INFO has not returned. Remember it, so no later pass
     // spends another wedged worker on it. A target the cursor never REACHED is
     // deliberately not remembered: that one is merely work the budget ran out
@@ -560,7 +560,7 @@ std::map<DWORD, PidTraffic> SocketTrafficSampler::Sample(
         // IT WAITED ON THE WRONG COUNTER. The wait used liveThreads_, a
         // process-wide total across every pass, and it was UNBOUNDED: a pass
         // whose own workers were all done could block for ever on a thread an
-        // EARLIER pass had left wedged inside SIO_TCP_INFO - a call D2
+        // EARLIER pass had left wedged inside SIO_TCP_INFO - a call
         // measured at 28 s and still running after 90 s, and which cannot be
         // cancelled. That is a real hang, not a theoretical one: it wedged
         // `list --traffic --watch 2 --count 4` for over 8 minutes at 0 CPU
@@ -698,7 +698,7 @@ std::vector<SocketBytes> SocketTrafficSampler::Bytes(
     return out;
 }
 
-// G6: per-socket congestion state, same scan, same discipline as Ages() and
+// Per-socket congestion state, same scan, same discipline as Ages() and
 // Bytes(). Emitted for every socket that has an endpoint identity and reported
 // AT LEAST ONE of the values, so the store can attach the real readings and
 // leave the rest blank - rather than dropping the socket entirely because, say,
@@ -751,7 +751,7 @@ void SocketTrafficSampler::PublishOne(const SocketSample& s) {
         fresh.localPort = s.localPort;
         fresh.remoteAddress = s.remoteAddress;
         fresh.remotePort = s.remotePort;
-        // G6. Copied on the FIRST sighting too, not only on update - a socket
+        // Copied on the FIRST sighting too, not only on update - a socket
         // read once and never again is exactly the long-lived connection these
         // columns are for, and a create-only copy would leave it permanently
         // blank.
@@ -780,7 +780,7 @@ void SocketTrafficSampler::PublishOne(const SocketSample& s) {
     if (!s.remoteAddress.empty()) h->second.remoteAddress = s.remoteAddress;
     h->second.localPort = s.localPort;
     h->second.remotePort = s.remotePort;
-    // G6. Retransmits and min RTT are CUMULATIVE/BEST-EVER: they only go up
+    // Retransmits and min RTT are CUMULATIVE/BEST-EVER: they only go up
     // (min RTT only goes down), so a smaller reading means a recycled socket
     // and must not overwrite a better one. RTT and cwnd are instantaneous and
     // are simply replaced. Copying all four unconditionally would let one
@@ -804,10 +804,10 @@ void SocketTrafficSampler::PublishOne(const SocketSample& s) {
     }
 }
 
-// ---- D2: the worker pool ----------------------------------------------------
+// ---- the worker pool ---------------------------------------------------------
 //
 // Everything below is one change with one motive, and the motive is a
-// measurement rather than a theory (recorded in todo.md; reproduced by
+    // measurement rather than a theory (reproduced by
 // temp/d2probe.cpp, which walks this machine's sockets one at a time and times
 // each call):
 //
@@ -818,7 +818,7 @@ void SocketTrafficSampler::PublishOne(const SocketSample& s) {
 //
 // The call is not deadlocked and cannot be cancelled - it STALLS. Walking the
 // table and issuing the ioctl inline therefore means one stall ends the pass,
-// and every socket behind it in the table goes unread. That is the defect D2
+    // and every socket behind it in the table goes unread. That is the defect
 // describes, and it is why the per-socket Speed column is partial on machines
 // that have one uncooperative socket.
 //
@@ -899,7 +899,7 @@ void SocketTrafficSampler::ProbeTargetOne(const ProbeTarget& t,
 
     // ---- THE CALL THAT CAN STALL. Everything above is bookkeeping. ----
     ULONGLONG in = 0, out = 0, ageMs = 0;
-    TcpInfoExtras extras;   // G6: RTT / min RTT / cwnd / retransmits
+    TcpInfoExtras extras;   // RTT / min RTT / cwnd / retransmits
     const bool ok = QueryTcpInfo(dup, &in, &out, &ageMs, &extras);
     const int wsaErr = ok ? 0 : ::WSAGetLastError();
 
@@ -1006,7 +1006,7 @@ void SocketTrafficSampler::ScanHandles(ScanScratch& scratch) {
         if (scratch.typesKnown &&
             scratch.socketTypes.count(e.ObjectTypeIndex) == 0)
             continue;
-        // D2: a socket already known to stall is not tried again. Without
+        // A socket already known to stall is not tried again. Without
         // this, one uncooperative socket costs a wedged worker thread on
         // every refresh, forever.
         if (skip.count({pid, e.HandleValue}) != 0) continue;
@@ -1037,7 +1037,7 @@ void SocketTrafficSampler::ScanHandles(ScanScratch& scratch) {
         scratch.liveInPass.fetch_add(1, std::memory_order_acq_rel);
         std::thread([self, &scratch] {
             while (ProbeTarget* t = self->NextTarget(scratch)) {
-                // R2: a throwing probe is an unread socket, not a dead pool.
+                // A throwing probe is an unread socket, not a dead pool.
                 // NextTarget already handed the slot out, so skipping the
                 // publish leaves exactly the state an ioctl failure leaves.
                 (void)RunGuarded([&] { self->ProbeTargetOne(*t, scratch); });

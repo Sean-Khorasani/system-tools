@@ -19,7 +19,7 @@
 #include <string>   // RegReadBoundedString's std::wstring
 #include <vector>
 
-#include "Alerts.h"   // 9.2.11/F5.6: AlertSettings
+#include "Alerts.h"   // AlertSettings
 #include "ColumnsWin.h"   // COL_COUNT, kDefaultVisibleCols, ClampVisibleCols
 
 namespace wintcp {
@@ -33,7 +33,7 @@ namespace wintcp {
 // 'maxChars' EXCLUDES the terminator: a value of exactly maxChars is legal,
 // maxChars + 1 is not. Pass 0 only for a value that must be empty.
 //
-// This is the ONE validator (C6). Bookmarks and Presets each carried their own
+// This is the ONE validator. Bookmarks and Presets each carried their own
 // byte-identical copy of this trust logic - same size-mod-wchar_t check, same
 // maxChars+2 slack for the query's double-counted terminator, same NUL check.
 // Two copies of a security check is one more than the codebase should have:
@@ -46,7 +46,7 @@ namespace wintcp {
 bool RegReadBoundedString(HKEY key, const wchar_t* name, size_t maxChars,
                           std::wstring* out);
 
-// Load-time validation bounds (A4). A persisted value outside these is
+// Load-time validation bounds. A persisted value outside these is
 // discarded in favour of the compiled-in default — never repaired, never
 // believed. Named here (not at the use sites) so Load, Save and any future
 // validator share one definition of "sane".
@@ -54,14 +54,14 @@ constexpr UINT kMinIntervalMs = 250;        // 0.25 s: below this the UI liveloc
 constexpr UINT kMaxIntervalMs = 3600000;    // 1 h: above this "auto" is meaningless
 constexpr int kMaxColWidth = 4000;          // wider than any monitor: corrupt data
 
-// Compiled-in defaults (B1). Every non-obvious default below has a name so
+// Compiled-in defaults. Every non-obvious default below has a name so
 // the registry, the GUI fallback and the help text cannot disagree about it.
 // Trivially self-evident initializers (false, 0, empty strings, COL_PID,
 // SW_SHOWNORMAL, kDefaultVisibleCols) deliberately have none — a name for
 // "false" is clutter, not clarity, and the struct initializer already says it.
 constexpr UINT kDefaultRefreshSec = 2;       // the product's cadence, in seconds
 constexpr UINT kDefaultIntervalMs =
-    kDefaultRefreshSec * 1000;              // ...and in ms (B2 unifies all three)
+    kDefaultRefreshSec * 1000;              // ...and in ms (unifies all three)
 constexpr UINT kCurrentColVersion = 5;       // schema Save() writes; see Load
 constexpr size_t kMaxFilterChars = 512;     // filter box + persisted Filter
 
@@ -79,11 +79,11 @@ struct Settings {
     bool autoRefresh = false;
     bool resolveHosts = false;
 
-    // Modern Windows (tasks 23 / 30)
+    // Modern Windows
     bool topMost = false;
     bool trayEnabled = false;
 
-    // 9.4.6: first-run minimization choice. Persisted as a single DWORD so the
+    // First-run minimization choice. Persisted as a single DWORD so the
     // "Minimize to tray or exit?" prompt appears at most once:
     //   0  never asked          -> prompt the first minimize when tray is off
     //   1  remembered: tray     -> minimize-to-tray, no prompt
@@ -121,18 +121,18 @@ struct Settings {
     // Export
     wchar_t lastExportDir[MAX_PATH] = {0};
 
-    // GeoIP (9.1.5): the GUI's picked .mmdb path, persisted. Empty = never
+    // GeoIP: the GUI's picked .mmdb path, persisted. Empty = never
     // picked (or the file moved - a stale path is retried silently on the
     // next launch and Country stays "—" until one loads). Deliberately NOT
     // a ColVersion bump: the column schema does not change, this is one new
     // REG_SZ that older keys simply lack.
     wchar_t geoIpPath[MAX_PATH] = {0};
-    // F5.4: the GeoLite2-ASN path, persisted on the same terms as geoIpPath and
+    // The GeoLite2-ASN path, persisted on the same terms as geoIpPath and
     // for the same reason - the window should not have to be told again at every
     // launch. Also deliberately NOT a ColVersion bump: it is not a column.
     wchar_t asnIpPath[MAX_PATH] = {0};
 
-    // Alerts (9.2.11). The engine itself is pure and tested; it had no persistence
+    // Alerts. The engine itself is pure and tested; it had no persistence
     // and no caller, so nothing could ever fire. Persisted on the same terms as the
     // paths above - one value per setting, absent keys fall back to the engine's own
     // defaults, and no ColVersion bump because none of this is a column.
@@ -140,7 +140,6 @@ struct Settings {
     // MUTED BY DEFAULT is the design rule, not a missing feature: a network viewer
     // that pops a balloon every refresh is one the user switches off, and then it is
     // useless for the one event that mattered.
-    // Alerts (9.2.11 / F5.6).
     //
     // This is the ENGINE'S OWN struct, not a parallel shape of it. The first
     // attempt kept eight separate fields here and converted on the way to the
@@ -156,7 +155,7 @@ struct Settings {
     bool Load();
     bool Save() const;         // best effort; returns false on write failure
 
-    // 9.2.10: apply the portable `wintcp.ini` that sits beside the executable.
+    // Apply the portable `wintcp.ini` that sits beside the executable.
     //
     // MUST be called BEFORE Load(). It supplies DEFAULTS only, so an existing
     // user's saved settings always win - the alternative (the ini overriding
@@ -196,7 +195,7 @@ bool IsColumnPermutation(const int* order, size_t count);
 // Returns the new full order, or 'fullOrder' unchanged if anything about the
 // inputs is inconsistent.
 //
-// This is the non-obvious half of 7.1. The header only ever sees the visible
+// This is the non-obvious half of that. The header only ever sees the visible
 // subset, but the persisted order covers every column. Writing the visible
 // subset straight back would renumber the hidden ones and scramble the layout
 // the next time a column is enabled.

@@ -17,7 +17,7 @@
 // instead of the whole pool" shape SocketTrafficSampler uses for stalled
 // getproc/GetExtendedTcpTable calls (see SocketTraffic.cpp:816).
 //
-// 9.2.8: the old header claimed a cancellation timeout was impossible and
+// The old header claimed a cancellation timeout was impossible and
 // that a worker pool would multiply DNS load for no win. That is no longer
 // the shape: the worker stays single-threaded, the budget is a per-lookup
 // ceiling (not the wait itself - the wait is the budget), and a one-shot CLI
@@ -131,7 +131,7 @@ public:
     // painting. Both paths share the cache-free core (getnameinfo) so they
     // cannot disagree about what a given address resolves to.
     //
-    // 9.2.8: timeoutMs bounds the CLI one-shot wait too. Pass 0 for the
+    // TimeoutMs bounds the CLI one-shot wait too. Pass 0 for the
     // default budget; a stuck helper here still blocks the CLI thread (the
     // CLI is opt-in and explicitly waits), but the bound is now configurable
     // instead of unbounded.

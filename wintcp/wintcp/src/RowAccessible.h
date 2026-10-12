@@ -1,6 +1,6 @@
 // RowAccessible.h
 // SPDX-License-Identifier: Apache-2.0
-// G21 - per-row accessible names for the main virtual list.
+// per-row accessible names for the main virtual list.
 //
 // The list and the charts paint via GDI with no MSAA/UIA of their own, so a
 // screen reader hears the process names from comctl32's default accessible

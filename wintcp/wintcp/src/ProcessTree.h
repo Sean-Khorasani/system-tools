@@ -1,6 +1,6 @@
 // ProcessTree.h
 // SPDX-License-Identifier: Apache-2.0
-// 9.5.6 - the process tree.
+// the process tree.
 //
 // `ppid` and `parent` describe a row's parent; this answers the two questions
 // those cannot: "what did this process start" (the descendants) and "kill this

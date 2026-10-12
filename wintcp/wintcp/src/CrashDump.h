@@ -1,10 +1,10 @@
 // CrashDump.h
 // SPDX-License-Identifier: Apache-2.0
-// Last-resort crash diagnostics (R1): an unhandled-exception filter that
+// Last-resort crash diagnostics: an unhandled-exception filter that
 // writes a minidump, an on-disk breadcrumb in the dump folder and a one-line
 // breadcrumb on stderr before the process dies.
 //
-// A crash with no artefact is unactionable - D29 started life as exactly the
+// A crash with no artefact is unactionable - this began life as exactly the
 // sentence "it just closed". This module exists so the next such report ships
 // with a file and an address instead - and so that a crash where the dump
 // itself failed still leaves a written record of having run, and of why.

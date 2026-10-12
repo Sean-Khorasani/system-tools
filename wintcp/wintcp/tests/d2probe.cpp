@@ -1,4 +1,4 @@
-// D2 probe - measure WHICH call hangs and for how long.
+// Diagnostic probe - measure WHICH call hangs and for how long.
 //
 // NOT part of the product. Built once, run detached, output read from a file.
 // Answers: is the indefinite block in WSAIoctl(SIO_TCP_INFO), in
@@ -195,8 +195,9 @@ struct ProbeResult {
     int ioctlErr = 0;
     ULONGLONG bytesIn = 0, bytesOut = 0;
     // NOTE THE UNITS. RttUs/MinRttUs are MICROseconds - the only Ms field in
-    // TCP_INFO_v0 is ConnectionTimeMs. `ss -i` prints milliseconds, so G6 has
-    // to divide; getting this wrong would report a 12 ms RTT as 12000 ms.
+    // TCP_INFO_v0 is ConnectionTimeMs. `ss -i` prints milliseconds, so the
+    // conversion has to divide; getting this wrong would report a 12 ms RTT as
+    // 12000 ms.
     unsigned rttUs = 0, minRttUs = 0, cwnd = 0, sndWnd = 0, rcvWnd = 0;
     unsigned bytesRetrans = 0, dupAcks = 0, mss = 0, synRetrans = 0;
     unsigned char tcpState = 0;
@@ -346,10 +347,10 @@ int ProbeProductFetch() {
 }
 
 int wmain(int argc, wchar_t** argv) {
-    // Unbuffered: the previous run died with an access violation and stdout's
-    // block buffer went with it, so the log was empty and I learned nothing
-    // about where it crashed. A diagnostic tool that loses its own output on
-    // the interesting failure is worse than no output.
+    // Unbuffered: a run that dies with an access violation loses stdout's block
+    // buffer with it, so the log ends up empty and says nothing about where it
+    // crashed. A diagnostic tool that loses its own output on the interesting
+    // failure is worse than no output.
     ::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc > 1 && ::wcscmp(argv[1], L"--productpath") == 0)
         return ProbeProductFetch();
@@ -444,7 +445,8 @@ int wmain(int argc, wchar_t** argv) {
         // reported zero RTT/cwnd/state across 2,013 successful reads: not one
         // ioctl actually succeeded, it just had not finished yet when the
         // budget expired. Getting this wrong would have looked like "the TCP_INFO
-        // fields are empty on Windows" and killed G6 for no reason.
+        // fields are empty on Windows" and the traffic columns would have been
+        // dropped for no reason.
         const ULONGLONG t1 = ::GetTickCount64();
         TCP_INFO_v0 info0 = {};
         int version = 0;

@@ -82,7 +82,7 @@ std::wstring AboutText(const BuildSummary& s, bool verbose) {
     out += L"Plain Win32 API and the common controls. No MFC, ATL or Qt.\r\n";
     out += L"\r\n";
 
-    // 9.2.4: --verbose adds diagnostic detail for troubleshooting. The base
+    // The --verbose switch adds diagnostic detail for troubleshooting. The base
     // output is the capability summary; verbose adds the internal state that
     // explains WHY a capability is missing or a counter is zero.
     if (verbose) {
@@ -106,7 +106,7 @@ std::wstring AboutText(const BuildSummary& s, bool verbose) {
         out += L"\r\n";
     }
 
-    // The capability block. This is the part 7.5 is actually for: a user
+    // The capability block. This is what it is actually for: a user
     // wondering why a column is empty should be able to find the answer
     // here rather than guessing from a blank cell.
     out += L"This run\r\n";
@@ -134,7 +134,7 @@ std::wstring AboutText(const BuildSummary& s, bool verbose) {
                                           ? L"none (no collector is running)"
                                           : L"none (needs administrator)"))) +
            L"\r\n";
-    // 9.2.4: what the traffic scan could not measure. Printed only when a scan
+    // What the traffic scan could not measure. Printed only when a scan
     // actually ran, and only the non-zero ones - a healthy machine gains
     // nothing here, which is the point. See BuildSummary for why the two
     // counters are separate fields.
@@ -201,7 +201,7 @@ std::wstring AboutText(const BuildSummary& s, bool verbose) {
                    L" unavailable (listed above)\r\n";
         }
     }
-    // D23. A count nobody measured must not be printed. The CLI has no
+    // A count nobody measured must not be printed. The CLI has no
     // persisted GUI view mask and (before the fix) took no snapshot either, and
     // both used to print a confident-looking "0 of 23" / "Connections 0" that
     // reads as a fact about the machine. Omit the line instead: an absent
@@ -213,7 +213,7 @@ std::wstring AboutText(const BuildSummary& s, bool verbose) {
     }
     if (s.rowCountKnown)
         out += PadKeys(L"Connections") + std::to_wstring(s.rowCount) + L"\r\n";
-    // R7. Handle and GDI counts, so a user reporting "it gets slow after a
+    // Handle and GDI counts, so a user reporting "it gets slow after a
     // day" can report a number instead. These are the counters that grow when
     // something leaks, and they are the only evidence that distinguishes a
     // leak from "this machine is just busy" - so printing them makes the

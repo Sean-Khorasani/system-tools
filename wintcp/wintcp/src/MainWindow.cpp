@@ -8,7 +8,7 @@
 
 #include <commdlg.h>
 #include <shellapi.h>
-#include <shlobj.h>            // SHGetStockIconInfo: SIID_SHIELD (9.2.5)
+#include <shlobj.h>            // SHGetStockIconInfo: SIID_SHIELD
 #include <tcpmib.h>
 #include <windowsx.h>
 
@@ -23,19 +23,19 @@
 #include "Utils.h"
 #include "WinCaps.h"   // DllAvailable: shell32.dll is delay-loaded
 #include "Version.h"
-#include "BuildInfo.h"     // About summary (7.5) + shortcut sheet (7.6)
+#include "BuildInfo.h"     // About summary + shortcut sheet
 #include "Commands.h"      // abstract layer: BuildDetailModel, preset helpers
-#include "Freeze.h"        // FrozenAgeMs (5.5)
+#include "Freeze.h"        // FrozenAgeMs
 #include "ViewState.h"     // the single place a view is built (stage 1.7)
-#include "PromptDialog.h"  // one-line text prompt (5.2 / 5.3)
-#include "BlockedPeersDialog.h"  // 9.2.9: View > Blocked peers...
-#include "EmptyStateActions.h"   // 9.4.2: the empty-state button decision
-#include "RowAccessible.h"       // G21: per-row MSAA names over the list
-#include "Elevate.h"             // 9.4.2: Reelevate for the traffic case
-#include "ExposureScore.h"       // 9.5.5: the exposure badge predicate
+#include "PromptDialog.h"  // one-line text prompt
+#include "BlockedPeersDialog.h"  // View > Blocked peers...
+#include "EmptyStateActions.h"   // the empty-state button decision
+#include "RowAccessible.h"       // per-row MSAA names over the list
+#include "Elevate.h"             // Reelevate for the traffic case
+#include "ExposureScore.h"       // the exposure badge predicate
 #include "FontCache.h"
-#include "Theme.h"       // G12/G23: shared palette + HighContrastActive()
-#include "Alerts.h"     // F5.6: AlertEngine, ShowTrayBalloon     // F5.15: shared, DPI-correct fonts
+#include "Theme.h"       // shared palette + HighContrastActive()
+#include "Alerts.h"     // AlertEngine, ShowTrayBalloon     // shared, DPI-correct fonts
 #include "resource.h"
 
 namespace wintcp {
@@ -48,7 +48,7 @@ const UINT   kFilterDebounceMs = 250;   // B4: dev constant. One keystroke-delay
                                          // on any machine built this century.
 const UINT   kStatusTickMs = 1000;
 
-// Unit conversions (P1). Six sites spelled 1000 as "milliseconds per second"
+// Unit conversions. Six sites spelled 1000 as "milliseconds per second"
 // and three as 96 = "DPI at which the design pixel sizes are unscaled". Named
 // because the failure mode of getting them wrong is a factor-of-1000 age or a
 // window a third the intended size at 200% scaling, and neither looks like a
@@ -128,7 +128,7 @@ const ColDef kColumns[COL_COUNT] = {
     { COL_TLS,     ConnectionStore::ColumnTitle(COL_TLS),   190, LVCFMT_LEFT  },
     { COL_COUNTRY, ConnectionStore::ColumnTitle(COL_COUNTRY), 90, LVCFMT_LEFT  },
     { COL_PINNED,  ConnectionStore::ColumnTitle(COL_PINNED),  90, LVCFMT_LEFT  },
-    // G6, the `ss -i` columns. Widths are the GUI's own budget rather than
+    // the `ss -i` columns. Widths are the GUI's own budget rather than
     // Columns.h's cap: the list view scrolls horizontally and each column is
     // independently resizable, so there is no table to keep aligned here. Right
     // aligned, because every one of these is a number.
@@ -136,17 +136,17 @@ const ColDef kColumns[COL_COUNT] = {
     { COL_MINRTT,  ConnectionStore::ColumnTitle(COL_MINRTT),  90, LVCFMT_RIGHT },
     { COL_CWND,    ConnectionStore::ColumnTitle(COL_CWND),   100, LVCFMT_RIGHT },
     { COL_RETRANS, ConnectionStore::ColumnTitle(COL_RETRANS),100, LVCFMT_RIGHT },
-    // G5. Wider than COL_BANDWIDTH because the value is a process total and so
+    // Wider than COL_BANDWIDTH because the value is a process total and so
     // carries more digits - the same shape, a larger number.
     { COL_GROUPRATE, ConnectionStore::ColumnTitle(COL_GROUPRATE),160, LVCFMT_LEFT },
-    // 5.5. The bookmark note. Wider than most because the value is prose the
+    // The bookmark note. Wider than most because the value is prose the
     // user typed, not a code or a number; anything longer elides and the
     // tooltip shows it whole.
     { COL_NOTE,    ConnectionStore::ColumnTitle(COL_NOTE),  180, LVCFMT_LEFT },
-  // F5.1. 150 is generous for "<pid> <name>" because the name is an unbounded
+  // 150 is generous for "<pid> <name>" because the name is an unbounded
   // process name; it elides with a tooltip beyond that.
   { COL_PPID,    ConnectionStore::ColumnTitle(COL_PPID),   150, LVCFMT_LEFT },
-  // F5.2/F5.3. Both are short words, sized from their longest possible cell
+  // Both are short words, sized from their longest possible cell
   // ("Protected+AC" and "BAD SIG") rather than from a typical row, so enabling
   // either never shows a truncated header.
   { COL_INTEGRITY, ConnectionStore::ColumnTitle(COL_INTEGRITY), 90, LVCFMT_LEFT },
@@ -182,7 +182,7 @@ const int kDisplayOrder[COL_COUNT] = {
     COL_DURATION, COL_BANDWIDTH, COL_GROUPRATE,
     COL_RTT, COL_MINRTT, COL_CWND, COL_RETRANS,
     COL_TLS, COL_COUNTRY, COL_PINNED, COL_NOTE,
-    // F5.1/F5.2/F5.3 join the other per-process identity and trust columns:
+    // join the other per-process identity and trust columns:
     // after the bookmark fields, before the raw stat columns.
     COL_PPID, COL_INTEGRITY, COL_SIGNATURE,
     COL_MEM, COL_DISK, COL_RX, COL_TX, COL_NETTOTAL,
@@ -272,7 +272,7 @@ bool IsTrafficColumn(int col) {
            col == COL_NETTOTAL;
 }
 
-// 9.2.5: the admin-required actions (Block connection, ETW traffic counters)
+// the admin-required actions (Block connection, ETW traffic counters)
 // get the standard UAC shield glyph so a click reads as "this needs elevation"
 // before the consent dialog appears. The icon is loaded once from the system
 // via SHGetStockIconInfo (SIID_SHIELD); like every other shell32 call in this
@@ -333,7 +333,7 @@ void SetMenuItemShield(HMENU menu, UINT id, bool on) {
     ::SetMenuItemInfoW(menu, id, FALSE, &mii);
 }
 
-// 9.2.5: the bar-menu ETW item (View > Per-PID traffic counters). Its submenu
+// the bar-menu ETW item (View > Per-PID traffic counters). Its submenu
 // is found by scanning for the item, so this fails closed if the menu layout
 // in wintcp.rc changes rather than asserting a wrong submenu index.
 // `highContrast` is supplied by the caller (MainWindow::HighContrastActive)
@@ -462,7 +462,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return groupByProcess_ ? L"1" : L"0";
     }
     if (::wcscmp(op, L"treeMode") == 0) {
-        // Roadmap: whether the main window is showing the tree instead of
+        // whether the main window is showing the tree instead of
         // the list. Read from the control's state rather than from a
         // re-derived variable, so a mode that failed to apply cannot lie.
         return (treeMode_ && hwndTree_ != nullptr) ? L"1" : L"0";
@@ -474,6 +474,16 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         if (hwndTree_ == nullptr) return L"-1";
         const LRESULT n = ::SendMessageW(hwndTree_, TVM_GETCOUNT, 0, 0);
         ::swprintf_s(buf, L"%lld", (long long)n);
+        return buf;
+    }
+    if (::wcscmp(op, L"enumeratedAtFill") == 0) {
+        // How many processes the LAST tree fill drew from. Comparing the
+        // tree's item count with THIS (rather than with a fresh
+        // enumeration) is the only race-free form of "the tree is the
+        // machine's process list": the machine changes between two
+        // enumerations, and a process starting in that window used to read
+        // as one extra tree item.
+        ::swprintf_s(buf, L"%zu", treeEnumeratedAtFill_);
         return buf;
     }
     if (::wcscmp(op, L"enumeratedProcesses") == 0) {
@@ -559,7 +569,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return buf;
     }
     if (::wcscmp(op, L"accRow") == 0) {
-        // G21: the accessible name|description the MSAA wrapper reports for
+        // the accessible name|description the MSAA wrapper reports for
         // a view row, read without COM. Same builders the wrapper uses
         // (grouped rows name the aggregate), so the harness asserts on what
         // a screen reader actually hears. Empty for a bad index.
@@ -583,7 +593,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return buf;
     }
     if (::wcscmp(op, L"columnsMenuMissing") == 0) {
-        // C3 guard: the View > Columns popup must offer a command for EVERY
+        // guard: the View > Columns popup must offer a command for EVERY
         // ColumnId, or that column cannot be shown in the GUI at all - there is
         // no other way to set its bit (the mask is only writable from here).
         // Six were once missing this way (NOTE, the four `ss -i` columns and
@@ -676,16 +686,16 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"changeLogVisible") == 0) {
         return changeLog_.IsVisible() ? L"1" : L"0";
     }
-    // 5.3: whether the change-log window was actually CREATED, as distinct from
+    // whether the change-log window was actually CREATED, as distinct from
     // visible. IsVisible() is false both for a window that was never created and
     // for one that exists and is hidden (the WM_CLOSE path), so on its own it
     // cannot tell "the menu item did nothing" from "the log is open but behind
-    // something". The 5.3 harness check needs that distinction to report
+    // something". The harness check needs that distinction to report
     // anything useful when it fails.
     if (::wcscmp(op, L"changeLogCreated") == 0) {
         return changeLog_.IsOpen() ? L"1" : L"0";
     }
-    // D29. What Commands::PidKillVerdict() says about a PID, as this process
+    // What Commands::PidKillVerdict() says about a PID, as this process
     // sees it. The harness runs INSIDE wintcp.exe, so asking it about
     // GetCurrentProcessId() exercises the exact self-kill case the bug report
     // was about, with the real self PID and the real rule - which is the only
@@ -705,7 +715,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"changeLogMaskAppear") == 0) {
         return changeLog_.EventAppear() ? L"1" : L"0";
     }
-    // 5.3 diagnostic: how many times the log window's WM_CREATE handler has run
+    // diagnostic: how many times the log window's WM_CREATE handler has run
     // over this session's lifetime. A count of 0 with the window VISIBLE means
     // the window was created but its controls were never built, which is the
     // one failure mode a visibility probe cannot distinguish from success.
@@ -733,7 +743,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         ::swprintf_s(buf, L"%u", socketTraffic_->TimeoutCount());
         return buf;
     }
-    // C8: a pass that could not read the handle table at all. Kept beside
+    // a pass that could not read the handle table at all. Kept beside
     // trafficTimeouts because the two look identical in a table - blank traffic
     // - and a reader who cannot name the cause cannot act on it.
     if (::wcscmp(op, L"trafficScanFailures") == 0) {
@@ -741,7 +751,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         ::swprintf_s(buf, L"%u", socketTraffic_->ScanFailureCount());
         return buf;
     }
-    // C8: settings writes attempted, and writes that failed. The gap between
+    // settings writes attempted, and writes that failed. The gap between
     // them is the loss. Both read zero for the whole life of a healthy window -
     // SaveSettings runs once, from ~MainWindow - so these are diagnostic only.
     if (::wcscmp(op, L"settingsSaveAttempts") == 0) {
@@ -824,7 +834,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return buf;
     }
     if (::wcscmp(op, L"columnOrder") == 0) {
-        // The persisted 7.1 order, as a comma list, so the harness can prove
+        // The persisted order, as a comma list, so the harness can prove
         // a drag actually changed the order and that it round-tripped.
         for (std::size_t i = 0; i < colOrder_.size() && i < kMaxColOrderSlots; ++i) {
             const std::wstring piece = L" " + std::to_wstring(colOrder_[i]);
@@ -848,7 +858,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"trayShown") == 0) {
         return trayIconShown_ ? L"1" : L"0";
     }
-    // 9.4.8: which child control holds keyboard focus, so the harness can prove
+    // which child control holds keyboard focus, so the harness can prove
     // the `/` shortcut moved focus to the filter box. "list", "filter", or ""
     // (neither - the window or another control has it).
     if (::wcscmp(op, L"focusTarget") == 0) {
@@ -858,7 +868,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         if (fg == hwnd_) return L"window";
         return L"";
     }
-    // 9.4.8: the live bookmark count, so the harness can prove `*` toggled one.
+    // the live bookmark count, so the harness can prove `*` toggled one.
     if (::wcscmp(op, L"bookmarkCount") == 0) {
         ::swprintf_s(buf, L"%zu", Bookmarks::List().size());
         return buf;
@@ -909,9 +919,9 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE: OnCreate(); return 0;
         case WM_SIZE: OnSize(LOWORD(lParam), HIWORD(lParam)); return 0;
         case WM_GETMINMAXINFO: {
-            // G24: the control bar needs ~760 px before the right-anchored
+            // the control bar needs ~760 px before the right-anchored
             // Protocol/State combos and the stretching search box stop
-            // overlapping (G6), and ~420 px before the list reads as a
+            // overlapping, and ~420 px before the list reads as a
             // list. A floor keeps the responsive layout intact instead of
             // letting the window collapse onto itself.
             auto* mm = reinterpret_cast<LPMINMAXINFO>(lParam);
@@ -952,11 +962,11 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             SyncColumnOrderFromHeader();
             return 0;
         case WM_TIMER: OnTimer(static_cast<UINT_PTR>(wParam)); return 0;
-        // 7.2 type-to-jump. Only when the LIST has focus: the filter box and
+        // type-to-jump. Only when the LIST has focus: the filter box and
         // the interval combo are ordinary text entry, and stealing their
         // keystrokes would break typing a filter.
         case WM_CHAR:
-            // 9.4.8: `/` focuses the filter box (vim-style). It is consumed
+            // `/` focuses the filter box (vim-style). It is consumed
             // here only when the LIST holds focus - otherwise it falls through
             // to the filter edit, where it is ordinary text input. The keystroke
             // is NOT passed to OnTypeJumpChar, which would consume it as a
@@ -992,7 +1002,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             OnDnsResult(reinterpret_cast<DnsResolver::Result*>(lParam));
             return 0;
         case WM_APP_DNS_STALLED:
-            // 9.2.8: wParam = count of lookups abandoned as stalled this session.
+            // wParam = count of lookups abandoned as stalled this session.
             // Append a hint to the status bar; the pending rows already paint
             // the `pending` cell inline.
             dnsStalledHint_ = L"DNS slow - some hosts show \"pending\"";
@@ -1026,7 +1036,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_SYSCOMMAND:
             // Minimize-to-tray while the tray icon is enabled.
             if ((wParam & 0xFFF0) == SC_MINIMIZE) {
-                // 9.4.6: when the tray icon is off and the user has not yet
+                // when the tray icon is off and the user has not yet
                 // answered, offer the one-shot "tray or exit" choice before
                 // minimizing to the taskbar. ResolveMinimize enables the tray
                 // when the user picks it.
@@ -1046,7 +1056,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (trayEnabled_ && trayIconShown_) {
                     ::ShowWindow(hwnd_, SW_HIDE);
-                    // G26: the first hide explains where the window went and
+                    // the first hide explains where the window went and
                     // how to get it back. A window that vanishes with no
                     // explanation reads as a crash; one balloon per process
                     // names the restore gesture (single-click, matching the
@@ -1120,7 +1130,7 @@ void MainWindow::OnCreate() {
     socketTraffic_ = new SocketTrafficSampler();
     for (int i = 0; i < COL_COUNT; ++i) colWidths_[i] = kColumns[i].width;
     visibleCols_ = kDefaultVisibleCols;
-    // 9.2.10: the portable `wintcp.ini` supplies DEFAULTS only, so it is
+    // the portable `wintcp.ini` supplies DEFAULTS only, so it is
     // applied BEFORE settings_.Load() and an existing user's saved settings
     // always win. A file that exists but will not parse is reported once
     // rather than swallowed: a portable copy that quietly does nothing is
@@ -1135,7 +1145,7 @@ void MainWindow::OnCreate() {
     }
     settings_.Load();                       // (pre-set by Create())
 
-    // 9.1.5: auto-load the remembered GeoIP database on startup. This is
+    // auto-load the remembered GeoIP database on startup. This is
     // best-effort and silent - a moved file would pop a nag on every
     // launch, so a failed load just leaves Country as "—", which is the
     // same honest "unknown" as never having picked a database. The next
@@ -1148,7 +1158,7 @@ void MainWindow::OnCreate() {
             ApplyView();
         }
     }
-    // F5.4. Same best-effort, silent contract for the ASN database - see the
+    // Same best-effort, silent contract for the ASN database - see the
     // comment above. Loaded independently of the country one, so either, both or
     // neither survives a relaunch.
     if (settings_.asnIpPath[0] != L'\0') {
@@ -1165,7 +1175,7 @@ void MainWindow::OnCreate() {
             if (settings_.colWidths[i] > 0) colWidths_[i] = settings_.colWidths[i];
         }
     }
-    // Column order (7.1). Start from the built-in order and only override it
+    // Column order. Start from the built-in order and only override it
     // if the registry holds a validated permutation; Settings::Load has
     // already rejected anything malformed, so no re-check is needed here.
     for (int i = 0; i < COL_COUNT; ++i) colOrder_[i] = kDisplayOrder[i];
@@ -1211,11 +1221,11 @@ void MainWindow::OnCreate() {
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_RESOLVE, dnsEnabled_);
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TOPMOST, topMost_);
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, trayEnabled_);
-    // 7.4 defaults to ON, so the tick is set from the member rather than left
+    // defaults to ON, so the tick is set from the member rather than left
     // to whatever the resource compiled with - an unticked "Preserve
     // selection" that is actually on would be the reverse lie.
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PRESERVE_SEL, preserveSelection_);
-    // Roadmap: the tree mode starts off, so the tick is set from the member
+    // the tree mode starts off, so the tick is set from the member
     // for the same reason as the line above - a stale compiled-in check mark
     // is a lie either way.
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_PROCESSTREE, treeMode_);
@@ -1246,7 +1256,7 @@ void MainWindow::OnCreate() {
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAFFIC, etw_.Running());
     SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_CHARTS, charts_.IsVisible());
 
-    // 9.2.5: draw the UAC shield on the elevation-gated "Per-PID traffic
+    // draw the UAC shield on the elevation-gated "Per-PID traffic
     // counters" item (shown when the user is an admin who is not currently
     // elevated; cleared if already elevated or under high contrast).
     ApplyTrafficShield(::GetMenu(hwnd_), HighContrastActive());
@@ -1264,7 +1274,7 @@ void MainWindow::OnDestroy() {
     dns_.Stop();
     etw_.Stop();                         // stop the kernel logger
     charts_.Close();                     // stop the 1 s sampler
-    changeLog_.Close();                  // 5.4: destroy before the owner goes
+    changeLog_.Close();                  // destroy before the owner goes
     {
         std::lock_guard<std::mutex> lk(Sink()->m);
         Sink()->shuttingDown = true;
@@ -1366,7 +1376,7 @@ void MainWindow::StartWorker() {
 void MainWindow::StartDnsWorker() {
     const std::shared_ptr<WorkerSink> sink = Sink();
     sink->hwnd = hwnd_;
-    // 9.2.8: a per-lookup budget so a wedged resolver stalls at most one tick
+    // a per-lookup budget so a wedged resolver stalls at most one tick
     // instead of the whole queue. The GUI renders `pending` for the rows still
     // in flight; a status-bar hint fires on stalls.
     dns_.SetTimeoutMs(DnsResolver::kDnsTimeoutDefault);
@@ -1422,7 +1432,7 @@ void MainWindow::OfferDnsForAllRows() {
     for (const Connection& r : store_.Rows()) dns_.Offer(r.remoteAddress);
 }
 
-// 4.3 GeoIP join.
+// GeoIP join.
 //
 // Walks the rows and fills the Country column from the user-supplied MMDB.
 // Unlike DNS this is entirely SYNCHRONOUS and local: a tree walk per distinct
@@ -1468,7 +1478,7 @@ void MainWindow::OfferGeoIpForAllRows() {
     }
 }
 
-// F5.4. The ASN pass. Separate from OfferGeoIpForAllRows rather than folded into
+// The ASN pass. Separate from OfferGeoIpForAllRows rather than folded into
 // it, because the two databases are independent: either may be loaded without
 // the other, and a row must be able to carry a country with no ASN or an ASN with
 // no country.
@@ -1514,7 +1524,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     // an error result (R2's containment posts those). The display age below
     // stays success-only; the watchdog reads this one.
     lastResultTick_ = ::GetTickCount64();
-    // G25: the in-flight request this result answers has landed, on every
+    // the in-flight request this result answers has landed, on every
     // path below (error, frozen, success) - cleared before any UpdateStatusBar
     // so the "Refreshing..." note never outlives the answer.
     refreshInFlight_ = false;
@@ -1531,7 +1541,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     reportErrorsNextResult_ = false;
     lastError_.clear();
     lastRefreshTime_ = result->timeText;
-    // 9.2.8: a completed refresh clears the stale stall hint; the next
+    // a completed refresh clears the stale stall hint; the next
     // stalled lookup re-posts WM_APP_DNS_STALLED if it recurs.
     dnsStalledHint_.clear();
     // Monotonic stamp for the status bar's age / next-refresh countdown.
@@ -1540,7 +1550,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     // Capture selection/scroll while the old view is still consistent,
     // swap in the new snapshot, then rebuild the view and restore.
     //
-    // 7.4: when preserveSelection_ is off, pass empty state so the rebuilt
+    // when preserveSelection_ is off, pass empty state so the rebuilt
     // view starts with nothing selected. Preserving the selection is the
     // better default for a live monitor - a row the user is inspecting
     // should not jump to the top of the list on every 2-second tick - but on
@@ -1552,7 +1562,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     if (preserveSelection_) {
         CaptureSelection(ids, &focusedId, &topIdx);
     }
-    // 5.5 freeze. The sampler has already run and the new snapshot is in
+    // freeze. The sampler has already run and the new snapshot is in
     // hand, but the DISPLAY is left exactly as it was. Freezing the display
     // rather than the sampler is deliberate: counters keep accumulating, so
     // unfreezing shows what changed during the pause instead of a gap, and
@@ -1608,7 +1618,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
     RefreshBookmarkMarks();
     ApplyViewWith(ids, focusedId, topIdx);
     RefreshDetailsWindow();              // live stats stay fresh
-    // F5.6. AFTER the view is rebuilt, so a balloon names rows the user can
+    // AFTER the view is rebuilt, so a balloon names rows the user can
     // actually look at - evaluated earlier it would answer about a table
     // that is about to be replaced.
     RunAlerts();
@@ -1616,7 +1626,7 @@ void MainWindow::OnRefreshResult(RefreshResult* payload) {
 
 void MainWindow::Refresh(bool reportErrors) {
     reportErrorsNextResult_ = reportErrors;
-    // G25: the request is in flight from here until OnRefreshResult runs,
+    // the request is in flight from here until OnRefreshResult runs,
     // so the status bar can say "Refreshing..." instead of looking idle
     // while a slow enum or a DNS stall holds the worker.
     refreshInFlight_ = true;
@@ -1686,7 +1696,7 @@ void MainWindow::CreateControls() {
     ::SendMessageW(hwndSearchEdit_, EM_SETCUEBANNER, TRUE,
                    reinterpret_cast<LPARAM>(
                        L"Filter: text, port:443, pid:1234, cpu:12, exclude:remote:tcp:80..."));
-    // Bound what can be TYPED to what can be READ (P1). A single-line EDIT
+    // Bound what can be TYPED to what can be READ. A single-line EDIT
     // defaults to EM_LIMITTEXT 32767, while CurrentSearchText() reads into a
     // 512-wchar buffer - so a filter past 511 characters was silently truncated
     // on the way back in, and the user got results for a filter they had not
@@ -1699,7 +1709,7 @@ void MainWindow::CreateControls() {
     // Virtual list view: rows are supplied by LVN_GETDISPINFO from the
     // store, so refreshes never destroy/recreate items.
     //
-    // LVS_SHAREIMAGELISTS is load-bearing with the G9 system icon list:
+    // LVS_SHAREIMAGELISTS is load-bearing with the system icon list:
     // without it the list view DESTROYS the image list assigned via
     // LVM_SETIMAGELIST when it is itself destroyed - and that list is the
     // shell's shared system list, not ours to destroy.
@@ -1716,7 +1726,7 @@ void MainWindow::CreateControls() {
                    LVS_EX_TRACKSELECT);
     ::SendMessageW(hwndList_, LVM_SETITEMCOUNT, 0, 0);
 
-    // Roadmap: the process-tree view mode. A tree control where the list
+    // the process-tree view mode. A tree control where the list
     // view is, not another window answering the same question - Task
     // Manager's Processes tab is the model. Created hidden beside the list
     // and swapped in by ToggleTreeMode, so the mode costs nothing while it
@@ -1733,7 +1743,7 @@ void MainWindow::CreateControls() {
                    reinterpret_cast<WPARAM>(font_), MAKELPARAM(TRUE, 0));
     if (hwndTree_ != nullptr) ::ShowWindow(hwndTree_, SW_HIDE);
 
-    // G21: per-row accessible names for screen readers. The subclass serves
+    // per-row accessible names for screen readers. The subclass serves
     // WM_GETOBJECT on the LIST itself (a query for the main window must keep
     // answering the main window - serving the list's object there would hide
     // the control bar from assistive tech). Everything else passes straight
@@ -1741,7 +1751,7 @@ void MainWindow::CreateControls() {
     ::SetWindowSubclass(hwndList_, &MainWindow::ListSubclassProc, 2,
                         reinterpret_cast<DWORD_PTR>(this));
 
-    // Per-row process icons (roadmap G9). The shell's system
+    // Per-row process icons. The shell's system
     // small-icon list is attached once; each row then supplies
     // its icon's index in that list from LVN_GETDISPINFO, so a
     // connection shows the icon of the program that owns the
@@ -1781,7 +1791,7 @@ void MainWindow::CreateControls() {
     SetChildFont(hwndProtoLabel, font);
     SetChildFont(hwndStateLabel, font);
 
-    // 7.3 tab order. Controls were created in a different order from the one a
+    // tab order. Controls were created in a different order from the one a
     // user would expect to walk them in, and without an explicit order Tab
     // follows creation order - so Tab out of the filter box jumped to the
     // Refresh button.
@@ -1905,7 +1915,7 @@ void MainWindow::RebuildColumns() {
 }
 
 void MainWindow::SyncGroupHeader() {
-    // G27: in grouped mode the rows are per-process aggregates, and the
+    // in grouped mode the rows are per-process aggregates, and the
     // header of the column that carries the aggregation says so with the
     // live group count. A flat view keeps the plain title, so the label
     // is state rather than decoration.
@@ -1984,7 +1994,7 @@ void MainWindow::SyncColumnMenuChecks() {
     }
 }
 
-// ---- F5.6: the alert engine's only production caller ------------------------
+// ---- the alert engine's only production caller ------------------------
 // The engine has existed, pure and tested, with no caller at all. This is it.
 //
 // Three rules it must obey, and one it must NOT:
@@ -2003,7 +2013,7 @@ void MainWindow::SyncColumnMenuChecks() {
 //     below is copied by value.
 void MainWindow::RunAlerts() {
     Settings s;
-    // 9.2.10: portable defaults first, so the registry always wins. Silent on
+    // portable defaults first, so the registry always wins. Silent on
     // a missing file; a file that exists but will not parse is reported once
     // on the status line, because a portable copy that quietly does nothing
     // is worse than one that says so.
@@ -2026,7 +2036,7 @@ void MainWindow::RunAlerts() {
         return;
     }
     const std::vector<Connection> rows = store_.Rows();   // a copy, on purpose
-    // F5.6. The rules are read here, per tick, for the same reason the settings are:
+    // The rules are read here, per tick, for the same reason the settings are:
     // `alert rule add` from another process has to reach a running window without a
     // restart. One list, so the CLI and the window cannot disagree about what is
     // being watched.
@@ -2043,7 +2053,7 @@ void MainWindow::RunAlerts() {
     UpdateStatusBar(lastError_);
 }
 
-// F5.6. One balloon per alert, whichever source it came from.
+// One balloon per alert, whichever source it came from.
 void MainWindow::RaiseAlert(const Alert& a) {
     if (trayIconShown_) {
         // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for the
@@ -2063,7 +2073,7 @@ void MainWindow::RaiseAlert(const Alert& a) {
     }
 }
 
-// ---- 9.4.2 empty states -----------------------------------------------------
+// ---- empty states -----------------------------------------------------
 // A blank cell answers the wrong question. "No rows", "no country database
 // loaded" and "traffic never ran" are three DIFFERENT reasons a column is empty,
 // and on screen they are identical - so each gets one sentence that says what to
@@ -2110,7 +2120,7 @@ void MainWindow::UpdateEmptyState() {
     }
 }
 
-// ---- 9.4.2: the buttons half ------------------------------------------------
+// ---- the buttons half ------------------------------------------------
 // UpdateEmptyState says WHY the table is empty; this offers the fix as a
 // click. The decision - which case, which buttons - is made by the pure
 // DecideEmptyState (EmptyStateActions.cpp) so the window runs the same
@@ -2220,7 +2230,7 @@ void MainWindow::ShowEmptyStateActions() {
             break;
     }
 }
-// ---- 9.4.4 column profiles -------------------------------------------------
+// ---- column profiles -------------------------------------------------
 // A profile is a named COLUMN MASK, nothing else. That is a deliberate narrowing:
 // a preset (File > Save view as preset) is a full ViewState - filter, sort,
 // grouping, sources and mask - and these must not become a second, weaker preset
@@ -2240,7 +2250,7 @@ UINT32 MainWindow::ColumnProfileMask(int profileId) const {
         case IDM_PROFILE_PERFORMANCE:
             return kPerformanceProfileCols;
         case IDM_PROFILE_DIAGNOSTICS:
-            // Show diagnostics ORs the five G6/G5 readings onto whatever is
+            // Show diagnostics ORs the five readings onto whatever is
             // visible now, rather than replacing it: "show me the diagnostics
             // TOO" is the question, and a user who has hidden CPU would not
             // expect clicking this to bring it back.
@@ -2282,7 +2292,7 @@ void MainWindow::SyncColumnProfileChecks() {
     }
 }
 
-// ---- F5.11 quick filters ---------------------------------------------------
+// ---- quick filters ---------------------------------------------------
 // One click writes an expression into the filter box and lets the existing
 // debounce apply it, so the expression is VISIBLE and EDITABLE - the whole point
 // of "one click builds the filter" rather than "one click filters".
@@ -2408,7 +2418,7 @@ void MainWindow::EnsureTrafficCounters() {
 }
 
 void MainWindow::RecreateFont() {
-    // F5.15. No handle is created or destroyed here any more. The cache owns every
+    // No handle is created or destroyed here any more. The cache owns every
     // font the process uses, so a DPI change is one call to OnDpiChanged and the
     // next Get() is correct by construction - instead of three windows each
     // releasing their own handles and one of them chasing a copy held elsewhere.
@@ -2419,7 +2429,7 @@ void MainWindow::RecreateFont() {
     // its cache-owned faces at its own DPI; it must hear about the
     // replacement too, otherwise a monitor DPI change leaves it behind.
     details_.ApplyFont(font_);
-    // Roadmap: the tree control is a child like any other, so it gets the
+    // the tree control is a child like any other, so it gets the
     // face through ApplyFontToChildren - the mode adds no font plumbing.
 }
 
@@ -2502,7 +2512,7 @@ if (hwndList_ != nullptr) {
     if (listH < S(40)) listH = S(40);
     ::MoveWindow(hwndList_, kMargin, kTopH, cx - 2 * kMargin, listH, TRUE);
 }
-// Roadmap: the tree occupies exactly the list's rectangle, and only one of
+// the tree occupies exactly the list's rectangle, and only one of
 // the two is ever visible. The swap lives here - the single place every
 // size, DPI change and toggle flows through - rather than in the toggle, so
 // a resize while the mode is on cannot leave the tree at its old size.
@@ -2554,7 +2564,7 @@ void MainWindow::OnSize(int cx, int cy) {
 }
 
 // ---------------------------------------------------------------------------
-// view (filter + sort + repaint, tasks 5/7/16) -------------------------------
+// view (filter + sort + repaint) -------------------------------
 
 std::wstring MainWindow::CurrentSearchText() const {
     // Sized from kSearchTextMaxChars, which is also the control's EM_LIMITTEXT,
@@ -2623,7 +2633,7 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
     // re-reading the box.
     v.ApplyTo(&store_, &filterProgram_);
 
-    // 9.4.2. Recomputed here rather than only at startup because this is the
+    // Recomputed here rather than only at startup because this is the
     // single funnel every path goes through: startup, a refresh result, a column
     // toggle, a preset, a GeoIP pick and a freeze all end here, and at this point
     // the row count, the column mask and both database states are simultaneously
@@ -2634,8 +2644,8 @@ void MainWindow::ApplyViewWith(const std::vector<std::uint64_t>& ids,
                    LVSICF_NOINVALIDATEALL);
     RestoreSelection(ids, focusedId, topIdx);
     ::InvalidateRect(hwndList_, nullptr, TRUE);
-    SyncGroupHeader();   // G27: the group count moves every refresh
-    // Roadmap: in tree mode the tree IS the view, so every path that lands
+    SyncGroupHeader();   // the group count moves every refresh
+    // in tree mode the tree IS the view, so every path that lands
     // here - a refresh result, a column toggle, a preset, a GeoIP pick -
     // refills it. Filling from the unfiltered rows is the tree's rule, so
     // the filter box deliberately does not narrow the tree.
@@ -2727,7 +2737,7 @@ void MainWindow::RestoreSelection(const std::vector<std::uint64_t>& ids,
     }
 }
 
-// 9.5.5: does this row carry a wildcard bind - 0.0.0.0 or :: - rather than a
+// does this row carry a wildcard bind - 0.0.0.0 or :: - rather than a
 // resolvable specific address? The store prints the local address for most
 // rows, so this is only the case for the fallback path that could not
 // resolve one; the wildcard check itself lives in ExposureScore's predicates
@@ -2740,7 +2750,7 @@ static bool IsUnspecifiedAddress(const Connection& c) {
            c.localAddress == L"0.0.0.0" || c.localAddress == L"::";
 }
 
-// 9.5.5: the exposure badge's decision half, run per refresh.
+// the exposure badge's decision half, run per refresh.
 //
 // Walks the store once - not the view: an exposure finding is a property of
 // the MACHINE, not of the current filter, so hiding a row with a filter must
@@ -2784,7 +2794,7 @@ void MainWindow::UpdateExposure() {
 }
 
 void MainWindow::UpdateCaption() {
-    // G27: the caption carries the view state - grouped,
+    // the caption carries the view state - grouped,
     // frozen, filtered - so the window is identifiable at
     // a glance and in Alt-Tab, not only from inside the
     // client area.
@@ -2797,7 +2807,7 @@ void MainWindow::UpdateCaption() {
 }
 
 void MainWindow::ToggleTreeMode() {
-    // Roadmap: a tree control where the list view is. This is a MODE of the
+    // a tree control where the list view is. This is a MODE of the
     // main window rather than a window of its own, because the two would be
     // two answers to "show me the process hierarchy", and the list's own
     // state (selection, scroll, column widths) must be there when the mode
@@ -2875,6 +2885,13 @@ void MainWindow::RebuildTree() {
 
     bool depthExceeded = false;
     const size_t count = ProcessTreeFill(hwndTree_, procs, &depthExceeded);
+    // What the fill actually drew, and how many processes it drew FROM. The
+    // second number is what a check compares the tree with: enumerating
+    // again would be a second, later snapshot of a machine that keeps
+    // changing, so "the tree has one more item than the machine" was a
+    // process that started between the two calls rather than a defect.
+    treeItemsAtFill_ = count;
+    treeEnumeratedAtFill_ = procs.size();
     // The fill preselects the first root; map that caret to a list SELECTION
     // here, so the mode opens with something selected - the status bar, the
     // context menu and every row command have a row to act on from the first
@@ -2896,7 +2913,7 @@ void MainWindow::RebuildTree() {
                         std::to_wstring(totalConnections) + L" connections";
     if (depthExceeded)
         text += L"  \u2022  very deep chain: some nodes omitted";
-    // G35: an empty tree names its next action, like the other windows. The
+    // an empty tree names its next action, like the other windows. The
     // machine reporting no processes is a snapshot failure, not an idle
     // machine, so the action is Refresh rather than "check the table".
     if (count == 0)
@@ -2973,7 +2990,7 @@ void MainWindow::ShowDetailsForTreePid(DWORD pid) {
 }
 
 void MainWindow::UpdateTrayTip() {
-    // G26: the tray tip names what the window holds, so the icon is
+    // the tray tip names what the window holds, so the icon is
     // identifiable without restoring it. Static text ("WinTCP - TCP/UDP
     // Connections") said nothing about rows, frozen/grouped modes or
     // alerts - the three states a user minimizes over and forgets.
@@ -2998,7 +3015,7 @@ void MainWindow::UpdateTrayTip() {
 }
 
 void MainWindow::InitTooltips() {
-    // G31: the control bar had no tooltips and no accessible names - only
+    // the control bar had no tooltips and no accessible names - only
     // the filter edit's cue banner said anything. One tooltip control
     // serves the whole bar; each tool is a (control, text) pair added
     // once, because the bar's children live as long as the window.
@@ -3039,7 +3056,7 @@ void MainWindow::InitTooltips() {
 }
 
 void MainWindow::UpdateStatusTips() {
-    // G31: only pane 5 ever had a tooltip. Every pane now explains
+    // only pane 5 ever had a tooltip. Every pane now explains
     // itself; panes whose text already says everything get a short
     // label rather than an echo, so the tip adds rather than repeats.
     if (hwndStatus_ == nullptr) return;
@@ -3058,7 +3075,7 @@ void MainWindow::UpdateStatusTips() {
 }
 
 void MainWindow::ResetLayout() {
-    // G28: the persisted layout (mask/order/widths/sort/filter) has no
+    // the persisted layout (mask/order/widths/sort/filter) has no
     // recovery path short of the registry. Reset restores every default
     // the startup path uses, then persists through the same single write
     // path so the fix survives a restart.
@@ -3091,7 +3108,7 @@ void MainWindow::ResetLayout() {
 }
 
 void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
-    // 9.5.5: recompute the exposure badge here rather than at each
+    // recompute the exposure badge here rather than at each
     // UpdateStatusBar call site. This function runs on every debounced
     // keystroke via ApplyView() and once a second from OnTimer, so the
     // badge stays current without a timer of its own - and no caller has to
@@ -3143,7 +3160,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         trafficColShown && !etw_.Running() && fallbackFlag_->load();
     const bool trafficBlocked = trafficColShown && !etw_.Running() &&
                                 !fallbackFlag_->load();
-    // 9.2.4: what the traffic scan could not measure, said where the traffic
+    // what the traffic scan could not measure, said where the traffic
     // columns are. A blank traffic cell means three different things and the
     // reader could previously not tell them apart - the connection moved no
     // bytes, the row was unmeasurable, or the SCAN FAILED. Only the third is
@@ -3157,7 +3174,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         (socketTraffic_ != nullptr) ? socketTraffic_->ScanFailureCount() : 0u;
     const unsigned staleGaps =
         (socketTraffic_ != nullptr) ? socketTraffic_->TimeoutCount() : 0u;
-    // 9.2.1: name the traffic source in the status bar. "Ready" alone does not
+    // name the traffic source in the status bar. "Ready" alone does not
     // distinguish a full ETW session (TCP+UDP, kernel-level) from a socket
     // fallback (TCP only, per-socket ioctl) - two very different fidelity levels
     // that the rest of the pane already distinguishes (see fallbackActive).
@@ -3169,9 +3186,9 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         : trafficBlocked        ? L"Traffic off - needs admin"
                                  : etw_.Running()        ? L"Ready (ETW)"
                                 : L"Ready";
-    // 9.2.8: append the DNS-stall hint so a user knows some Host cells show
+    // append the DNS-stall hint so a user knows some Host cells show
     // `pending` rather than `—`.
-    // 9.4.2: the empty-state strip. One sentence per case, and the sentence is the
+    // the empty-state strip. One sentence per case, and the sentence is the
     // ACTION rather than a description of a blank - "no country database loaded -
     // pick one in View > GeoIP database", not "Country: empty".
     //
@@ -3180,7 +3197,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // the shape dnsStalledHint_ already uses and the only time-scoped message
     // channel the window has: there is no toolbar and no WM_PAINT hook in this
     // window, so a banner over the list would be new chrome rather than a reuse.
-    // F5.6. Same channel and same shape as the empty-state hint beside it, and
+    // Same channel and same shape as the empty-state hint beside it, and
     // deliberately NOT stored: nothing about an alert survives a refresh, so a
     // cleared alert stops being reported without anyone removing it.
     if (!alertHint_.empty()) {
@@ -3192,7 +3209,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         right += emptyStateHint_;
     }
 
-    // 9.5.5: the exposure badge. Recipe 24's red case - a listener on a
+    // the exposure badge. Recipe 24's red case - a listener on a
     // wildcard address and a privileged port - needs a surface that is not a
     // column, because COL_COUNT is exactly 32 and a 33rd requires the
     // eight-part UINT64 mask change the architecture note forbids arriving
@@ -3210,13 +3227,13 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
         right += exposureLine_;
     }
 
-    // 5.5: while frozen, pane 2 must say so AND say how stale it is. Showing
+    // while frozen, pane 2 must say so AND say how stale it is. Showing
     // the pre-freeze "Updated: 14:32:05" on its own would be a lie - it reads
     // as current, and the user has no way to tell the list is not updating.
     // FROZEN takes priority over the timestamp for exactly that reason.
     std::wstring mid;
     if (refreshInFlight_ && !frozen_) {
-        // G25: a request is outstanding and no result has arrived yet. A
+        // a request is outstanding and no result has arrived yet. A
         // slow enum or a DNS stall otherwise looks exactly like idle, so
         // the bar says what the worker is doing instead of its last age.
         mid = L"Refreshing...";
@@ -3250,7 +3267,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     ::SendMessageW(hwndStatus_, SB_SETTEXTW, 5,
                    reinterpret_cast<LPARAM>(right.c_str()));
     // The tooltip is where the ACTIONABLE detail goes, because pane 5 is only
-    // ~170px wide (OnSize). 9.2.4 puts the two gap explanations ahead of the
+    // ~170px wide (OnSize). It puts the two gap explanations ahead of the
     // elevation ones: a machine that dropped a pass needs to know that before
     // it needs to know it should have been run elevated.
     std::wstring tip;
@@ -3282,7 +3299,7 @@ void MainWindow::UpdateStatusBar(const std::wstring& errorText) {
     // balloon on every healthy refresh.
     ::SendMessageW(hwndStatus_, SB_SETTIPTEXTW, 5,
                     tip.empty() ? 0 : reinterpret_cast<LPARAM>(tip.c_str()));
-    // G31: every pane explains itself; G26: the tray icon says what the
+    // every pane explains itself; the tray icon says what the
     // window holds. Both are refreshed with the bar so they never go stale.
     UpdateStatusTips();
     UpdateTrayTip();
@@ -3447,7 +3464,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             // anyone re-adding the entry finds this note. The capability itself
             // was NOT lost: it is the `capture` verb, which now prints the
             // reassembled stream to stdout (--text) and can write the capture
-            // out as pcapng (--out). See todo.md 8.7 G2 for why the GUI form
+            // out as pcapng (--out). The GUI form
             // was not salvageable: it re-elevated the whole application, then
             // blocked modally on a sampling capture that can legitimately come
             // back empty.
@@ -3458,12 +3475,12 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         // REMOVED 2026-10-05: IDM_PROCESS_PROPERTIES / ShowSelectedProcessProperties.
         // See the note in OnContextMenu for why the verb was removed rather than
-        // repaired, and todo.md 8.7 G1.
+        // repaired.
         // case IDM_PROCESS_PROPERTIES:
         //     ShowSelectedProcessProperties();
         //     break;
         case IDM_BLOCK_CONNECTION:
-            // 9.2.5: BlockSelectedConnection() writes firewall rules, which need
+            // BlockSelectedConnection() writes firewall rules, which need
             // an elevated token. If the user is an admin who is not elevated,
             // hand off to Reelevate() (this call exits the old process) - now a
             // live caller. If the account cannot elevate at all, show why and
@@ -3495,7 +3512,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
         case IDM_VIEW_ASNIP:
             LoadAsnDatabase();
             break;
-        // F5.11. The quick filters write the box and let the debounce do the
+        // The quick filters write the box and let the debounce do the
         // work, so there is exactly one code path from a click to a filtered
         // view - the same one typing uses. Going straight to ApplyView here
         // would skip the EN_CHANGE path and leave the two able to disagree.
@@ -3510,7 +3527,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
         case IDM_QFILTER_CLEAR:
             FocusFilterBox();
             break;
-        // 9.4.4.
+        // .
         case IDM_PROFILE_DEFAULT:
         case IDM_PROFILE_MINIMAL:
         case IDM_PROFILE_NETWORK:
@@ -3523,7 +3540,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             LoadGeoIpDatabase();
             break;
         case IDM_VIEW_BLOCKED: {
-            // 9.2.9 / 9.5.5. Read-only unless the user edits, so it does not
+            // Read-only unless the user edits, so it does not
             // touch the view's state: a list that could change the rows would
             // have to say so, and the whole point of this dialog is that it
             // only affects the firewall. It stays open across edits now, so
@@ -3548,14 +3565,14 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         }
         case IDM_VIEW_FIX_EMPTY:
-            // 9.4.2. DecideEmptyState answers both halves: whether there is
+            // DecideEmptyState answers both halves: whether there is
             // anything to fix, and what the buttons are. "Nothing to fix" is a
             // real answer here, not a failure - it is what "why is my table
             // empty" deserves when the table is empty for a legitimate reason.
             ShowEmptyStateActions();
             break;
         case IDM_VIEW_RESET_LAYOUT:
-            // G28: persisted layout, one click back to defaults.
+            // persisted layout, one click back to defaults.
             ResetLayout();
             break;
         case IDM_VIEW_FREEZE:
@@ -3623,7 +3640,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
                 store_.ClearTraffic();
                 ApplyView();
             } else {
-                // 9.2.5: starting a full ETW session needs elevation. If the user
+                // starting a full ETW session needs elevation. If the user
                 // is an admin who is not currently elevated, hand off to Reelevate()
                 // (this call exits the old process - the new, elevated one resumes
                 // here from settings_.trafficEnabled) rather than letting Start()
@@ -3671,7 +3688,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
             break;
         }
         case IDM_VIEW_PROCESSTREE: {
-            // Roadmap: the process-tree view mode. A tree control where the
+            // the process-tree view mode. A tree control where the
             // list view is - Task Manager's Processes tab - rather than a
             // second window holding the same information. Toggle, like
             // group-by-process, with its own check mark on the menu.
@@ -3688,7 +3705,7 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
 
 void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
     if (hdr == nullptr) return;
-    // Roadmap: in tree mode the tree is the surface, so its notifications
+    // in tree mode the tree is the surface, so its notifications
     // route here too. Everything the tree needs resolves to a list selection
     // first (SelectViewRowForPid), which is what keeps the command handlers
     // free of tree knowledge.
@@ -3761,7 +3778,7 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
             // The icon is requested on its own (LVIF_IMAGE) when
             // the list paints a row's image, independently of the
             // text, so it is answered before the text-only
-            // early-out below (roadmap G9).
+            // early-out below.
             if (c != nullptr && (di->item.mask & LVIF_IMAGE) != 0) {
                 di->item.iImage = ProcessIconIndex(c->processPath);
             }
@@ -3770,7 +3787,7 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
             if (c != nullptr) {
                 const int col = VisibleToCol(di->item.iSubItem);
                 if (col >= 0) {
-                    // 5.1: when the view is grouped, a row is a process, not
+                    // when the view is grouped, a row is a process, not
                     // a connection. The aggregate columns show the group's
                     // totals; everything else falls through to the underlying
                     // connection so addresses, state and ids stay real.
@@ -3803,7 +3820,7 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
             ShowDetailsOfSelectedRow();
             break;
         case LVN_GETINFOTIP: {
-            // 7.8: full-value tooltips.
+            // full-value tooltips.
             //
             // The compact columns are abbreviated to fit their width, so a
             // 12-digit byte count or a long path is elided with an ellipsis
@@ -3876,7 +3893,7 @@ void MainWindow::OnNotify(NMHDR* hdr, LPARAM /*lParam*/) {
                     }
                     break;
                 case COL_NOTE:
-                    // 5.5. The note in full, always - it is the one column
+                    // The note in full, always - it is the one column
                     // whose whole value is text the user cannot reconstruct
                     // from the cell, and the cell elides anything past the
                     // column width. Also reachable from the Bookmarks column,
@@ -3999,7 +4016,7 @@ void MainWindow::SyncColumnOrderFromHeader() {
     ApplyView();
 }
 
-// Type-to-jump (7.2). Returns true when the keystroke was consumed.
+// Type-to-jump. Returns true when the keystroke was consumed.
 //
 // The candidate list is built from the VISIBLE rows, and the label matched
 // against is the process name where there is one and the local address
@@ -4159,7 +4176,7 @@ void MainWindow::CheckRefreshWatchdog() {
 }
 
 void MainWindow::OnContextMenu(HWND target, int x, int y) {
-    // Roadmap: the tree is a valid target in tree mode - NM_RCLICK above
+    // the tree is a valid target in tree mode - NM_RCLICK above
     // already selected its node, so nothing on the list needs hit-testing.
     if (target != hwndList_ && target != hwndTree_) return;
     POINT pt = {x, y};
@@ -4224,18 +4241,18 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     const int selected = static_cast<int>(::SendMessageW(
         hwndList_, LVM_GETSELECTEDCOUNT, 0, 0));
     const UINT gray = (selected > 0) ? MF_ENABLED : MF_GRAYED;
-    // The one remaining user of the POINTER form (C4), and deliberately so:
+    // The one remaining user of the POINTER form, and deliberately so:
     // every read of `row` below happens BEFORE TrackPopupMenu runs its modal
     // loop, and only to compute a grey/enabled flag. Nothing here dereferences
     // the row after the menu returns, so there is no window in which a refresh
     // could free it. A copy would also be harmless but would copy a row whose
     // only use is four boolean reads.
     const Connection* row = FirstSelectedRow();
-    // 9.2.6: "Close connection" only works for IPv4 - SetTcpEntry has no IPv6
+    // "Close connection" only works for IPv4 - SetTcpEntry has no IPv6
     // variant (TcpTable.cpp:262 refuses it with a clear error). Disable the item
     // for IPv6 rows rather than letting the user invoke it and read the error,
     // and call the reason in the label the same way "End process..." does, so a
-    // greyed item is not a silent mystery (see the D29 note above). The Block
+    // greyed item is not a silent mystery (see the note above). The Block
     // item stays enabled: firewall rules are family-agnostic and stop the
     // connection from coming back, which is the right outcome for IPv6.
     const bool isV4Tcp = (row != nullptr && row->protocol == IPPROTO_TCP &&
@@ -4252,7 +4269,7 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     ::AppendMenuW(menu, MF_STRING, IDM_CTX_COPY_ALL, L"Copy &all");
     ::AppendMenuW(menu, MF_STRING | gray, IDM_CTX_EXPORT_SELECTION,
                    L"&Export selection...");
-    // REMOVED 2026-10-05 (todo.md 8.7 G2). Both menu entries that used to live here
+    // REMOVED 2026-10-05. Both menu entries that used to live here
     // are gone; the capability was moved to the CLI rather than dropped.
     //
     // REMOVED: "Follow TCP &stream..." (IDM_FOLLOW_STREAM). It re-elevated the
@@ -4267,7 +4284,7 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     // ::AppendMenuW(menu, MF_STRING | (canFollow ? MF_ENABLED : MF_GRAYED),
     //               IDM_FOLLOW_STREAM, L"Follow TCP &stream...");
 
-    // Shell navigation (4.6). Both need a real path, which a row does not
+    // Shell navigation. Both need a real path, which a row does not
     // always have: PID 4 and some service processes report a name but no
     // image path. Offering the item and then failing is worse than greying
     // it, so the predicate is the same condition the action depends on.
@@ -4295,7 +4312,7 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
     ::AppendMenuW(menu, MF_STRING | (row != nullptr && row->protocol == IPPROTO_TCP
                                          ? MF_ENABLED : MF_GRAYED),
                    IDM_BLOCK_CONNECTION, L"&Block this connection...");
-    // 9.2.5: "Block this connection..." adds Windows Firewall rules, which need
+    // "Block this connection..." adds Windows Firewall rules, which need
     // an elevated token. Show the UAC shield when the user is an admin who is
     // not currently elevated (ElevationPossibleForUser). A standard account gets
     // no shield: the glyph means "can be elevated", and a click on that item
@@ -4311,7 +4328,7 @@ void MainWindow::OnContextMenu(HWND target, int x, int y) {
                    IDM_CTX_CLOSE_CONNECTION,
                    isV6Tcp ? L"&Close connection (IPv6 - use Block instead...)"
                            : L"&Close connection...");
-    // D29: "End process..." was unconditionally enabled, so it was clickable on
+    // "End process..." was unconditionally enabled, so it was clickable on
     // a wintcp.exe row - and wintcp.exe is a network tool, so it has its own
     // rows. Clicking it ended WinTCP. The item is now greyed when the row's PID
     // cannot be ended, and says WHY in the label rather than greying silently,
@@ -4371,7 +4388,7 @@ bool MainWindow::SelectedRowIndices(std::vector<int>& out) const {
 
 std::wstring MainWindow::SelectedRowsText(bool copyAll) const {
     std::wstring out;
-    // G27: a copy of a grouped or frozen view says so up front, so the
+    // a copy of a grouped or frozen view says so up front, so the
     // pasted table cannot be mistaken for a live flat one. '#' comment
     // lines, matching the CLI's own comment convention, so a TSV reader
     // that skips comment lines keeps working and a human reader sees the
@@ -4516,7 +4533,7 @@ void MainWindow::DoExport(bool selectionOnly) {
     if (lastSep != std::wstring::npos && lastSep < MAX_PATH)
         ::wcsncpy_s(settings_.lastExportDir, p.substr(0, lastSep).c_str(),
                     _TRUNCATE);
-    // 9.4.7: surface the row count the export actually wrote, so a user
+    // surface the row count the export actually wrote, so a user
     // exporting a 3000-row snapshot gets a confirmation that names the volume
     // rather than a bare "Export completed." The count is authoritative: it
     // is the number of rows fed to the serializer, which is exactly what
@@ -4562,7 +4579,7 @@ void MainWindow::KillSelectedProcess() {
     if (!sel.has_value()) return;
     const Connection& c = *sel;
 
-    // D29. THE ROW IS ALREADY A COPY — `sel` above, not `rows_[n]`.
+    // THE ROW IS ALREADY A COPY — `sel` above, not `rows_[n]`.
     //
     // This handler used to read `c->pid` and friends *after* the confirm
     // MessageBox returned, and the comment above those reads explained why
@@ -4577,12 +4594,12 @@ void MainWindow::KillSelectedProcess() {
     // The copy this handler relied on is no longer a local `const Connection
     // row = c;` that a future edit could move below the dialog: it is
     // `SelectedCopy()` at the top of every handler, so there is no way to write
-    // this handler wrong (C4). It costs one Connection on a path the user just
+    // this handler wrong. It costs one Connection on a path the user just
     // opened a dialog for, and the whole row is copied rather than the few
     // fields this dialog happens to use, because a partial copy is a copy that
     // can be extended wrongly later.
 
-    // D29, second half: refuse our own process BEFORE the dialog, so the user
+    // second half: refuse our own process BEFORE the dialog, so the user
     // is not asked to approve something that will be refused afterwards. The
     // rule itself lives in Commands.cpp (PidKillVerdict) because the CLI can
     // reach it too; this is only the GUI asking early.
@@ -4688,7 +4705,7 @@ void MainWindow::OpenSelectedFileLocation() {
     }
 }
 
-// REMOVED 2026-10-05 (todo.md 8.7 G1). Kept, commented, for the same reason as
+// REMOVED 2026-10-05. Kept, commented, for the same reason as
 // the menu entry: the reasoning is the valuable part and deleting it would lose
 // the answer to "why doesn't Process properties work?".
 //
@@ -4786,7 +4803,7 @@ void MainWindow::BlockSelectedConnection() {
     mo.yes = true;
     const CommandResult br = BlockNow(req, mo);
     if (br.exitCode == kExitOk) {
-        // G32: the block succeeded, so the result goes to the
+        // the block succeeded, so the result goes to the
         // status bar rather than a modal that interrupts the
         // flow - the user can keep watching the table. A
         // partial failure is still a failure and stays a
@@ -4813,7 +4830,7 @@ void MainWindow::CloseSelectedConnection() {
     if (c.protocol != IPPROTO_TCP || c.state == MIB_TCP_STATE_LISTEN)
         return;
 
-    // `c` is a copy (SelectedCopy, C4): the confirm below runs a modal loop, and
+    // `c` is a copy (SelectedCopy): the confirm below runs a modal loop, and
     // a refresh arriving in that window reallocates rows_.
 
     wchar_t prompt[768] = {0};
@@ -4838,11 +4855,11 @@ void MainWindow::CloseSelectedConnection() {
                       L"WinTCP - Close failed", MB_OK | MB_ICONWARNING);
         return;
     }
-    Refresh(false);   // the row vanishes, flashes red, then lingers as a grey F5.7 ghost
+    Refresh(false);   // the row vanishes, flashes red, then lingers as a grey ghost
 }
 
 void MainWindow::RemoveAllWinTcpBlocks() {
-    // D30: remove every WinTCP block rule the ledger remembers - i.e., every
+    // remove every WinTCP block rule the ledger remembers - i.e., every
     // rule that `block` created. The ledger, not a full enumeration, is the
     // source of truth, so this removes exactly what this application added
     // and nothing else.
@@ -4907,7 +4924,7 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
         case CDDS_ITEMPREPAINT: {
             // Change highlighting: green = new, yellow = state changed, red =
-            // vanished THIS refresh (then a grey F5.7 retained ghost). The colors
+            // vanished THIS refresh (then a grey retained ghost). The colors
             // are chosen from the active theme: on a dark theme the pastel
             // fills would glare, so a darker background and a light
             // foreground are used instead.
@@ -4924,7 +4941,7 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             if (HighContrastActive()) return CDRF_DODEFAULT;
             const bool dark = ThemeIsDark();
             if (c->flags & kRowRemoved) {
-                // F5.7: a socket that vanished THIS refresh flashes red once,
+                // a socket that vanished THIS refresh flashes red once,
                 // then settles to a muted grey retained ghost for the rest of its
                 // life (up to kMaxRetainedGhosts). deathTick is touched only at
                 // vanishing, so it equals this snapshot's tick for the flashing row.
@@ -4966,7 +4983,7 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
                 }
                 return CDRF_NEWFONT;
             }
-            // G10: subtle banding on unmarked rows, so the eye can follow a
+            // subtle banding on unmarked rows, so the eye can follow a
             // row across a wide table without selection. Change highlights
             // above win - a flashing row must not be banded over - and the
             // shades are faint enough to stay out of the text's way in
@@ -4979,7 +4996,7 @@ LRESULT MainWindow::OnCustomDraw(NMLVCUSTOMDRAW* cd) {
             return CDRF_DODEFAULT;
         }
         case CDDS_POSTPAINT: {
-            // The empty-state banner (roadmap G15). When the view
+            // The empty-state banner. When the view
             // is empty there are no rows to paint, so the reason is
             // drawn where the rows would have been - in the list
             // itself - instead of only in the status bar, which a
@@ -5057,7 +5074,7 @@ void MainWindow::ShowDetailsOfSelectedRow() {
                   c.processPath.empty() ? std::wstring() : c.processPath);
 }
 
-/* REMOVED 2026-10-05 (todo.md 8.7 G2) - the modal "capturing..." countdown
+/* REMOVED 2026-10-05 - the modal "capturing..." countdown
    window, and the whole of FollowSelectedStream's wait step.
 
    This existed for one caller: the GUI's Follow TCP stream action, which is
@@ -5207,7 +5224,7 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 */
 
 
-// REMOVED 2026-10-05 (todo.md 8.7 G2): FollowSelectedStream, the GUI half of
+// REMOVED 2026-10-05: FollowSelectedStream, the GUI half of
 // "Follow TCP stream". Commented, not deleted, because the chain of reasons it
 // failed IS the argument for moving the feature to the CLI:
 //
@@ -5270,7 +5287,7 @@ LRESULT CALLBACK CaptureWaitProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 //                  result, target.label);
 // }
 
-// ---- 5.2 presets + 5.3 bookmarks -----------------------------------------
+// ---- presets + bookmarks -----------------------------------------
 
 // Snapshot the current view into a PresetView.
 //
@@ -5283,7 +5300,7 @@ PresetView MainWindow::CurrentPresetView() const {
     if (dnsEnabled_) sources |= kPresetSourceHosts;
     if (etw_.Running() || fallbackFlag_->load(std::memory_order_relaxed))
         sources |= kPresetSourceEtw;
-    // F5.4: the ASN database shares the GeoIP bit rather than taking a new one.
+    // the ASN database shares the GeoIP bit rather than taking a new one.
     // It is the same enrichment applied from a second file, and kPresetSourceAll
     // is a four-bit mask - adding a fifth bit would be a schema change to a
     // persisted value for no distinction a user can act on.
@@ -5374,7 +5391,7 @@ void MainWindow::LoadPreset() {
     // presets a list box scrolls, and the numbers double as a way to refer to
     // one in the message box.
     //
-    // G4: the list is the LABEL of the prompt, not a discarded local. The
+    // the list is the LABEL of the prompt, not a discarded local. The
     // prompt used to build this text and then ask with an empty label, so
     // the numbers meant nothing. Capped at a dozen rows with a count, so a
     // long preset library cannot blow the dialog's caption bound (the prompt
@@ -5430,7 +5447,7 @@ void MainWindow::DeletePreset() {
                       MB_OK | MB_ICONINFORMATION);
         return;
     }
-    // G4: same contract as LoadPreset - the numbered list is the prompt's
+    // same contract as LoadPreset - the numbered list is the prompt's
     // label, capped the same way, so the numbers on screen mean something.
     std::wstring text = L"Type the number of the preset to delete:\r\n\r\n";
     const size_t kShownPresets = 12;
@@ -5509,7 +5526,7 @@ void MainWindow::ShowBookmarksList() {
     ::MessageBoxW(hwnd_, text.c_str(), L"Bookmarks", MB_OK);
 }
 
-// 5.3. Read the bookmark store once and push it into the row model.
+// Read the bookmark store once and push it into the row model.
 //
 // The registry read happens here, once per refresh, and the result is a plain
 // vector the store can walk without touching the registry. Doing it the other
@@ -5623,7 +5640,7 @@ void MainWindow::EditSelectedBookmarkNote() {
 }
 
 // ---------------------------------------------------------------------------
-// About box / shortcuts sheet (roadmap G13)
+// About box / shortcuts sheet
 //
 // Both used to be a bare MessageBoxW. The About summary runs to a
 // dozen lines and the shortcut list is laid out in columns: a message
@@ -5802,18 +5819,18 @@ void ShowTextSheet(HWND owner, const wchar_t* title,
 }  // namespace
 
 void MainWindow::ShowAboutBox() {
-    // 7.5. Every line of the capability block is read from live state, not
+    // Every line of the capability block is read from live state, not
     // hard-coded: a summary that always said "Administrator: no" would be
     // wrong for exactly the user most likely to be reading it.
     BuildSummary s;
     // IsElevated(), not IsElevatedInstance(): the marker only says "this
     // process was relaunched by WinTCP". A user who launched an already-
     // elevated console has no marker and was told "Administrator no" while
-    // every elevated feature worked (D23).
+    // every elevated feature worked.
     s.elevated = IsElevated();
     s.etwRunning = etw_.Running();
     s.trafficFallback = fallbackFlag_->load(std::memory_order_relaxed);
-    // 9.2.4: the same two counters the status bar shows, so the About box and
+    // the same two counters the status bar shows, so the About box and
     // the pane cannot disagree. Reported only when the sampler exists at all:
     // a window with traffic off has no opinion, and printing a confident 0
     // there would claim a check nobody ran.
@@ -5833,7 +5850,7 @@ void MainWindow::ShowAboutBox() {
     ShowTextSheet(hwnd_, L"About WinTCP", AboutText(s), nullptr);
 }
 
-// 7.6. The sheet is rendered from the same list the selftest checks, so a
+// The sheet is rendered from the same list the selftest checks, so a
 // shortcut that exists but is undocumented (or documented but absent) is a
 // test failure rather than something a user discovers.
 void MainWindow::ShowShortcutsSheet() {
@@ -5845,7 +5862,7 @@ void MainWindow::ShowShortcutsSheet() {
                           ::GetStockObject(OEM_FIXED_FONT)));
 }
 
-// 4.3. Pick a user-supplied MaxMind .mmdb and start filling the Country
+// Pick a user-supplied MaxMind .mmdb and start filling the Country
 // column.
 //
 // The database is NEVER downloaded. This is a deliberate constraint, not an
@@ -5879,7 +5896,7 @@ void MainWindow::LoadGeoIpDatabase() {
         return;
     }
 
-    // 9.1.5: persist the path the user picked, so it survives a relaunch.
+    // persist the path the user picked, so it survives a relaunch.
     // Only reached on a successful load: a cancelled picker returned above,
     // and a load that failed returned with the parser's reason.
     ::wcsncpy_s(settings_.geoIpPath, file, _TRUNCATE);
@@ -5898,7 +5915,7 @@ void MainWindow::LoadGeoIpDatabase() {
     UpdateStatusBar(std::wstring());
 }
 
-// F5.4. The ASN picker. A near-copy of LoadGeoIpDatabase, and deliberately so:
+// The ASN picker. A near-copy of LoadGeoIpDatabase, and deliberately so:
 // the two differ only in which member they load, which settings key they write
 // and the words in the message boxes. Factoring the shared half would mean
 // threading a "which database" enum through the error strings for no gain, and
@@ -5964,7 +5981,7 @@ void MainWindow::SaveSettings() {
     settings_.trafficEnabled = etw_.Running();
     const std::wstring filter = CurrentSearchText();
     ::wcsncpy_s(settings_.filter, filter.c_str(), _TRUNCATE);
-    // 9.1.5: the GeoIP path is part of the view, not just the data - it has
+    // the GeoIP path is part of the view, not just the data - it has
     // to leave here with everything else the user chose.
     //
     // Set BEFORE the single write below. It used to be set BETWEEN two calls to
@@ -5974,7 +5991,7 @@ void MainWindow::SaveSettings() {
     ::wcsncpy_s(settings_.geoIpPath,
                 geo_.Loaded() ? geo_.SourcePath().c_str() : L"",
                 _TRUNCATE);
-    // F5.4: the ASN path is remembered on the same terms - whatever is actually
+    // the ASN path is remembered on the same terms - whatever is actually
     // loaded - so a database the user cleared does not come back on the next
     // launch. Same single PersistSettings call below; do not add another.
     ::wcsncpy_s(settings_.asnIpPath,
@@ -6198,7 +6215,7 @@ void MainWindow::ClearFilterBox() {
 // special case.
 
 bool MainWindow::HighContrastActive() const {
-    // G12: one probe for the whole app (Theme.h); the body used to repeat
+    // one probe for the whole app (Theme.h); the body used to repeat
     // the SystemParametersInfoW call DetailsDialog carried line for line.
     return wintcp::HighContrastActive();
 }
@@ -6219,7 +6236,7 @@ bool MainWindow::ThemeIsDark() const {
 }
 
 void MainWindow::RefreshSystemColors() {
-    // 5.4: the change-log window is a top-level window, so it does not get
+    // the change-log window is a top-level window, so it does not get
     // WM_SYSCOLORCHANGE from the main window. Forward it explicitly or the
     // log window keeps stale colours after a theme change while the rest of
     // the app has already repainted.
@@ -6290,7 +6307,7 @@ void MainWindow::ShowTrayMenu() {
     ::AppendMenuW(menu, MF_STRING | (topMost_ ? MF_CHECKED : 0),
                   IDM_VIEW_TOPMOST, L"Always on top");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    // D30: this is the item the Block confirmation has always pointed at
+    // this is the item the Block confirmation has always pointed at
     // ("use Remove All WinTCP Blocks from the tray menu"). It did not exist
     // until now, so the documented removal path has a handler; the handler
     // reports "no rules" / "needs elevation" honestly. Always shown - built
@@ -6315,7 +6332,7 @@ void MainWindow::ShowTrayMenu() {
 }
 
 MainWindow::MinimizeTarget MainWindow::ResolveMinimize() {
-    // 9.4.6: the prompt only fires when the tray icon is OFF. With the tray on,
+    // the prompt only fires when the tray icon is OFF. With the tray on,
     // the existing SC_MINIMIZE handler hides the window to the tray directly.
     if (trayEnabled_) return MinimizeTarget::kTray;
 

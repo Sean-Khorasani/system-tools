@@ -272,7 +272,7 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* xp) {
     }
     // The breadcrumb names the dump when there is one and says precisely why
     // not when there is not. stderr, not stdout: a crash report is
-    // diagnostics, never data (the D4 rule), and a pipeline parsing stdout
+    // diagnostics, never data, and a pipeline parsing stdout
     // must not receive it.
     char msg[kCrashPathChars + kCrashMsgSlackChars] = {0};
     if (dumped) {

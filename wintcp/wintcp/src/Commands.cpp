@@ -3,7 +3,7 @@
 // See Commands.h. All headless; no HWND, no dialogs, no clipboard.
 
 #include "Commands.h"
-#include "Alerts.h"     // F5.6: AlertRule, AlertRuleStore
+#include "Alerts.h"     // AlertRule, AlertRuleStore
 #include "Settings.h"
 
 #include <algorithm>
@@ -15,14 +15,14 @@
 
 #include "BlockConn.h"
 #include "Bookmarks.h"
-#include "BookmarkFile.h"  // 9.2.10: the export/import codec
+#include "BookmarkFile.h"  // the export/import codec
 #include "BuildInfo.h"
 #include "ColumnsWin.h"
 #include "DnsResolver.h"
 #include "Elevate.h"
 #include "GeoIp.h"
 #include "Opt.h"
-#include "PresetFile.h"  // 9.2.10: the preset export/import codec
+#include "PresetFile.h"  // the preset export/import codec
 #include "Presets.h"
 #include "ProcessInfo.h"
 #include "SocketTraffic.h"
@@ -132,7 +132,7 @@ constexpr size_t kCaptureLineChars = 256;
 constexpr size_t kStatJsonChars = 512;
 
 // THE refusal wording, exit 3. Every "we will not do that without being told
-// twice" answer goes through here (C5), so a script can match one shape.
+// twice" answer goes through here, so a script can match one shape.
 //
 //   <verb>: refused: pass <FLAG> to proceed (or --dry-run to preview).
 //
@@ -145,7 +145,7 @@ constexpr size_t kStatJsonChars = 512;
 // Deliberately NOT unified with these, because they mean something else:
 //   * "kill: refusing PID 4: ..." (exit 2) is a BAD ARGUMENT, not a missing
 //     confirmation. --yes does not make PID 4 killable, so telling the user to
-//     pass --yes would be a false promise - the exact failure mode D29 was.
+//     pass --yes would be a false promise - the exact failure mode.
 //   * "export --limit is not accepted" (exit 2) is the same: the switch does
 //     not belong to the verb, and no flag makes it belong.
 CommandResult Refused(const std::string& what, const char* flag = "--yes") {
@@ -204,7 +204,7 @@ std::vector<int> GroupedDefaultColumns() {
 // The column set an output should render: what the user asked for, or the
 // default for the output shape.
 //
-// D27: a GROUPED stream defaults to the group-answerable set rather than the
+// a GROUPED stream defaults to the group-answerable set rather than the
 // flat one. The flat default is ten columns and four of them are
 // per-connection, so a grouped CSV would otherwise carry four arbitrary
 // member addresses under four headers that promise otherwise - and a header
@@ -221,7 +221,7 @@ std::vector<int> ListColumns(const ListOptions& opt) {
     return DefaultExportColumns();
 }
 
-// D27: refuse a grouped MACHINE-READABLE output that explicitly asks for a
+// refuse a grouped MACHINE-READABLE output that explicitly asks for a
 // per-connection column, by name, and say which columns do work.
 //
 // Why a refusal and not a substitution: silently swapping the user's chosen
@@ -248,7 +248,7 @@ std::string ValidateStreamColumns(const ListOptions& opt) {
     return bad;
 }
 
-// ---- aligned "table" rendering (D14) ---------------------------------------
+// ---- aligned "table" rendering ---------------------------------------
 // `format table` is the default human shape, and raw tab stops do not make
 // one: header and data cells start at different 8-column stops, so columns
 // never line up vertically. The table now pads every cell to its column's
@@ -292,7 +292,7 @@ std::string TruncateToWidth(const std::string& s, size_t width) {
 // the cap whenever that source will run: the streamed header is printed
 // BEFORE the join, the rows are padded AFTER it, and only a
 // source-determined width makes the two passes compute the same table
-// character for character (D15).
+// character for character.
 //
 // Country is deliberately absent: an ISO alpha-2 code is 2 columns wide
 // against a 7-column header, so its width is the header's in both passes
@@ -300,9 +300,9 @@ std::string TruncateToWidth(const std::string& s, size_t width) {
 int ActiveCap(int col, const ListOptions& opt) {
     switch (col) {
         case COL_GROUPRATE:
-            return GetColumnStyle(COL_GROUPRATE).cap;  // late-joined (G5)
+            return GetColumnStyle(COL_GROUPRATE).cap;  // late-joined
         case COL_NOTE:
-            // 5.5: filled by the bookmark join, which happens after the header
+            // filled by the bookmark join, which happens after the header
             // is printed - so the width must be the source's, not the
             // content's. Same rule as COL_HOST.
             return GetColumnStyle(COL_NOTE).cap;
@@ -320,7 +320,7 @@ int ActiveCap(int col, const ListOptions& opt) {
         case COL_MINRTT:
         case COL_CWND:
         case COL_RETRANS:
-            // G6: late-joined exactly like the byte counters - the kernel fills
+            // late-joined exactly like the byte counters - the kernel fills
             // these during the socket scan, so with no scan every cell is "—" and
             // the two width passes still have to agree on the same table. Same
             // rule as BANDWIDTH: the header is streamed before the join, so the
@@ -464,7 +464,7 @@ std::string RenderAlignedLines(
 }
 
 // The header exactly as RenderList would print it - the streamed copy for
-// D15. Same functions, same widths as the row pass below.
+// Same functions, same widths as the row pass below.
 std::string ListHeaderLine(const ConnectionStore& store,
                            const ListOptions& opt) {
     const std::vector<int> cols = ListColumns(opt);
@@ -512,7 +512,7 @@ std::string DelimitedList(const ConnectionStore& store, const ListOptions& opt,
     // for falls through to the representative connection - the GUI has
     // always rendered it that way, and the CLI used to print the cell
     // BLANK (a table whose columns are half empty is exactly the messy
-    // output D14 exists to fix).
+    // output it exists to fix).
     std::vector<std::vector<std::string>> cells;
     size_t shown = 0;
     for (size_t v = 0; v < store.View().size(); ++v) {
@@ -671,7 +671,7 @@ const char* JsonKeyFor(int column) {
         case COL_DISK: return "disk";
         case COL_DURATION: return "duration";
         case COL_BANDWIDTH: return "bandwidth";
-        // G6: the `ss -i` names, so someone comparing the two is looking for
+        // the `ss -i` names, so someone comparing the two is looking for
         // the same strings. JSON keys are lower case by convention (every other
         // key here is), which is why they differ from the CELL HEADERS - those
         // are "RTT" / "Min RTT" / "Cwnd" / "Retrans", and the two conventions
@@ -680,7 +680,7 @@ const char* JsonKeyFor(int column) {
         case COL_MINRTT: return "minrtt";
         case COL_CWND: return "cwnd";
         case COL_RETRANS: return "retrans";
-        // G5. Named "procspeed" rather than "groupspeed" on purpose: the value
+        // Named "procspeed" rather than "groupspeed" on purpose: the value
         // is a PROCESS total, and it is populated on flat rows too, so a key
         // that said "group" would mislead anyone reading a non-grouped JSON
         // document.
@@ -689,7 +689,7 @@ const char* JsonKeyFor(int column) {
         case COL_TLS: return "tls";
         case COL_COUNTRY: return "country";
         case COL_PINNED: return "pinned";
-        // F5.1/F5.2/F5.3. JSON keys match the --columns spellings, not the CELL
+        // JSON keys match the --columns spellings, not the CELL
         // HEADERS, for the same reason the ss -i keys do: the header says
         // "Parent" and "Integrity", and the machine-readable name is the flat
         // one a jq author would type.
@@ -700,7 +700,7 @@ const char* JsonKeyFor(int column) {
     }
 }
 
-// ---- help reference: columns / filters (9.3.2) -----------------------------
+// ---- help reference: columns / filters -----------------------------
 // `help columns` and `help filters` print the vocabulary from the SAME tables
 // the parser uses (JsonKeyFor above, ColumnTitle, ColumnIsPerConnectionOnly,
 // kColumnSet*), so the reference can never drift from the spellings the rest of
@@ -1002,7 +1002,7 @@ bool JoinGeoAddrs(ConnectionStore& store, GeoIpDatabase& db,
     return true;
 }
 
-// F5.4. The ASN join, shaped exactly like JoinGeoAddrs so the two read as a pair.
+// The ASN join, shaped exactly like JoinGeoAddrs so the two read as a pair.
 //
 // Two differences from the country join, both deliberate:
 //
@@ -1035,7 +1035,7 @@ bool JoinAsnAddrs(ConnectionStore& store, GeoIpDatabase& db,
 
 // One sentence for the traffic columns of this run, for both front ends.
 //
-// C8, and this is the whole point of it: a blank traffic cell has three
+// and this is the whole point of it: a blank traffic cell has three
 // different causes that look identical on screen - the connection really moved
 // nothing, the row could not be measured, or THE SCAN FAILED - and nothing in
 // the output said which. Naming the third is the only one a reader can act on.
@@ -1072,7 +1072,7 @@ std::string TrafficScanDroppedNote(unsigned passes) {
            "ones. Closing the owning connection clears it.\r\n";
 }
 
-// What this call could not measure. 9.2.4 widened this from a single failure
+// What this call could not measure. It was widened from a single failure
 // count to both gap kinds, because a caller that learns about one and not the
 // other still cannot answer the reader's question:
 //
@@ -1115,7 +1115,7 @@ TrafficScanGaps JoinTrafficPids(ConnectionStore& store,
     // the more specific fact about the same cell.
     const std::vector<SocketBytes> bytes = TrafficSampler().Bytes(pids);
     store.ApplySocketBytes(bytes);
-    // G6: `ss -i` for Windows, from the SAME TCP_INFO_v0 reading as the bytes
+    // `ss -i` for Windows, from the SAME TCP_INFO_v0 reading as the bytes
     // and ages above - no extra handle duplication, no extra ioctl, no extra
     // pass over the handle table. RTT, minimum RTT, congestion window and
     // retransmitted bytes are per-socket facts, so this joins on the 4-tuple
@@ -1160,7 +1160,7 @@ struct PrintSelection {
 // ever sampled, and the filter could only ever answer "no rows" while the
 // same rows were about to print "6d 8h". Measured: every row reached
 // MatchClause with firstSeen == nowTick, i.e. secs == 0.
-// G6: the four TCP_INFO fields join in exactly like the byte counters - they
+// the four TCP_INFO fields join in exactly like the byte counters - they
 // are filled by the socket scan - so a clause on any of them must be treated
 // as enrichment-dependent or it is evaluated against an empty column.
 //
@@ -1192,7 +1192,7 @@ bool DependsOnEnrichment(FilterField f) {
            f == FilterField::Rtt || f == FilterField::MinRtt ||
            f == FilterField::Cwnd || f == FilterField::Retrans ||
            f == FilterField::Speed ||
-           // F5.3 only. Ppid, Parent and Integrity are deliberately ABSENT:
+           // only. Ppid, Parent and Integrity are deliberately ABSENT:
            // they are filled by the process resolver during the snapshot
            // itself, which runs before any filter is applied, so a clause on
            // one of them sees a populated column and must not be deferred.
@@ -1233,13 +1233,13 @@ std::vector<FilterClause> PreJoinClauses(const std::wstring& filter) {
 // a header, rc 0, and NOTHING on stderr, so the caller had no way to learn
 // that the filter was being asked a question its own switches left
 // unanswerable. This names the switch instead. Advisory only: never fatal,
-// never on stdout (D4), never under --quiet (quiet = zero bytes).
+// never on stdout, never under --quiet (quiet = zero bytes).
 //
 // DURATION is deliberately absent: in --watch the persistent store's own
 // clock ages rows with no --traffic involved, so "add --traffic" would be a
 // lie there; in a one-shot the Duration column already shows the 0s the
 // filter is failing on, so the empty match is visible in the row itself.
-// 9.2.2: split into parts so the two contracts cannot drift. The FILTER
+// split into parts so the two contracts cannot drift. The FILTER
 // half is quiet-agnostic - the CLI's quiet refusal (exit 2) needs to see
 // exactly what the advisory path suppresses - and excludes columns,
 // because `--quiet`'s exit code answers "does the FILTER match" and a
@@ -1298,7 +1298,7 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt) {
                     // naming --traffic alone would send the reader into a
                     // second silent-empty run. Both facts go in the note.
                     case FilterField::Speed:  addName("\"speed:\""); anySpeed = true; break;
-                    // F5.3. Its own note, and NOT the traffic wording: the
+                    // Its own note, and NOT the traffic wording: the
                     // signature verdict is read during the snapshot rather than
                     // by the socket scan, so telling the reader to add
                     // --traffic would send them down a switch that cannot
@@ -1336,7 +1336,7 @@ std::string FilterEnrichmentAdvice(const ListOptions& opt) {
 
 std::string ColumnEnrichmentAdvice(const ListOptions& opt) {
     std::string out;
-    // The columns half (D13): a printed enrichment column whose switch is off
+    // The columns half: a printed enrichment column whose switch is off
     // is the same silent-empty failure this advice exists to prevent for
     // filters - every row comes out blank and nothing says why. Measured:
     // `list --columns rx` printed a full column of em-dashes with no
@@ -1360,13 +1360,13 @@ std::string ColumnEnrichmentAdvice(const ListOptions& opt) {
         else if (c == COL_TX) addColName(colTraffic, "\"tx\"");
         else if (c == COL_NETTOTAL) addColName(colTraffic, "\"nettotal\"");
         else if (c == COL_TRAFFIC) addColName(colTraffic, "\"traffic\"");
-        // G6: all four are filled by the same socket scan as the byte counters,
+        // all four are filled by the same socket scan as the byte counters,
         // so "add --traffic" is exactly as true for them as for "rx".
         else if (c == COL_RTT)     addColName(colTraffic, "\"rtt\"");
         else if (c == COL_MINRTT)  addColName(colTraffic, "\"minrtt\"");
         else if (c == COL_CWND)    addColName(colTraffic, "\"cwnd\"");
         else if (c == COL_RETRANS) addColName(colTraffic, "\"retrans\"");
-        // F5.3, and NOT folded into colTraffic: this column is empty because the
+        // and NOT folded into colTraffic: this column is empty because the
         // trust provider was never asked, which is a different problem from the
         // socket scan not having run, and the fix is a different switch.
         else if (c == COL_SIGNATURE) colSig = true;
@@ -1375,7 +1375,7 @@ std::string ColumnEnrichmentAdvice(const ListOptions& opt) {
         out += "column: \"host\" without --dns: reverse DNS never ran, so the "
                "cell stays empty; add --dns (blocking; resolves every "
                "candidate remote).\r\n";
-    // F5.4. The country cell half-comes from --db and half from --asn-db, so
+    // The country cell half-comes from --db and half from --asn-db, so
     // "the cell stays empty" is FALSE whenever either is loaded: an ASN database
     // fills the same cell with "AS15169 Google LLC" and no country code. The
     // message used to claim the cell stayed empty in that case, which is both
@@ -1510,7 +1510,7 @@ bool RowCanEnrich(const Connection& c) {
     return true;
 }
 
-// D3: `--limit N` truncates BEFORE the enrichment join, so when the head of
+// `--limit N` truncates BEFORE the enrichment join, so when the head of
 // the default (PID-ascending) table is TIME_WAIT / listener / wildcard rows
 // the printed window is entirely unenrichable and every enrichment column
 // reads `—` - which looks like the feature is broken when it is only that
@@ -1520,9 +1520,9 @@ bool RowCanEnrich(const Connection& c) {
 // surface (the GUI list has the same head), and silently changing which rows
 // `--limit` means is worse than saying so. Instead the caller gets one hint
 // on STDERR - never on stdout, which must stay a clean table/CSV/JSON feed
-// (the D4 lesson).
+// (the lesson).
 //
-// Scoped to what the hint can honestly claim (D13): a per-ADDRESS join
+// Scoped to what the hint can honestly claim: a per-ADDRESS join
 // (DNS/GeoIP) over rows whose host/country columns are actually printed.
 // Measured before that scoping: `list --group --traffic --sort tx --desc
 // --limit 3 --columns process,tx,rx` printed rows carrying 43.80 GB of real
@@ -1568,7 +1568,7 @@ bool UnenrichableHeadWarning(const ConnectionStore& store,
 // View-scoped enrichment for list/export: DNS + GeoIP + traffic over the
 // printed rows only. Returns false + err when the GeoIP database fails;
 // DNS/traffic failures are silent per-address (em-dash), never fatal.
-// 'advice', when non-null, receives an OPTIONAL hint (the D3 unenrichable
+// 'advice', when non-null, receives an OPTIONAL hint (the unenrichable
 // window) that is never fatal: the run still succeeds and still prints.
 bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
                        std::wstring* err, std::string* advice) {
@@ -1582,7 +1582,7 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
     const PrintSelection sel = SelectedForPrint(store, opt);
     if (opt.dns) {
         unsigned stuck = 0;
-        // 9.2.8: when --dns-timeout is set, stale/empty answers from lookups
+        // when --dns-timeout is set, stale/empty answers from lookups
         // that exceeded the budget are reported as pending via the stall
         // count rather than silently rendered as `—`. Lookup itself is
         // synchronous (getnameinfo is uncancellable), so a genuinely wedged
@@ -1609,7 +1609,7 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
         }
         JoinGeoAddrs(store, db, sel.geoTargets);
     }
-    // F5.4. A separate block, not a second Load inside the one above: the two
+    // A separate block, not a second Load inside the one above: the two
     // databases are different files, and a user may legitimately supply either or
     // both. The error prefix says ASN so a bad path is attributable - the same
     // message twice with different files behind it is not an error message.
@@ -1634,7 +1634,7 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
         // because "we measured nothing" is the answer that must not be trusted
         // and a reader who sees only the second would conclude the first did
         // not happen.
-        // GATED ON QUIET, and that gate was MISSING here until 9.2.4 found it.
+        // GATED ON QUIET, and that gate was MISSING here until it was found.
         // MissingEnrichmentAdvice() returns {} under --quiet, but it only
         // covers the advice it produces ITSELF - anything appended to the
         // same string afterwards went straight out. The dropped-pass note hit
@@ -1657,9 +1657,9 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
         // columns the clause matches on were empty), and export applies its
         // view BEFORE the joins run. Measured: `export --dns --filter
         // "host:com"` wrote a silent 0-row file while the same filter on
-        // `list` printed 55 rows, and D3's head hint saw view=0 on every
+        // `list` printed 55 rows, and the head hint saw view=0 on every
         // pre-join filter. The joins have filled those columns now, so apply
-        // the filter for real: this is the view D3 inspects below, and the
+        // the filter for real: this is the view it inspects below, and the
         // rows export writes to its file. RenderList re-applies the same
         // filter afterwards and yields the same view, so list output is
         // unchanged by this.
@@ -1678,7 +1678,7 @@ bool EnrichViewForList(ConnectionStore& store, const ListOptions& opt,
 CommandResult RenderList(ConnectionStore& store, const ListOptions& opt,
                          bool skipHeader) {
     CommandResult r;
-    // D27, enforced HERE so it covers every machine-readable shape at once -
+    // enforced HERE so it covers every machine-readable shape at once -
     // `export` and `list --format csv|tsv|json` - rather than per call site.
     //
     // A grouped stream cannot honestly carry a per-connection column: there is
@@ -1738,7 +1738,7 @@ CommandResult CmdListInto(SnapshotSource& source, ConnectionStore& store,
                           const ListOptions& opt) {
     CommandResult r;
     std::wstring err;
-    // F5.3. Before the pass, because the resolver reads the flag while it
+    // Before the pass, because the resolver reads the flag while it
     // resolves - and on EVERY pass, not just the first: `list --watch` re-enters
     // this function per tick against the same source, so setting it once at
     // startup would be fine, but the GUI shares a source with `details` and
@@ -1751,7 +1751,7 @@ CommandResult CmdListInto(SnapshotSource& source, ConnectionStore& store,
         r.err = "Enumeration failed: " + WideToUtf8(err) + "\r\n";
         return r;
     }
-    // D15: the fixed frame first. The columns are known the moment the
+    // the fixed frame first. The columns are known the moment the
     // snapshot exists, and the enrichment joins below can take seconds
     // (--dns resolves, --traffic scans) - so the header goes to stdout NOW,
     // while the rows follow in r.out when they are ready. json has no
@@ -1767,7 +1767,7 @@ CommandResult CmdListInto(SnapshotSource& source, ConnectionStore& store,
         r.err = "GeoIP: " + WideToUtf8(err) + "\r\n";
         return r;
     }
-    // D3 hint. Appended AFTER RenderList fills r.out, and the caller prints r.err
+    // hint. Appended AFTER RenderList fills r.out, and the caller prints r.err
     // on stderr, so the table/CSV/JSON on stdout stays byte-identical to a run
     // without the hint - a consumer parsing stdout cannot tell the difference.
     r = RenderList(store, opt, /*skipHeader=*/streamHeader);
@@ -1883,7 +1883,7 @@ CommandResult RenderPs(ConnectionStore& store, const PsOptions& opt) {
         r.out = out;
         return r;
     }
-    // Collect the printed cells once; the aligned table (D14) and the
+    // Collect the printed cells once; the aligned table and the
     // delimited shapes then render from the same strings.
     std::vector<std::vector<std::string>> cells;
     for (const Row& row : rows) {
@@ -1974,7 +1974,7 @@ DetailModel BuildDetailModel(const Connection& c,
     }
     m.sections.push_back(std::move(proc));
 
-    // ---- Threads (todo.md 8.8 G5) ------------------------------------------
+    // ---- Threads ------------------------------------------
     //
     // What a process is doing, thread by thread. This is NOT a per-connection
     // thread, because no such thing is obtainable: MIB_TCPROW_OWNER_PID carries
@@ -2151,7 +2151,7 @@ DetailModel BuildDetailModel(const Connection& c,
         m.sections.push_back(std::move(tls));
     }
 
-    // 9.4.1: a Security section for process-level trust metadata that the row
+    // a Security section for process-level trust metadata that the row
     // already carries (fetched with the process name) but the Details window
     // never surfaced. Integrity level is the single thing that answers "could
     // this process have written to HKLM"; signature state disambiguates
@@ -2186,14 +2186,14 @@ DetailModel BuildDetailModel(const Connection& c,
     add(conn, L"State", c.stateLabel);
     add(conn, L"Hostname", c.hostname);
     if (!c.country.empty()) add(conn, L"Country", c.country);
-    // F5.4. Its own rows rather than being folded into Country: the two answers
+    // Its own rows rather than being folded into Country: the two answers
     // come from different database files, and "which country" and "which network"
     // are two questions. An org with no number still gets a row, because the name
     // is the part a reader recognises.
     if (!c.asnOrg.empty()) add(conn, L"AS organisation", c.asnOrg);
     if (c.asnNumber != 0)
         add(conn, L"AS number", L"AS" + std::to_wstring(c.asnNumber));
-    // F5.4. Its own row rather than being folded into Country: the two come from
+    // Its own row rather than being folded into Country: the two come from
     // different database files, and "which country and which network" are two
     // questions. An org with no number still gets a row, because the name is the
     // part a reader recognises.
@@ -2232,7 +2232,7 @@ DetailModel BuildDetailModel(const Connection& c,
                             L"   " + row.remoteEndpoint + L"  (" +
                             row.stateLabel + L")";
         if (!row.hostname.empty()) {
-            // 9.2.8: a pending lookup renders as "pending" (not the raw
+            // a pending lookup renders as "pending" (not the raw
             // kPendingHost sentinel) so the details view is legible.
             if (row.hostname == DnsResolver::kPendingHost)
                 line += L"  @ pending";
@@ -2242,7 +2242,7 @@ DetailModel BuildDetailModel(const Connection& c,
         m.connectionLines.push_back(std::move(line));
     }
 
-    // 9.4.1: the Notes section carries the user's annotations on the row -
+    // the Notes section carries the user's annotations on the row -
     // the colour tag and the free-text note, both applied through the
     // bookmarking verbs. A plain ("") note and an untagged row render their
     // em-dashes, which is the honest answer for "nothing was ever set" and
@@ -2300,7 +2300,7 @@ CommandResult CmdDetails(SnapshotSource& source, const std::wstring& select,
     }
     ConnectionStore store;
     std::wstring err;
-    // F5.3, same reason and same position as in CmdListInto: the flag reaches
+    // same reason and same position as in CmdListInto: the flag reaches
     // the resolver, not the row join, so it must be set before the pass.
     source.SetVerifySignatures(eo.signatures);
     if (!BuildStoreSnapshot(source, store, eo.procStats, /*resolveDns=*/false,
@@ -2388,16 +2388,16 @@ void ApplyPresetViewToStore(const ViewState& v, ConnectionStore& store,
     v.ApplyTo(&store, out);
 }
 
-// D29. One rule, applied by both front ends, with the self-kill case in it.
+// One rule, applied by both front ends, with the self-kill case in it.
 //
 // WHY THIS LIVES HERE AND NOT IN THE GUI. The GUI is supposed to render what
-// this layer computes, never decide for itself (the 5.3 invariant). A rule that
+// this layer computes, never decide for itself (the invariant). A rule that
 // only the GUI enforced would leave the CLI able to do the same thing: `kill
 // --select` resolves a selector to a row, and nothing stopped that row from
 // being one of wintcp.exe's own connections - `kill --select "pid:<self>"` is
 // just a command line. Placing the refusal here closes both.
 //
-// WHY THE SELF-CHECK IS NOT PARANOIA. D29 was first seen as "wintcp.exe closed
+// WHY THE SELF-CHECK IS NOT PARANOIA. This was first seen as "wintcp.exe closed
 // when I killed something else", which turned out to be a use-after-free handing
 // KillPid() a garbage PID. But the self-kill is reachable on its own, with no
 // memory bug at all: wintcp.exe is a network tool, so it has its own sockets and
@@ -2446,7 +2446,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     }
     std::string plan = "kill PID " + std::to_string(pid);
     if (!label.empty()) plan += " (" + WideToUtf8(label) + ")";
-    // 9.3.6: the plan names the mode. A --dry-run that hid the difference
+    // the plan names the mode. A --dry-run that hid the difference
     // between "ask" and "terminate" would be the swallowed-switch problem
     // in plan form.
     if (mo.forceNow) plan += " [terminate immediately]";
@@ -2481,7 +2481,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     }
     bool ok = false;
     if (mo.forceNow) {
-        // 9.3.6 --force: terminate at once - no WM_CLOSE, no wait.
+        // --force: terminate at once - no WM_CLOSE, no wait.
         ok = ::TerminateProcess(h, 1) != FALSE;
     } else {
         (void)PostCloseToProcessWindows(pid);
@@ -2491,7 +2491,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
         } else if (!mo.closeOnly) {
             ok = ::TerminateProcess(h, 1) != FALSE;
         } else {
-            // 9.3.6 --close: never escalate. Report the survival honestly;
+            // --close: never escalate. Report the survival honestly;
             // exiting 0 after a refused force would be the silent-answer
             // failure this tool does not ship.
             ::CloseHandle(h);
@@ -2516,7 +2516,7 @@ CommandResult KillPid(DWORD pid, const FILETIME& create, bool createKnown,
     return r;
 }
 
-// 9.5.6: kill a process and everything it started. The SHAPE of the plan is
+// kill a process and everything it started. The SHAPE of the plan is
 // ProcessTree's (pure, tested); this is only the wiring that works it, so the
 // CLI and the GUI apply one rule rather than two that can drift.
 //
@@ -2645,10 +2645,10 @@ CommandResult CmdKillTree(SnapshotSource& source, DWORD rootPid,
 
 CommandResult CmdKill(SnapshotSource& source, DWORD pid,
                        const MutateOptions& mo) {
-    // D29. This used to carry its own copy of the pseudo-PID rule
+    // This used to carry its own copy of the pseudo-PID rule
     // (`if (pid == 0 || pid == 4)`) alongside the one in KillPid, and the two
     // explained why. Two guards for one rule in one file is exactly the drift
-    // the 5.3 review exists to catch, and it was only visible because a golden
+    // the review exists to catch, and it was only visible because a golden
     // check asserted on the MESSAGE rather than the exit code.
     //
     // Removed rather than kept in step: the rule lives in PidKillVerdict() and
@@ -2940,7 +2940,7 @@ CommandResult CmdUnblock(const std::wstring& address, UINT port,
 }
 
 CommandResult CmdRule(const RuleRequest& req, bool dryRun, bool yes) {
-    // ---- 9.5.5: a stated policy rule --------------------------------------
+    // ---- a stated policy rule --------------------------------------
     // Maps the CLI's words onto the engine's constants in ONE place. Every
     // refusal below happens before the engine is called, so a rule the
     // firewall would refuse is rejected here with a message about the rule
@@ -3060,7 +3060,7 @@ CommandResult CmdBlocks(bool listRules, const std::string& format) {
         return r;
     }
 
-    // ---- 9.2.9: the listing half -------------------------------------------
+    // ---- the listing half -------------------------------------------
     // Reads the rules the firewall reports, so the count above is left alone:
     // this path never calls CountWinTcpRules and never writes the ledger.
     std::vector<BlockedRule> rules;
@@ -3127,7 +3127,7 @@ CommandResult CmdBlocks(bool listRules, const std::string& format) {
     return r;
 }
 
-// ---- alert (9.2.11 / F5.6) -------------------------------------------------
+// ---- alert -------------------------------------------------
 // The engine has been pure and tested since it was written; what it lacked was a
 // persistence layer and a surface to set the thresholds. Both are here.
 //
@@ -3135,7 +3135,7 @@ CommandResult CmdBlocks(bool listRules, const std::string& format) {
 // engine reads bytes/sec, so the switch takes bytes/sec. A KB/MB suffix would be
 // friendlier to type and one more place for a unit to be misread, and the numbers
 // are small enough that "1000000" is not a burden.
-// ---- alert (9.2.11 / F5.6) -------------------------------------------------
+// ---- alert -------------------------------------------------
 // The engine has been pure and tested since it was written; what it lacked was a
 // persistence layer and a surface to set the thresholds. Both are here.
 //
@@ -3145,7 +3145,7 @@ CommandResult CmdBlocks(bool listRules, const std::string& format) {
 //
 // AlertFlags is tri-state so a caller can change one switch without restating the
 // whole configuration; the engine's own defaults are what "unset" leaves alone.
-// 9.2.11. A threshold stored as a double but typed as a whole number of bytes/sec.
+// A threshold stored as a double but typed as a whole number of bytes/sec.
 // std::to_string on a double gives "2000000.000000", which is correct and
 // unreadable; printing the two halves separately would print "2e+06" for the same
 // value on a different compiler. Round, and only show a fraction when there is one.
@@ -3163,7 +3163,7 @@ std::string NumberNoTrailingZeros(double v) {
 CommandResult CmdAlert(AlertFlags f) {
     CommandResult r;
     Settings s;
-    // 9.2.10: portable defaults FIRST, so the registry always wins. A file that
+    // portable defaults FIRST, so the registry always wins. A file that
     // exists but cannot be read is reported rather than swallowed - it is a
     // user-visible fault, and silently ignoring it would mean the portable copy
     // quietly does nothing.
@@ -3252,7 +3252,7 @@ CommandResult CmdAlert(AlertFlags f) {
 }
 
 
-// ---- F5.6: alert rule sub-commands -----------------------------------------
+// ---- alert rule sub-commands -----------------------------------------
 // The engine and the store landed first; this is the surface that fills them.
 //
 // `add` is deliberately idempotent by name: the same rule name twice is one rule,
@@ -3432,7 +3432,7 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
         }
     }
 
-    // F5.4. The same probe for the ASN file, which is a DIFFERENT database and was
+    // The same probe for the ASN file, which is a DIFFERENT database and was
     // previously undiagnosable: --asn-db was not in this verb's switch list, so a
     // user whose asn: filter matched nothing had no way to ask doctor whether the
     // file it was given was even an ASN database. Reported as its own block, with
@@ -3487,7 +3487,7 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
         if (!geoError.empty())
             out += ",\n    \"error\": \"" + JsonEscapeA(geoError) + "\"";
         out += "\n  },";
-        // F5.4. Same shape as "geoIp", so a consumer parsing doctor's JSON does
+        // Same shape as "geoIp", so a consumer parsing doctor's JSON does
         // not need a special case for the second database.
         out += "\n  \"asnIp\": {";
         out += "\n    \"loaded\": " + std::string(asnOk ? "true" : "false") + ",";
@@ -3523,7 +3523,7 @@ CommandResult CmdDoctor(bool verbose, const std::wstring& geoDbPath,
     } else {
         r.out += "geoip: not loaded (" + WideToUtf8(geoError) + ")\r\n";
     }
-    // F5.4. Its own block, with its own not-given / not-loaded state. Which of the
+    // Its own block, with its own not-given / not-loaded state. Which of the
     // two databases is wrong is the question a user arrives with, and until now
     // there was no way to ask it - --asn-db was not even accepted here.
     if (asnOk) {
@@ -3565,7 +3565,7 @@ CommandResult CmdBookmarkList(const std::string& format) {
         return r;
     }
     if (format == "table") {
-        // Aligned like every other human table (D14): addresses, tags and
+        // Aligned like every other human table: addresses, tags and
         // notes left, the port number right.
         const std::vector<std::string> header = {"Address", "Port", "Tag",
                                                  "Note"};
@@ -3605,7 +3605,7 @@ CommandResult CmdBookmarkList(const std::string& format) {
     return r;
 }
 
-// ---- 9.2.10: bookmark export / import ---------------------------------------
+// ---- bookmark export / import ---------------------------------------
 
 CommandResult CmdBookmarkExport(const std::wstring& outPath,
                                 bool forceOverwrite) {
@@ -3729,7 +3729,7 @@ CommandResult CmdBookmarkImport(const std::wstring& inPath, bool yes) {
     return r;
 }
 
-// ---- 9.2.10: preset export / import ------------------------------------------
+// ---- preset export / import ------------------------------------------
 
 CommandResult CmdPresetExport(const std::wstring& outPath,
                               bool forceOverwrite) {
@@ -3963,7 +3963,7 @@ CommandResult CmdPresetSave(const std::wstring& name, const ViewState& view,
             r.out = "preset overwritten: " + WideToUtf8(name) + "\r\n";
             break;
         case PresetSave::kExists:
-            // The one non---yes route through Refused (C5): same exit code and
+            // The one non---yes route through Refused: same exit code and
             // same meaning, different remedy, so the wording says --force.
             // Returned, not assigned + broken out of, because Refused() builds
             // the whole CommandResult including the exit code.
@@ -4020,7 +4020,7 @@ CommandResult CmdPresetApply(SnapshotSource& source, const std::wstring& name,
     opt.sortColumn = v.sortColumn;
     opt.sortAsc = v.sortAsc;
     opt.grouped = v.grouped;
-    // D24: layer the user's OWN switches over the saved view. Before this the
+    // layer the user's OWN switches over the saved view. Before this the
     // command-line switches were parsed and then thrown away, so
     // `preset apply --name web --limit 2` printed the entire 27-row table in
     // the preset's default column set and exited 0 - a script asking for two
@@ -4040,7 +4040,7 @@ CommandResult CmdPresetApply(SnapshotSource& source, const std::wstring& name,
         opt.traffic = overrides->traffic;
         opt.dns = overrides->dns;
         opt.geoIpPath = overrides->geoIpPath;
-        // F5.4: carried alongside, for the same reason. A preset that pinned the
+        // carried alongside, for the same reason. A preset that pinned the
         // ASN database must not silently lose it on the view that applies it.
         opt.asnIpPath = overrides->asnIpPath;
     }
@@ -4072,7 +4072,7 @@ std::string FormatChangeEvents(const std::vector<RowChange>& events,
     const bool json = (format == "json");
     std::string out;
     for (const RowChange& e : events) {
-        // D25: the event-kind gate, BEFORE the row filter, so a user asking for
+        // the event-kind gate, BEFORE the row filter, so a user asking for
         // only APPEAR never pays for (or is confused by) the DISAPPEAR half of
         // the diff. `eventMask` defaults to all three, so every existing caller
         // that passes 0x7 behaves exactly as before.
@@ -4163,7 +4163,7 @@ CommandResult CmdExport(SnapshotSource& source, const ListOptions& opt,
             return r;
         }
     }
-    // D27: the same rule RenderList applies, needed here because export writes
+    // the same rule RenderList applies, needed here because export writes
     // the file itself and does not go through RenderList. Checked BEFORE the
     // snapshot so a refused request costs nothing and touches no state.
     {
@@ -4196,7 +4196,7 @@ CommandResult CmdExport(SnapshotSource& source, const ListOptions& opt,
     // truncation for list/ps, and must not silently truncate a file while
     // the report claims the full count. The CLI therefore REFUSES --limit on
     // export (exit 2, naming the switch) rather than accepting and ignoring
-    // it - D24: a swallowed switch is worse than a rejected one, because a
+    // it - a swallowed switch is worse than a rejected one, because a
     // script cannot tell from the exit code that it got the whole file.
     ListOptions full = opt;
     full.limit = 0;
@@ -4224,7 +4224,7 @@ CommandResult CmdExport(SnapshotSource& source, const ListOptions& opt,
     }
     r.out = "exported " + std::to_string(store.View().size()) + " rows to " +
             WideToUtf8(outPath) + "\r\n";
-    // D24: --quiet now means what it means everywhere else. It used to be
+    // --quiet now means what it means everywhere else. It used to be
     // accepted by export and then printed this line anyway, so
     // `export --out f.csv --quiet > log` still wrote a line into the log - a
     // quiet switch that is not quiet is a trap for exactly the scripts that
@@ -4278,7 +4278,7 @@ CommandResult CmdGeoIpLookup(SnapshotSource& source,
         r.err = "geoip lookup: '" + WideToUtf8(ip) + "' is not an IP.\r\n";
         return r;
     }
-    // F5.4. A GeoLite2-ASN file has no country records, so before this the verb
+    // A GeoLite2-ASN file has no country records, so before this the verb
     // answered "-" for every address and gave the reader nothing to go on: the
     // database had loaded, the address was fine, and nothing was wrong. An answer
     // is whichever the file actually holds, so an ASN file answers with its ASN
@@ -4573,7 +4573,7 @@ CommandResult CmdCapture(SnapshotSource& source, const std::wstring& select,
         r.err = "capture: --select <filter> is required.\r\n";
         return r;
     }
-    // 9.3.7: --filter is an extra pktmon address pin, so it must be a bare IP.
+    // --filter is an extra pktmon address pin, so it must be a bare IP.
     // Cheap format check BEFORE the snapshot, so a typo is rc 2 on any box and
     // not rc 1 "no live row" hiding behind a dead selector.
     if (!co.filter.empty()) {
@@ -4868,12 +4868,12 @@ int ColumnIdForName(const std::wstring& name) {
     if (n == L"disk") return COL_DISK;
     if (n == L"duration") return COL_DURATION;
     if (n == L"bandwidth" || n == L"speed") return COL_BANDWIDTH;
-    // G5. "procspeed" is the canonical name; "groupspeed" is accepted because
+    // "procspeed" is the canonical name; "groupspeed" is accepted because
     // that is what it reads as in a --group view, and refusing a name someone
-    // can reasonably guess is the kind of friction D24 exists to remove.
+    // can reasonably guess is the kind of friction it exists to remove.
     if (n == L"procspeed" || n == L"groupspeed") return COL_GROUPRATE;
     if (n == L"note" || n == L"notes") return COL_NOTE;
-    // G6: the `ss -i` names. "rtt"/"latency" both accepted - "rtt" is jargon
+    // the `ss -i` names. "rtt"/"latency" both accepted - "rtt" is jargon
     // and "latency" is the plainer word a person may reach for first.
     if (n == L"rtt" || n == L"latency") return COL_RTT;
     if (n == L"minrtt" || n == L"min-rtt") return COL_MINRTT;
@@ -4882,9 +4882,9 @@ int ColumnIdForName(const std::wstring& name) {
     if (n == L"tls") return COL_TLS;
     if (n == L"country") return COL_COUNTRY;
     if (n == L"pinned" || n == L"bookmark") return COL_PINNED;
-    // F5.1/F5.2/F5.3. Several spellings each, on the same principle as
+    // Several spellings each, on the same principle as
     // procspeed/rtt above: refusing a name someone can reasonably guess is the
-    // friction D24 exists to remove. "parent" is accepted for the column whose
+    // friction it exists to remove. "parent" is accepted for the column whose
     // header is "Parent", and "signed" for the one whose header is "Signature",
     // because those are the words the two things are actually called.
     if (n == L"ppid" || n == L"parent" || n == L"parentpid") return COL_PPID;

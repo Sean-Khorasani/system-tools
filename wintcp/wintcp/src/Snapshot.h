@@ -63,7 +63,7 @@ struct SnapshotOptions {
     bool geoIp = false;
     const wchar_t* geoIpPath = nullptr;
 
-    // NOTE: F5.3 (Authenticode verification) is deliberately NOT one of these
+    // NOTE: Authenticode verification is deliberately NOT one of these
     // options. It is configured by SetVerifySignatures below, and having both
     // was a bug rather than a convenience - see the note in Snapshot.cpp.
 };
@@ -97,7 +97,7 @@ public:
     // reflects the change rather than a stale cached answer.
     void Clear();
 
-    // F5.3. Turn Authenticode verification on or off for subsequent passes.
+    // Turn Authenticode verification on or off for subsequent passes.
     //
     // A setter rather than a BuildStoreSnapshot parameter because the resolver
     // is what holds the flag, and threading a seventh positional bool through

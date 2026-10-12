@@ -33,7 +33,7 @@
 #include "WinCaps.h"
 
 #include "Utils.h"   // Utf8ToWide for the user-facing capability names
-#include "StreamCapture.h"   // 9.2.7: CaptureToolsPresent, for the capture row
+#include "StreamCapture.h"   // CaptureToolsPresent, for the capture row
 
 #include <pdh.h>
 
@@ -221,7 +221,7 @@ bool HasDedicatedProbe(const char* dllName) {
 std::vector<Capability> BuildCapabilities() {
     std::vector<Capability> caps;
 
-    // --- stream capture (pktmon + etl2pcap, 9.2.7) ---
+    // --- stream capture (pktmon + etl2pcap) ---
     {
         Capability c;
         c.what = L"Stream capture (pktmon)";

@@ -83,7 +83,7 @@ public:
 
     bool Loaded() const { return dataSectionSize_ != 0; }
 
-    // The path Load() was given, so the GUI can persist it (9.1.5). Empty when
+    // The path Load() was given, so the GUI can persist it. Empty when
     // nothing has been loaded; not a separate "has been loaded" flag, because
     // Loaded() answers that and this is only ever read alongside it.
     const std::wstring& SourcePath() const { return sourcePath_; }
@@ -180,7 +180,7 @@ private:
     size_t dataSectionBase_ = 0;
     size_t dataSectionSize_ = 0;
 
-    // 9.1.5: the path Load() was given, so the GUI can persist it across
+    // The path Load() was given, so the GUI can persist it across
     // restarts. Empty when nothing has been loaded; never read alongside
     // Loaded() being false.
     std::wstring sourcePath_;
@@ -217,7 +217,7 @@ private:
 bool IsGlobalUnicastV4(uint32_t hostOrderAddr);
 bool IsGlobalUnicastV6(const unsigned char addr[16]);
 
-// F5.11: the same question, named for what a FILTER means by it. `local:private`
+// The same question, named for what a FILTER means by it. `local:private`
 // is "is this endpoint on a non-routable range", which is the same set GeoIP
 // refuses to assign a country - so the two share one implementation rather than
 // keeping two lists of ranges that could drift apart.

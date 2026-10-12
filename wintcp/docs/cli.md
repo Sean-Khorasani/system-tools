@@ -155,7 +155,7 @@ This is deliberate. A silently swallowed switch gives a script a **successful** 
 Notes:
 
 - `--watch` re-prints the table; with `--changes` it prints only deltas. The interval **is** the sensitivity: at 1 s you catch short-lived sockets, at 10 s you miss them.
-- Closed sockets linger as **grey ghost rows** (F5.7): after a `DISAPPEAR` they stay in the table for up to 500 sockets (oldest dropped first) instead of vanishing on the next poll, so a `--watch` stream keeps a short history of what just closed. The change feed is unaffected - `DISAPPEAR` still fires exactly once per socket - only the retained row table holds them.
+- Closed sockets linger as **grey ghost rows**: after a `DISAPPEAR` they stay in the table for up to 500 sockets (oldest dropped first) instead of vanishing on the next poll, so a `--watch` stream keeps a short history of what just closed. The change feed is unaffected - `DISAPPEAR` still fires exactly once per socket - only the retained row table holds them.
 - `--count` counts **snapshots, not events**. On a busy machine four snapshots can emit hundreds of lines; pipe through `head` if you need exactly N.
 - `--watch` without `--count` runs until Ctrl+C — right for a terminal, a trap for a redirected script. When stdout is **not** a console, a one-line warning is printed on stderr; pass `--count` in scripts.
 - `--event` takes a comma-separated list. An unrecognised name exits `2`; it is never silently dropped.
@@ -188,8 +188,8 @@ reuse an existing one rather than grow the mask as a side effect. A
 `static_assert` in `ColumnsWin.h` fails the build at 33 so that a new column
 cannot arrive unnoticed.
 
-**ASN reuses `country`, and now does so.** F5.4 was the live case that decision
-was recorded for. The `country` cell renders the two together - `US \xB7 AS15169
+**ASN reuses `country`, and now does so.** This is the case that decision was
+recorded for. The `country` cell renders the two together - `US \xB7 AS15169
 Google LLC` - with the separator appearing only when both are known, so a
 country-only row reads exactly as it always did. The AS number is placed *before*
 the organisation name so that a narrow window, which ellipsises on overflow, can
@@ -655,8 +655,8 @@ expressible and was not invented.
 `Default`, `Minimal`, `Network`, `Security`, `Performance` and `Show diagnostics`.
 A profile is a COLUMN MASK and nothing else - a *preset* (File > Save view as
 preset) is still the full view (filter, sort, grouping, sources and mask), and the
-two are deliberately not the same thing. `Show diagnostics` ORs the five G6/G5
-readings onto whatever is already visible rather than replacing it, and reads as on
+two are deliberately not the same thing. `Show diagnostics` ORs the five
+diagnostic readings onto whatever is already visible rather than replacing it, and reads as on
 while all five are present even after you hide one of them.
 
 `local:private` and `remote:private` also work on the CLI, negated as

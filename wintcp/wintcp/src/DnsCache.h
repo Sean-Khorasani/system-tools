@@ -1,13 +1,13 @@
 // DnsCache.h
 // SPDX-License-Identifier: Apache-2.0
-// The F5.5 alternative: persist the reverse-DNS answers this tool already
+// The alternative: persist the reverse-DNS answers this tool already
 // earns, so `host:` answers from disk on a later run instead of re-querying
 // every peer.
 //
-// WHAT THIS IS NOT. It is not the ETW DNS snooping the ticket originally
+// WHAT THIS IS NOT. It is not the ETW DNS snooping originally
 // asked for. That route is not implementable on this machine - three elevated
 // probes of `Microsoft-Windows-DNS-Client` {1C950233-...} delivered zero
-// events (todo.md), and a parser written against an assumed schema would have
+// events, and a parser written against an assumed schema would have
 // compiled, passed its own tests and silently never fired. Caching what the
 // resolver already returns needs no provider, no elevation and no assumed
 // event layout: the same answers, one run later.
@@ -69,7 +69,7 @@ constexpr int kPositiveTtlHours = 24;
 // clock rather than three spellings of "now" that can disagree by a tick.
 int64_t NowEpoch();
 
-// R3 caps. 1 MiB is roughly 13 k lines at the ~80 bytes an entry costs, so it
+// Caps. 1 MiB is roughly 13 k lines at the ~80 bytes an entry costs, so it
 // is over 3x the entry cap below - a file that big is one we wrote, or one we
 // refuse whole rather than partially trust.
 constexpr size_t kMaxCacheBytes = 1u * 1024u * 1024u;

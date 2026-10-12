@@ -42,7 +42,7 @@ const UINT IDC_LOG_SAVE  = 3;
 const UINT IDC_LOG_COPY  = 4;
 const UINT IDC_LOG_CLOSE = 5;
 const UINT IDC_LOG_LIST  = 6;   // the list's child id, for WM_NOTIFY routing
-// 5.3: the three kind checkboxes - the GUI's `--event appear,disappear,state`.
+// The three kind checkboxes - the GUI's `--event appear,disappear,state`.
 const UINT IDC_LOG_EV_APPEAR     = 7;
 const UINT IDC_LOG_EV_DISAPPEAR  = 8;
 const UINT IDC_LOG_EV_STATE      = 9;
@@ -57,7 +57,7 @@ constexpr int kBtnWCopy = 90;
 constexpr int kBtnWClose = 70;
 constexpr int kBtnGap = 6;
 constexpr int kStatusH = 22;
-// 5.3: the kind-checkbox row. A checkbox wants its own height - the default
+// The kind-checkbox row. A checkbox wants its own height - the default
 // button height clips the box and the label - and the widths are generous
 // because "Disappear" is the longest of the three labels with its accelerator.
 constexpr int kChkH = 20;
@@ -225,7 +225,7 @@ void ChangeLogWindow::Show(HWND owner, HFONT font) {
     if (::IsWindowVisible(hwnd_) == FALSE) ::ShowWindow(hwnd_, SW_SHOW);
     ::SetForegroundWindow(hwnd_);
     // Diagnostic: WM_CREATE reached? Logged to the debugger only, so it costs
-    // nothing in normal use. Kept while the 5.3 work is being verified, because
+    // nothing in normal use. Kept while the work is being verified, because
     // "the window did not appear" has three possible causes (not created,
     // created but WM_CREATE skipped, created and hidden) and guessing between
     // them from the outside is slow.
@@ -254,7 +254,7 @@ void ChangeLogWindow::ApplyFont(HFONT font) {
     SetChildFont(hwndCopy_, font_);
     SetChildFont(hwndClose_, font_);
     SetChildFont(hwndStatus_, font_);
-    // 5.3: the kind checkboxes are children too, and leaving them on the
+    // The kind checkboxes are children too, and leaving them on the
     // dialog's default font would make them a different size from every other
     // control in the window - the kind of inconsistency a user reads as a bug
     // even when they cannot say what is wrong.
@@ -265,7 +265,7 @@ void ChangeLogWindow::ApplyFont(HFONT font) {
 
 // ---- buffering -------------------------------------------------------------
 
-// 5.3: the GUI's `--event`. Applied HERE, at the point events enter the
+// The GUI's `--event`. Applied HERE, at the point events enter the
 // buffer, rather than in the renderer - so the buffer, the count, the CSV
 // export and the Copy all agree with what is on screen. Filtering at render
 // time instead would leave "312 events" in the status bar while showing four,
@@ -372,7 +372,7 @@ void ChangeLogWindow::AppendEvents(const std::vector<RowChange>& events) {
 void ChangeLogWindow::AppendFormatted(const std::vector<RowChange>& events,
                                       const std::wstring& stamp) {
     events_.reserve(kMaxEvents);   // grow to the cap, never shrink back
-    copyNote_.clear();   // fresh data replaces the copy receipt (G30)
+    copyNote_.clear();   // fresh data replaces the copy receipt
     for (const RowChange& ch : events) {
         Entry e;
         e.time = stamp;
@@ -639,7 +639,7 @@ std::string ChangeLogWindow::ToCsv() const {
 void ChangeLogWindow::CopySelection() {
     if (hwndList_ == nullptr) return;
     int i = ListView_GetNextItem(hwndList_, -1, LVNI_SELECTED);
-    // G30: copying with no selection used to fail silently. Fall back to
+    // Copying with no selection used to fail silently. Fall back to
     // the whole buffer (capped like any copy) and say the count, so the
     // clipboard always gets what the button promises and the user knows
     // it was everything, not the row they thought was selected.
@@ -768,7 +768,7 @@ void ChangeLogWindow::Layout(int cx, int cy) {
     place(hwndSave_, kBtnWSave);
     place(hwndClear_, kBtnWClear);
     place(hwndPause_, kBtnWPause);
-    // 5.3: the kind checkboxes go on a SECOND row under the buttons, on the
+    // The kind checkboxes go on a SECOND row under the buttons, on the
     // LEFT. They are not part of the right-aligned button cluster because they
     // are a different kind of control - a persistent view filter, not an action -
     // and mixing the two would suggest they all do the same thing.
@@ -789,7 +789,7 @@ void ChangeLogWindow::Layout(int cx, int cy) {
 
     // The list runs from the top margin down to just above the status line; the
     // status line itself sits on the button row's line, to its left. The
-    // checkbox row (5.3) is below that, so the list stops above it.
+    // checkbox row is below that, so the list stops above it.
     const int statusH = S(kStatusH);
     const int statusY = btnY + (btnH - statusH) / 2;
     if (hwndStatus_ != nullptr) {
@@ -820,7 +820,7 @@ void ChangeLogWindow::UpdateStatus() {
     text += L" of the last ";
     text += std::to_wstring(kMaxEvents);
     text += L" events";
-    // 5.3: when the mask is narrowed, SAY SO and say when it takes effect. A
+    // When the mask is narrowed, SAY SO and say when it takes effect. A
     // status line reading "Showing 40 of the last 2000 events" beside unticked
     // boxes is ambiguous - the user cannot tell whether the mask is already
     // applied or whether the 40 are simply all that happened. This closes that
@@ -845,12 +845,12 @@ void ChangeLogWindow::UpdateStatus() {
         text += std::to_wstring(dropped_);
         text += L" older events dropped";
     }
-    // G30: the fallback copy's receipt, until fresh data replaces it.
+    // The fallback copy's receipt, until fresh data replaces it.
     if (!copyNote_.empty()) {
         text += L"  \u2022  ";
         text += copyNote_;
     }
-    // G35: an empty log names its next action instead of sitting blank.
+    // An empty log names its next action instead of sitting blank.
     // The buffer fills only while the main window logs to a file, so the
     // hint points at the switch that starts the feed.
     if (events_.empty())
@@ -873,7 +873,7 @@ void ChangeLogWindow::OnCommand(WORD id, LPARAM lParam) {
         case IDC_LOG_PAUSE:
             SetPaused(!paused_);
             break;
-        // 5.3. Toggling a kind filters the kinds that will be APPENDED from now
+        // Toggling a kind filters the kinds that will be APPENDED from now
         // on. It deliberately does NOT retro-filter what is already buffered:
         // the log is a record of what happened, and rewriting history because
         // someone unticked a box would make it a lie. The status line says so
@@ -909,7 +909,7 @@ void ChangeLogWindow::OnCommand(WORD id, LPARAM lParam) {
         }
         case IDC_LOG_CLEAR:
             // Clearing discards every recorded event, so it is
-            // confirmed when there is something to lose (G30).
+            // confirmed when there is something to lose.
             if (!events_.empty() &&
                 ::MessageBoxW(hwnd_,
                               L"Clear the change log?\r\n\r\n"
@@ -988,7 +988,7 @@ LRESULT CALLBACK ChangeLogWindow::SubclassProc(HWND hwnd, UINT msg,
                                                UINT_PTR, DWORD_PTR refData) {
     auto* self = reinterpret_cast<ChangeLogWindow*>(refData);
     if (self == nullptr) return ::DefSubclassProc(hwnd, msg, wParam, lParam);
-    // G30: Ctrl+A selects the whole buffer. The main window's accelerator
+    // Ctrl+A selects the whole buffer. The main window's accelerator
     // table does not reach this owned window's focused list, so the list
     // handles it itself rather than relying on a menu id that never fires.
     if (msg == WM_KEYDOWN && wParam == L'A' &&
@@ -999,7 +999,7 @@ LRESULT CALLBACK ChangeLogWindow::SubclassProc(HWND hwnd, UINT msg,
         }
         return 0;
     }
-    // G22: Esc hides even when the list owns the focus. Keys go to the
+    // Esc hides even when the list owns the focus. Keys go to the
     // focused child, so the parent's own WM_KEYDOWN never fires for them.
     if (msg == WM_KEYDOWN && wParam == VK_ESCAPE) {
         if (self->Handle() != nullptr) ::ShowWindow(self->Handle(), SW_HIDE);
@@ -1110,7 +1110,7 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 0, 0, 0, 0, hwnd_,
                 reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_LOG_CLOSE)),
                 inst, nullptr);
-            // 5.3: the three kind checkboxes. AUTOCHECKBOX rather than a menu,
+            // The three kind checkboxes. AUTOCHECKBOX rather than a menu,
             // because they are a live VIEW control over a stream that keeps
             // arriving - toggling one takes effect on the next event with no
             // confirmation, which is what you want from a filter and not what
@@ -1172,7 +1172,7 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             ScrollToBottom();
             UpdatePauseButton();
             UpdateStatus();
-            // 5.3: tick the boxes from the current mask. CreateWindowEx leaves
+            // Tick the boxes from the current mask. CreateWindowEx leaves
             // an AUTOCHECKBOX unchecked, so without this a log whose mask was
             // set programmatically before opening would show three unticked
             // boxes and filter nothing - the control lying about the state.
@@ -1192,7 +1192,7 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_SYSCOLORCHANGE:
-            // G23: every colour here is live (COLOR_WINDOW brush, default
+            // Every colour here is live (COLOR_WINDOW brush, default
             // list colours), so a theme or high-contrast switch needs no
             // re-derivation - only a repaint to pick the new scheme up.
             ::InvalidateRect(hwnd_, nullptr, TRUE);
@@ -1246,7 +1246,7 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_KEYDOWN:
-            // G22/G30: Esc hides (never destroys - the buffer survives, and
+            // Esc hides (never destroys - the buffer survives, and
             // hiding is what every other secondary window does), matching
             // the Close button and the Details window.
             if (wParam == VK_ESCAPE) {
@@ -1272,7 +1272,7 @@ LRESULT ChangeLogWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             hwndSave_ = nullptr;
             hwndCopy_ = nullptr;
             hwndClose_ = nullptr;
-            // 5.3: the same for the checkboxes.
+            // The same for the checkboxes.
             hwndEvAppear_ = nullptr;
             hwndEvDisappear_ = nullptr;
             hwndEvState_ = nullptr;
