@@ -911,10 +911,34 @@ std::wstring RunUiHarness(MainWindow& w, HWND hwnd) {
         // Hiding a VISIBLE column must shrink the list's column set; showing
         // it again must put it back. This is the observable consequence of
         // the column machinery that the column-order probe below checks.
-        const int v0 = static_cast<int>(Num(w, "visibleCol", "0"));
-        const int v1 = static_cast<int>(Num(w, "visibleCol", "1"));
-        Check(v0 >= 0 && v1 >= 0, "SMOKE column machinery: visible columns resolve",
-              "VisibleToCol returned -1 for a shown column");
+const int v0 = static_cast<int>(Num(w, "visibleCol", "0"));
+const int v1 = static_cast<int>(Num(w, "visibleCol", "1"));
+Check(v0 >= 0 && v1 >= 0, "SMOKE column machinery: visible columns resolve",
+      "VisibleToCol returned -1 for a shown column");
+
+// The reserved column. COL_TLS is defined, has a mask bit and a width, and is
+// NOT offered anywhere - because nothing populates it (no socket-level TLS
+// source exists), and a column that answers "unknown" on every row teaches the
+// user to ignore blanks. This pins the offer set so a future "let's show it
+// again" cannot land silently: the count drops by exactly one, and the id
+// behind no visible slot is ever COL_TLS.
+//
+// The three probes this needs are the offer set itself, its size, and the
+// question "is this id offered".
+const std::string tlsArg = std::to_string(COL_TLS);
+Check(Of(w, "colOffered", tlsArg.c_str()) == "0",
+      "SMOKE column machinery: the reserved column is not offered",
+      ("colOffered(COL_TLS) answered " + Of(w, "colOffered", tlsArg.c_str()))
+          .c_str());
+{
+    const long offered = Num(w, "offeredCount");
+    std::snprintf(line, sizeof(line),
+                  "SMOKE column machinery: the offer set is one short of "
+                  "the column count (%ld offered, %d defined)", offered,
+                  COL_COUNT);
+    Check(offered == COL_COUNT - 1, line,
+          "the offer set is not exactly the columns minus the reserved one");
+}
 
         // Find a column that is currently SHOWN, by asking the store which
         // ColumnId sits behind each visible slot. Toggling one that is already

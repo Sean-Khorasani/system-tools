@@ -144,6 +144,20 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
     if (::wcscmp(op, L"frozen") == 0) {
         return frozen_ ? L"1" : L"0";
     }
+    if (::wcscmp(op, L"colOffered") == 0) {
+        // Is this ColumnId offered at all? A reserved column is defined and
+        // has a mask bit, but is not shown - see the note on the enum in
+        // Columns.h. Exposed so the gate can pin the offer set.
+        const int col = ::_wtoi(arg);
+        return ListViewColumns::IsOffered(col) ? L"1" : L"0";
+    }
+    if (::wcscmp(op, L"offeredCount") == 0) {
+        // How many columns are offered. COL_COUNT minus the reserved ones, so
+        // a change to the offer set is a visible change here rather than a
+        // silent one.
+        ::swprintf_s(buf, L"%zu", ListViewColumns::OfferedColumns().size());
+        return buf;
+    }
     if (::wcscmp(op, L"grouped") == 0) {
         return groupByProcess_ ? L"1" : L"0";
     }

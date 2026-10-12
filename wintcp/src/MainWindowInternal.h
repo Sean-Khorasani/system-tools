@@ -123,8 +123,12 @@ inline const ColDef kColumns[COL_COUNT] = {
     { COL_MEM,     ConnectionStore::ColumnTitle(COL_MEM),    100, LVCFMT_RIGHT },
     { COL_DISK,    ConnectionStore::ColumnTitle(COL_DISK),   110, LVCFMT_RIGHT },
     { COL_DURATION, ConnectionStore::ColumnTitle(COL_DURATION), 80, LVCFMT_RIGHT },
-    { COL_BANDWIDTH, ConnectionStore::ColumnTitle(COL_BANDWIDTH),140, LVCFMT_LEFT },
-    { COL_TLS,     ConnectionStore::ColumnTitle(COL_TLS),   190, LVCFMT_LEFT  },
+    { COL_BANDWIDTH, ConnectionStore::ColumnTitle(COL_BANDWIDTH),140, LVCFMT_LEFT  },
+    // Present but not displayed. kColumns is indexed by ColumnId (and the
+    // static_assert below pins its length to COL_COUNT), so a missing entry
+    // would renumber every column after it. What keeps this column off the
+    // screen is its absence from kDisplayOrder - see the note there.
+    { COL_TLS,     L"\x2014 reserved \x2014",          190, LVCFMT_LEFT  },
     { COL_COUNTRY, ConnectionStore::ColumnTitle(COL_COUNTRY), 90, LVCFMT_LEFT  },
     { COL_PINNED,  ConnectionStore::ColumnTitle(COL_PINNED),  90, LVCFMT_LEFT  },
     // the `ss -i` columns. Widths are the GUI's own budget rather than
@@ -160,17 +164,23 @@ static_assert(COL_COUNT == IDM_COL_COUNT,
 static_assert(sizeof(kColumns) / sizeof(kColumns[0]) == COL_COUNT,
               "kColumns must describe every ColumnId");
 
-// Display order for the list header. IDs, masks and widths stay keyed by
-// ColumnId; the *visible* columns are inserted in this order. Identity
-// leads (Process, CPU %, Traffic) because those are what a first-time
-// user scans, then the connection identity (Proto/addresses/state/PID),
-// then the auxiliary lookups. The hidden-by-default stat columns sit
-// next to CPU so enabling them from View > Columns keeps metrics grouped.
-// EVERY ColumnId must appear exactly once. The static_assert below does not
-// catch a duplicate (the array would still have COL_COUNT entries), so the
-// invariant is also enforced by the sort check: a display order that is not
-// strictly increasing would mean two columns claimed the same slot.
-inline const int kDisplayOrder[COL_COUNT] = {
+// DEDUCED size, deliberately. Declaring this `[COL_COUNT]` and then removing
+// an entry zero-fills the tail instead of shrinking, which every iterating
+// caller would read as COL_PROTO a second time - a duplicate column in the
+// header and a permutation that claims 32 slots. The length is now whatever
+// is listed, and the count of offered columns is a real number.
+//
+// This list is ALSO the column filter: a ColumnId that is not here is not
+// inserted into the header, not offered in View > Columns and not saved into a
+// preset. It is the one place all three read from, which is why excluding a
+// column is a single deletion here rather than edits in four files.
+//
+// COL_TLS is the one exclusion. It is not a mistake and it is commented out
+// rather than deleted: no socket-level TLS source exists (see the note on the
+// enum in Columns.h), so the column answers "unknown" on every row, and a
+// header of unresolvable columns teaches the user to ignore headers. The
+// ColumnId, its mask bit and its width stay defined and unused.
+inline const int kDisplayOrder[] = {
     COL_PROCESS, COL_CPU, COL_TRAFFIC, COL_PROTO,
     COL_LOCAL, COL_LPORT, COL_REMOTE, COL_RPORT, COL_STATE, COL_PID,
     COL_SERVICE, COL_HOST, COL_PATH,
@@ -180,7 +190,8 @@ inline const int kDisplayOrder[COL_COUNT] = {
     // current RTT and its best-ever value is visible at a glance.
     COL_DURATION, COL_BANDWIDTH, COL_GROUPRATE,
     COL_RTT, COL_MINRTT, COL_CWND, COL_RETRANS,
-    COL_TLS, COL_COUNTRY, COL_PINNED, COL_NOTE,
+    // COL_TLS deliberately absent - reserved, never populated. See above.
+    COL_COUNTRY, COL_PINNED, COL_NOTE,
     // join the other per-process identity and trust columns: after the
     // bookmark fields, before the raw stat columns.
     COL_PPID, COL_INTEGRITY, COL_SIGNATURE,

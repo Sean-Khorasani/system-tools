@@ -15,13 +15,71 @@ namespace wintcp {
 // site reads.
 using namespace mw;
 
+// ---- the offered-column set ---------------------------------------------
+//
+// Two different sets, deliberately separate:
+//
+//   OfferedColumns() - the columns we WILL show. kDisplayOrder as-is, and its
+//                      length is whatever is listed there.
+//   OrderedColumns() - a full permutation over all COL_COUNT ids, the offered
+//                      ones first and the unoffered ones appended.
+//
+// They differ because colOrder_ has to be a complete permutation: the settings
+// round trip writes and reads COL_COUNT entries, and a short one would shift
+// every saved position. The offer question has only the offered ids in it.
+// Conflating them made "is this column offered" true for every id - including
+// the reserved one - which is exactly what the new gate check caught.
+//
+// kDisplayOrder is a DEDUCED-size array, not `[COL_COUNT]`: declaring it with
+// a fixed size and then removing an entry zero-fills the tail, which every
+// iterating caller would read as COL_PROTO a second time.
+//
+// A ColumnId absent from kDisplayOrder is reserved: not inserted into the
+// header, not offered in View > Columns, and not saved into a preset. COL_TLS
+// is the one case - no socket-level TLS source exists, so it answers "unknown"
+// on every row. The ColumnId, its mask bit and its width all stay defined.
+namespace {
+
+std::vector<int> BuildOrderedColumns() {
+    std::vector<int> order;
+    order.reserve(static_cast<size_t>(COL_COUNT) + 1);
+    std::vector<char> offered(static_cast<size_t>(COL_COUNT), 0);
+    for (const int c : mw::kDisplayOrder) {
+        if (c < 0 || c >= COL_COUNT) continue;
+        order.push_back(c);
+        offered[static_cast<size_t>(c)] = 1;
+    }
+    // The unoffered ids still exist in the permutation - see above. Appended
+    // after the offered ones, so they never reach the header.
+    for (int c = 0; c < COL_COUNT; ++c)
+        if (!offered[static_cast<size_t>(c)]) order.push_back(c);
+    return order;
+}
+
+}  // namespace
+
+const std::vector<int>& ListViewColumns::OfferedColumns() {
+    static const std::vector<int> offered(
+        std::begin(mw::kDisplayOrder), std::end(mw::kDisplayOrder));
+    return offered;
+}
+
+const std::vector<int>& ListViewColumns::OrderedColumns() {
+    static const std::vector<int> order = BuildOrderedColumns();
+    return order;
+}
+
+bool ListViewColumns::IsOffered(int columnId) {
+    if (columnId < 0 || columnId >= COL_COUNT) return false;
+    for (const int c : OfferedColumns())
+        if (c == columnId) return true;
+    return false;
+}
 void ListViewColumns::LoadFromSettings(const Settings& s) {
     // Order first: Start from the built-in order and only override it if the
     // registry holds a validated permutation. Settings::Load has already
     // rejected anything malformed, so no re-check is needed here.
-    colOrder_.assign(COL_COUNT, 0);
-    for (int i = 0; i < COL_COUNT; ++i)
-        colOrder_[static_cast<size_t>(i)] = kDisplayOrder[i];
+    colOrder_ = OrderedColumns();
     if (s.colOrderValid) {
         for (int i = 0; i < COL_COUNT; ++i)
             colOrder_[static_cast<size_t>(i)] = s.colOrder[i];
@@ -47,11 +105,11 @@ void ListViewColumns::SaveToSettings(Settings* s) const {
 }
 
 void ListViewColumns::Reset() {
-    colOrder_.assign(COL_COUNT, 0);
-    for (int i = 0; i < COL_COUNT; ++i) {
-        colOrder_[static_cast<size_t>(i)] = kDisplayOrder[i];
+    // The full permutation, offered columns first, so a header rebuild and the
+    // settings round trip both see COL_COUNT entries.
+    colOrder_ = OrderedColumns();
+    for (int i = 0; i < COL_COUNT; ++i)
         colWidths_[static_cast<size_t>(i)] = kColumns[i].width;
-    }
     visibleCols_ = kDefaultVisibleCols;
     visToCol_.clear();
 }
@@ -105,6 +163,11 @@ void ListViewColumns::SyncColumns(HWND list, int dpi) {
     LVCOLUMNW col = {};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | LVCF_SUBITEM;
     for (const int c : colOrder_) {
+        // Two gates, both necessary. The mask bit is the user's choice; the
+        // offered set is the tool's. A column whose bit is set but which is
+        // reserved (COL_TLS from a settings file written by an older build,
+        // say) must not appear - the bit alone would put a blank column back.
+        if (!IsOffered(c)) continue;
         if ((visibleCols_ & (1u << c)) == 0) continue;
         col.pszText = const_cast<LPWSTR>(kColumns[static_cast<size_t>(c)].title);
         col.cx = Scale(colWidths_[static_cast<size_t>(c)], dpi);
@@ -166,6 +229,11 @@ bool ListViewColumns::SyncOrderFromHeader(HWND list) {
 
 bool ListViewColumns::Toggle(int columnId) {
     if (columnId < 0 || columnId >= COL_COUNT) return false;
+    // A reserved column cannot be shown, however its mask bit is set. The menu
+    // item does not exist, so this is reachable only from a stale setting or a
+    // future caller - and silently toggling an unshowable column would be a
+    // command that appears to do nothing.
+    if (!IsOffered(columnId)) return false;
     const std::uint32_t bit = 1u << columnId;
     // Never let the last visible column be hidden: the list would render
     // empty and the only way back is this same menu.
@@ -178,7 +246,12 @@ bool ListViewColumns::Toggle(int columnId) {
 void ListViewColumns::SyncMenuChecks(HMENU mainMenu) const {
     HMENU colsMenu = FindColumnsMenu(mainMenu);
     if (colsMenu == nullptr) return;
-    for (int c = 0; c < COL_COUNT; ++c) {
+    // The columns we OFFER, which is kDisplayOrder - not every ColumnId that
+    // exists. A ColumnId can exist without being offered (COL_TLS is reserved
+    // and never populated), and ticking a menu item for a column that cannot
+    // be shown is a menu item that does nothing when clicked.
+    for (const int c : kDisplayOrder) {
+        if (c < 0 || c >= COL_COUNT) continue;
         ::CheckMenuItem(colsMenu, IDM_COL_BASE + c,
                         MF_BYCOMMAND |
                         ((visibleCols_ & (1u << c)) ? MF_CHECKED : MF_UNCHECKED));
