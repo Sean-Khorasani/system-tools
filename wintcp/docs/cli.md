@@ -387,8 +387,6 @@ A standard user on a machine that has both tools gets the *elevation* reason, no
 
 `etl2pcap.exe` is the one that is easy to miss. When it is absent the failure used to arrive late - the capture ran, waited out its window, wrote the ETL, and was then discarded at the conversion step. It is now reported up front, as a capability row, before any capture is attempted.
 
-`pktmon` is a **sampling driver, not a tap**: only what happens after the filter is armed is recorded. A connection that has gone quiet during the window legitimately returns nothing, and an empty result is not evidence of a fault. Generate traffic during the window, or widen `--secs`.
-
 #### Reading the TLS handshake
 
 Every capture also prints `tls:` lines describing the TLS session, parsed out of the bytes it just reassembled. This is the **only** place WinTCP can report a TLS session: Windows has no socket-level TLS ioctl (there is no `SIO_TLS_INFO` in the SDK, and `TCP_INFO_v0` carries no TLS field), so the handshake is the only source, and it is visible only because TLS sends it in the clear. The `tls` **column** therefore stays empty - see its note in the [column reference](#column-reference).
@@ -563,6 +561,8 @@ the never-overwrite contract `preset save` already has: it reports
 `imported 0 (already present, skipped: 1)` and names the preset it did not
 touch, and you pass `--force` and repeat if you meant to replace it.
 
+### `alert`
+
 `wintcp.exe alert` reads and writes the threshold-alerting configuration. With no
 switches it prints the current state; with them it sets it. `--enable` and
 `--disable` are the master switch, `--bps-warn N` / `--bps-critical N` /
@@ -663,6 +663,14 @@ while all five are present even after you hide one of them.
 
 `local:private` and `remote:private` also work on the CLI, negated as
 `exclude:local:private`.
+
+**View → Column profile** switches the visible set in one click, and a profile is a
+*column mask and nothing else* — a **preset** (File → Save view as preset) is still
+the whole view (filter, sort, grouping, sources and mask). The two are deliberately
+not the same thing. `Show diagnostics` ORs the five diagnostic readings onto
+whatever is already visible rather than replacing it, so it reads as **on** while
+all five are still shown — even after you hide one of the five manually.
+
 ## `geoip`
 
 `geoip info --db FILE` reports a database's type, record count and size: the first thing to check when a `country` column is empty, because an empty cell is otherwise ambiguous between "no database" and "no entry for this address". The record count is the file's own `record_count` metadata, and most real files **omit it** - every DBIP edition does - in which case the count is reported as *not stated* rather than as `0`, which would otherwise read as "this 8 MB database is empty". `geoip lookup` answers a one-off address question; see `wintcp.exe help geoip`.

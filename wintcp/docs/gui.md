@@ -344,20 +344,17 @@ Each distinct condition fires **once** and then goes quiet until it clears, so a
 connection sitting above the threshold does not re-notify every tick. When the
 tray icon is off, an alert lands on the status bar instead of vanishing - an alert
 that does nothing is worse than no alert.
+
 ## Windows integration
 
 - **DPI.** Per-Monitor V2 DPI awareness via the manifest, 9 pt Segoe UI. Widths and fonts are recomputed on `WM_DPICHANGED`.
 - **Theme.** There is no dark-mode toggle. The list, status bar and filter box are painted from the live system colors (`GetSysColor`) and repaint on `WM_SYSCOLORCHANGE` and `WM_THEMECHANGED`, so light, dark and high-contrast schemes work without a restart. One shared palette header (`Theme.h`) derives every self-painted surface: the Details bands, the charts background/grid and the dark substitutes (`0x202020`/`0xF0F0F0`) are single spellings now, not per-window copies.
 - **High contrast.** Every window probes `HighContrastActive()` from the same header (`SPI_GETHIGHCONTRAST`) and bypasses its dark palette when it is set, deriving every colour from `GetSysColor` so the scheme's own values win. `MainWindow::ThemeIsDark` short-circuits to `false` under HC; Details, Charts, Change log and the process tree all repaint on `WM_SYSCOLORCHANGE` without a restart. The shared dark substitutes are never applied on top of an HC palette, and the charts' fixed series colours yield to the system's highlight pair under HC.
-- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; single-click (double-click works too) restores, and the first hide explains that once per run with a balloon. The tray tip names what the window holds — rows shown / total, plus grouped, frozen and alert states — instead of a fixed title. A balloon fires on a new listener via `ShowTrayBalloon` (Alerts.cpp); the alert rules are evaluated on every refresh, after the view is rebuilt, so a balloon names rows you can actually look at. **First-run minimize prompt:** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
+- **Tray.** Minimize-to-tray hides the window; the tray menu offers Open, Always on top and Exit; single-click (double-click works too) restores, and the first hide explains that once per run with a balloon. The tray tip names what the window holds — rows shown / total, plus grouped, frozen and alert states — instead of a fixed title. Alerts are evaluated on every refresh, after the view is rebuilt, so a balloon names rows you can actually look at. **First-run minimize prompt:** the first time you minimize while the tray icon is off, a dialog asks "Minimize to tray or exit?" and an unchecked "Don't ask me again" means it will ask again next time. The remembered choice and the tray-on flag persist in `HKCU\Software\WinTCP` as `TrayMinimizeChoice` and `TrayEnabled`.
 - **Always on top** can be toggled from the menu or the tray.
 
 ## Settings and reset
 
 Window placement, columns (mask, order, widths), sort, filter, always-on-top, tray and the database paths all persist in `HKCU\Software\WinTCP`. When a persisted layout goes wrong, **View → Reset columns & layout** restores every default the startup path uses — visible set, widths, order, `PID`-ascending sort and an empty filter — and persists the fix through the same single write path, so it survives a restart. No registry editing required.
-
-## Process tree
-
-**View → Process tree...** shows the processes behind the sockets as a tree, in the style of Task Manager's Processes tab: one node per process, labelled `name (PID n, k connections)`, with children under their parents. Roots are processes nothing in the set claims as a child — the engine's definition, which survives recycled parent PIDs rather than trusting "PPID 0".
 
 The tree renders the main table's snapshot (taken when the window opens, re-taken on **Refresh**), over the same pure `ProcessTree` engine the `killtree` verb plans on — so the view and the verb cannot disagree about the shape. A very deep chain reports that some nodes were omitted instead of truncating silently. `Esc` or **Close** hides the window without losing the snapshot; **Refresh** re-reads the main table. An empty tree says the main table has no rows and points at refreshing it, instead of sitting blank.

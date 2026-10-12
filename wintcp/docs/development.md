@@ -46,8 +46,11 @@ fast-build.bat -Clean     :: delete build-fast\ and exit
 
 `-Test` is the normal dev call: it compiles only stale translation units (a `.cpp` newer than its
 `.obj`, plus anything reachable through the `#include "..."` closure), relinks what changed, then
-runs the **same** 13 CLI smoke checks, the harness self-check, and `wintcp-tests.exe unit` that
-`cli.bat` does. Exit codes: `0` ok, `1` build/test failed, `2` checks failed, `3` setup error
+runs the **same** CLI smoke checks, the harness self-check, and `wintcp-tests.exe unit` that
+`cli.bat` does — 16 checks in all. One of them is not a check of the code at all but of the
+*gate itself*: it fails while `build\wintcp.exe` is older than `build-fast\wintcp.exe`, which is
+the trap where a dev loop that ends in `fast-build` leaves the shipped binary testing code that
+no longer exists in the tree. Exit codes: `0` ok, `1` build/test failed, `2` checks failed, `3` setup error
 (missing toolchain, lock held, source-set problem). The `fast-build\` directory is the only output
 location; nothing in `wintcp\`, `build\`, or the source tree is written. `temp/` is not touched
 either.
@@ -159,7 +162,7 @@ build\tests\wintcp-tests.exe bench 100000 10   :: time the view pipeline
 
 The checks are not padding. Each pins a decision that is easy to get wrong and impossible to eyeball in a list: that 12 identical mDNS sockets produce **zero** change events on a repeat snapshot; that a per-PID byte total is refused as a per-connection rate while a per-socket one is accepted; that a bookmark on port 9999 does not mark a live port 443; that `--event appear` prints no DISAPPEAR; that a count nobody measured is not printed. Those were all real defects.
 
-**A check count is not a coverage figure.** There is no coverage instrumentation in this project, so a count like `PASS 514 / FAIL 0` says how much was *written*, not how much of the code was *exercised*. The number moves whenever a defect becomes a regression test; the gates report it, nothing quotes it.
+**A check count is not a coverage figure.** There is no coverage instrumentation in this project, so a count like `PASS 1057 / FAIL 0` says how much was *written*, not how much of the code was *exercised*. The number moves whenever a defect becomes a regression test; the gates report it, nothing quotes it. Read it from the binary rather than from this sentence.
 
 ### Gate scripts
 
@@ -227,17 +230,33 @@ Assert facts the **file** states, not the address. `175.247.199.0` is `CN` in
 MaxMind's `GeoIP2-Country-Test.mmdb` and `KR` in the DBIP file above - the
 check accepts either, which rules out a reader that answers "US" for everything
 without pinning an answer that changes when the file is refreshed. That is the
-whole reason these assert narrow, verifiable properties rather than golden output.**`;expect=N` annotates a command whose contract IS a non-zero exit.** Appended to the end of a line, and stripped before the binary ever sees it:
+whole reason these assert narrow, verifiable properties rather than golden output.
+
+#### `;expect=N` — a command whose contract is a non-zero exit
+
+Appended to the end of a line, and stripped before the binary ever sees it:
 
 ```text
 kill --pid 4 ;expect=2
 ```
 
-Without it, such a command cannot be gated at all - and that is not hypothetical. Two documented commands are in exactly this position: `kill --pid 4`, which the CLI reference says is *always* refused because PID 4 owns no real image, and `export --changes`, whose documented answer is exit 2. Both were absent from `examples.txt` for as long as this rule stood, because including them failed the gate for behaving correctly. `;` appears in no documented command, so the separator cannot collide with a command's own text.
+`;expect=N` annotates a command whose contract **is** a non-zero exit. Without it, such a command
+cannot be gated at all - and that is not hypothetical. Two documented commands are in exactly this
+position: `kill --pid 4`, which the CLI reference says is *always* refused because PID 4 owns no
+real image, and `export --changes`, whose documented answer is exit 2. Both were absent from
+`examples.txt` for as long as this rule stood, because including them failed the gate for
+behaving correctly. `;` appears in no documented command, so the separator cannot collide with a
+command's own text.
 
-Both directions are asserted, and the harness's self-test proves it: a command annotated `;expect=2` that returns 2 **passes**, and one that returns 0 **fails**. An annotation feature that only checked the passing direction would look correct while verifying nothing. The run also prints `ANNOTATED: N of M`, because the characteristic failure of an annotation is a typo that never matches - which leaves the line running unannotated, so the count is how you notice.
+Both directions are asserted, and the harness's self-test proves it: a command annotated
+`;expect=2` that returns 2 **passes**, and one that returns 0 **fails**. An annotation feature that
+only checked the passing direction would look correct while verifying nothing. The run also
+prints `ANNOTATED: N of M`, because the characteristic failure of an annotation is a typo that
+never matches - which leaves the line running unannotated, so the count is how you notice.
 
-A nested double quote is why it runs through PowerShell rather than a batch `for /f` loop: the documented way to keep a space inside a filter value is `--filter "note:""corporate dns"""`, which a batch loop truncates to `--filter "note:""corporate`.
+A nested double quote is why it runs through PowerShell rather than a batch `for /f` loop: the
+documented way to keep a space inside a filter value is `--filter "note:""corporate dns"""`, which
+a batch loop truncates to `--filter "note:""corporate`.
 
 **If you add or change a documented command, add its line here.**
 
@@ -330,5 +349,5 @@ Gates for these live in `cli.bat` rather than the selftest, because `ParseUint` 
 - **Sample output carries the machine disclaimer.** Output was captured on one Windows 11 host; PIDs, process names, ports and byte totals are machine-specific. Do not invent output to fill a block - if you cannot run it, do not print it.
 - **Do not copy measured numbers between runs.** Check counts, gate counts and benchmark timings all move. Update them from the binary, never from the previous paragraph.
 - **Case studies have a fixed shape**: a lead sentence, the command block, its output, then a table explaining each switch and why it is in *that* command.
-- **Line endings are per-file, not per-repository.** There is no `.gitattributes`, so the tree is mixed on purpose: all four `.bat` files, the `.ps1` and the `.txt` are CRLF, `docs\*.md` are LF, and the sources are a mix of both. Match the file you are editing rather than imposing a style. Every `.bat` must be **uniformly** CRLF - a batch file with mixed endings can behave unpredictably.
+- **Line endings are pinned per-file by `.gitattributes`, not left to chance.** `*.bat`, `*.ps1`, `*.cmd` and `*.txt` are CRLF; `*.md`, `*.cpp`, `*.h`, `*.rc` and the project files are LF. Git normalises on commit, so an edit that leaves mixed endings still commits correctly - but re-normalise before running a script you just hand-edited. The one hard rule is that every `.bat` must be **uniformly** CRLF: a batch file with mixed endings can behave unpredictably, and it is the file type most likely to be edited by hand.
 - **Anchors are GitHub-slugged from the heading text**, lowercased, punctuation stripped, spaces to hyphens - and repeated punctuation is *not* collapsed, so a heading like "CPU - and memory" slugs to `cpu---and`. Read the heading back before you link to it.
