@@ -47,15 +47,16 @@
 #include "ProcessTreeView.h"   // the process-tree view mode's fill
 #include "TypeToJump.h"
 #include "SocketTraffic.h"
+#include "TrayIcon.h"          // the notification-area icon
 
 namespace wintcp {
 
 // Private messages posted by worker threads (payload = registered pointer).
+// WM_APP_TRAY is not here: the tray icon owns that one (TrayIcon.h).
 enum : UINT {
     WM_APP_REFRESH_RESULT = WM_APP + 1,   // RefreshResult*
     WM_APP_DNS_RESULT     = WM_APP + 2,   // DnsResolver::Result*
     WM_APP_DNS_STALLED    = WM_APP + 6,   // wParam = stalled count
-    WM_APP_TRAY           = WM_APP + 3,   // tray icon callback
     // Posted to self when a header drag starts, so the resulting order is read
     // back AFTER the drag has finished. Posting rather than reading
     // inside LVN_BEGINDRAG is deliberate: at that point the header still holds
@@ -158,17 +159,19 @@ private:
     bool ThemeIsDark() const;      // system theme is dark (for highlights)
     void RefreshSystemColors();    // WM_THEMECHANGED / WM_SYSCOLORCHANGE
 
-    // Tray icon + minimize-to-tray.
-    void TrayAdd();
-    void TrayRemove();
-    void ShowTrayMenu();
+    // The notification-area icon. The icon's own plumbing (add/remove/tip/
+    // balloon/menu) is TrayIcon's; what is left here is WHEN: the remembered
+    // first-minimize choice and the prompt that asks for it.
+    TrayIcon tray_;
+    // Add the icon now when settings say it should be there; remove it when
+    // they say it should not. One call, both directions, so the menu check and
+    // the icon cannot disagree.
+    void SyncTray();
 
     // on the first minimize while the tray icon is OFF, offer the user a
     // one-shot choice - minimize-to-tray (enable the tray icon) or exit. The
     // choice is remembered in settings_.trayMinimizeChoice so the prompt never
-    // returns. Returns true if the minimize should proceed to the chosen target
-    // (the caller hides or exits accordingly). Returns false if the caller should
-    // let the default minimize-to-taskbar behaviour run.
+    // returns.
     enum class MinimizeTarget { kTaskbar, kTray, kExit };
     MinimizeTarget ResolveMinimize();
 
@@ -450,12 +453,14 @@ private:
     std::wstring alertHint_;
     size_t suppressedAlerts_ = 0;
     bool topMost_ = false;                 // View > Always on top
+    // View > Tray icon. 'trayIconShown_' was a second truth for the same fact
+    // and lived beside it; TrayIcon::IsShown() is the one that decides
+    // whether the icon is actually there (Add() can fail), so only the
+    // requested state remains here.
     bool trayEnabled_ = false;             // View > Tray icon
-    bool trayIconShown_ = false;
     // remembered first-minimize choice (mirrors settings_.trayMinimizeChoice).
     DWORD trayMinimizeChoice_ = 0;
     bool etwAutoAttempted_ = false;        // at most one implicit ETW start
-    NOTIFYICONDATAW trayNid_ = {};
     HBRUSH hwndBrushWindow_ = nullptr;   // WM_CTLCOLOR* backdrop (system)
     std::wstring lastError_;
     std::wstring lastRefreshTime_;

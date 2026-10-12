@@ -542,7 +542,7 @@ const wchar_t* MainWindow::UiProbe(const wchar_t* op, const wchar_t* arg) const 
         return buf;
     }
     if (::wcscmp(op, L"trayShown") == 0) {
-        return trayIconShown_ ? L"1" : L"0";
+        return tray_.IsShown() ? L"1" : L"0";
     }
     // which child control holds keyboard focus, so the harness can prove
     // the `/` shortcut moved focus to the filter box. "list", "filter", or ""
@@ -702,7 +702,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 ::ShowWindow(hwnd_, SW_RESTORE);
                 ::SetForegroundWindow(hwnd_);
             } else if (ev == WM_RBUTTONUP) {
-                ShowTrayMenu();
+                tray_.ShowMenu(hwnd_, topMost_);
             }
             return 0;
         }
@@ -740,7 +740,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                             break;
                     }
                 }
-                if (trayEnabled_ && trayIconShown_) {
+                if (trayEnabled_ && tray_.IsShown()) {
                     ::ShowWindow(hwnd_, SW_HIDE);
                     // the first hide explains where the window went and
                     // how to get it back. A window that vanishes with no
@@ -750,15 +750,12 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (!trayHideBalloonShown_ &&
                         DllAvailable("shell32.dll")) {
                         trayHideBalloonShown_ = true;
-                        trayNid_.uFlags = NIF_INFO;
-                        ::wcscpy_s(trayNid_.szInfo,
-                                   L"WinTCP is still running in the tray. "
-                                   L"Single-click the icon to restore it; "
-                                   L"right-click it for options.");
-                        ::wcscpy_s(trayNid_.szInfoTitle, L"WinTCP");
-                        trayNid_.dwInfoFlags = NIIF_INFO;
-                        trayNid_.uTimeout = 5000;
-                        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+                        tray_.Balloon(
+                            L"WinTCP",
+                            L"WinTCP is still running in the tray. "
+                            L"Single-click the icon to restore it; "
+                            L"right-click it for options.",
+                            NIIF_INFO);
                     }
                     return 0;
                 }
@@ -923,8 +920,8 @@ void MainWindow::OnCreate() {
     if (topMost_)
         ::SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    RefreshSystemColors();                // system theme / high contrast
-    if (trayEnabled_) TrayAdd();
+RefreshSystemColors();                // system theme / high contrast
+SyncTray();
 
     // resume per-PID traffic counters if they were enabled while
     // elevated. A silent failure here (e.g. the user is no longer elevated)
@@ -971,8 +968,8 @@ void MainWindow::OnDestroy() {
         for (DnsResolver::Result* p : Sink()->pendingDns) delete p;
         Sink()->pendingDns.clear();
     }
-    SaveSettings();                        // persist UI state
-    TrayRemove();                          
+SaveSettings();                        // persist UI state
+tray_.Remove();
     if (logFile_ != INVALID_HANDLE_VALUE) {
         ::CloseHandle(logFile_);
         logFile_ = INVALID_HANDLE_VALUE;
@@ -1739,20 +1736,12 @@ void MainWindow::RunAlerts() {
     UpdateStatusBar(lastError_);
 }
 
-// One balloon per alert, whichever source it came from.
+// One balloon per alert, whichever source it came from. Without an icon there
+// is nowhere to put a balloon, so the alert lands in the status bar instead -
+// which is why this branch exists rather than a silent drop.
 void MainWindow::RaiseAlert(const Alert& a) {
-    if (trayIconShown_) {
-        // NIM_MODIFY with NIF_INFO. trayNid_ is a member and stays alive for the
-        // duration of the call; szInfo is cleared first so a shorter previous message
-        // cannot leave its tail behind.
-        ::ZeroMemory(&trayNid_.szInfo, sizeof(trayNid_.szInfo));
-        ::ZeroMemory(&trayNid_.szInfoTitle, sizeof(trayNid_.szInfoTitle));
-        ::wcsncpy_s(trayNid_.szInfo, a.text.c_str(), _TRUNCATE);
-        ::wcsncpy_s(trayNid_.szInfoTitle, a.title.c_str(), _TRUNCATE);
-        trayNid_.uFlags = NIF_INFO;
-        trayNid_.dwInfoFlags = NIIF_WARNING;
-        ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
-        trayNid_.uFlags = 0;
+    if (tray_.IsShown()) {
+        tray_.Balloon(a.title, a.text, NIIF_WARNING);
     } else {
         if (!alertHint_.empty()) alertHint_ += L"  \xB7  ";
         alertHint_ += a.title;
@@ -2680,7 +2669,7 @@ void MainWindow::UpdateTrayTip() {
     // identifiable without restoring it. Static text ("WinTCP - TCP/UDP
     // Connections") said nothing about rows, frozen/grouped modes or
     // alerts - the three states a user minimizes over and forgets.
-    if (!trayIconShown_ || hwnd_ == nullptr) return;
+    if (!tray_.IsShown() || hwnd_ == nullptr) return;
     if (!DllAvailable("shell32.dll")) return;
     const RowStats& st = store_.Stats();
     wchar_t tip[128] = {0};
@@ -2695,9 +2684,7 @@ void MainWindow::UpdateTrayTip() {
         // szTip is 128 wchar_t, so the worst case is a shortened suffix.
         ::wcscat_s(tip, extra.c_str());
     }
-    trayNid_.uFlags = NIF_TIP;
-    ::wcscpy_s(trayNid_.szTip, tip);
-    ::Shell_NotifyIconW(NIM_MODIFY, &trayNid_);
+    tray_.SetTip(tip);
 }
 
 void MainWindow::InitTooltips() {
@@ -3303,13 +3290,14 @@ void MainWindow::OnCommand(WORD id, WORD notifyCode, HWND ctl) {
                            0, 0, 0, 0,
                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             break;
-        case IDM_VIEW_TRAY:
-            trayEnabled_ = !trayEnabled_;
-            settings_.trayEnabled = trayEnabled_;
+case IDM_VIEW_TRAY:
+    trayEnabled_ = !trayEnabled_;
+    settings_.trayEnabled = trayEnabled_;
     settings_.trayMinimizeChoice = trayMinimizeChoice_;
-            SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, trayEnabled_);
-            if (trayEnabled_) TrayAdd(); else TrayRemove();
-            break;
+    // SyncTray does the add/remove and the check mark in one place, so the
+    // menu tick and the icon cannot disagree.
+    SyncTray();
+    break;
         case IDM_TRAY_RESTORE:
             ::ShowWindow(hwnd_, SW_RESTORE);
             ::SetForegroundWindow(hwnd_);
@@ -5950,71 +5938,20 @@ void MainWindow::RefreshSystemColors() {
 }
 
 // ---- tray icon / minimize-to-tray -------------------------------
-
-void MainWindow::TrayAdd() {
-    if (trayIconShown_ || hwnd_ == nullptr) return;
-    // shell32.dll is delay-loaded (kDelayedDlls in WinCaps.cpp) and
-    // Shell_NotifyIconW below would RAISE on a machine without it. Gating
-    // here means "minimize to tray" silently does not appear, which is the
-    // honest degradation: there is no tray to minimize to.
-    if (!DllAvailable("shell32.dll")) return;
-    trayNid_ = {};
-    trayNid_.cbSize = sizeof(trayNid_);
-    trayNid_.hWnd = hwnd_;
-    trayNid_.uID = 1;
-    trayNid_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    trayNid_.uCallbackMessage = WM_APP_TRAY;
-    trayNid_.hIcon = static_cast<HICON>(::LoadImageW(
-        hInstance_, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 16, 16, 0));
-    if (trayNid_.hIcon == nullptr)
-        trayNid_.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
-    ::wcscpy_s(trayNid_.szTip, L"WinTCP - TCP/UDP Connections");
-    trayIconShown_ = ::Shell_NotifyIconW(NIM_ADD, &trayNid_) != FALSE;
-}
-
-void MainWindow::TrayRemove() {
-    if (!trayIconShown_) return;
-    // shell32.dll is delay-loaded (kDelayedDlls in WinCaps.cpp). This gate is
-    // load-bearing even though trayIconShown_ looks like it already implies the
-    // library is there: it does NOT, because on a machine without shell32 the
-    // TrayAdd call below would have raised and left the flag false - so the
-    // invariant holds, and this guard makes that dependency explicit rather
-    // than incidental.
-    if (!DllAvailable("shell32.dll")) return;
-    ::Shell_NotifyIconW(NIM_DELETE, &trayNid_);
-    trayIconShown_ = false;
-}
-
-void MainWindow::ShowTrayMenu() {
-    HMENU menu = ::CreatePopupMenu();
-    if (menu == nullptr) return;
-    ::AppendMenuW(menu, MF_STRING, IDM_TRAY_RESTORE, L"&Open WinTCP");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING | (topMost_ ? MF_CHECKED : 0),
-                  IDM_VIEW_TOPMOST, L"Always on top");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    // this is the item the Block confirmation has always pointed at
-    // ("use Remove All WinTCP Blocks from the tray menu"). It did not exist
-    // until now, so the documented removal path has a handler; the handler
-    // reports "no rules" / "needs elevation" honestly. Always shown - built
-    // directly from the menu, no COM-query gymnastics required.
-    ::AppendMenuW(menu, MF_STRING, IDM_TRAY_UNBLOCK_ALL,
-                  L"Remove All WinTCP Blocks");
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
-
-    POINT pt = {};
-    ::GetCursorPos(&pt);
-    // Required so the menu dismisses correctly when the window is hidden.
-    ::SetForegroundWindow(hwnd_);
-    const UINT cmd = ::TrackPopupMenu(
-        menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0,
-        hwnd_, nullptr);
-    ::DestroyMenu(menu);
-    ::PostMessageW(hwnd_, WM_NULL, 0, 0);
-    if (cmd != 0) {
-        ::SendMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(cmd, 0), 0);
+//
+// The tray's plumbing (add/remove/tip/balloon/menu) belongs to TrayIcon;
+// what is left here is WHEN. One call covers both directions so the icon
+// and the menu check cannot disagree - the old code carried a
+// trayEnabled_/trayIconShown_ pair for exactly that reason, and a second
+// truth is the thing it was avoiding.
+void MainWindow::SyncTray() {
+    if (hwnd_ == nullptr) return;
+    if (trayEnabled_) {
+        if (tray_.Add(hwnd_, hInstance_)) UpdateTrayTip();
+    } else {
+        tray_.Remove();
     }
+    SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, trayEnabled_);
 }
 
 MainWindow::MinimizeTarget MainWindow::ResolveMinimize() {
@@ -6077,14 +6014,13 @@ MainWindow::MinimizeTarget MainWindow::ResolveMinimize() {
         trayMinimizeChoice_ = 1;           // remember: tray
         settings_.trayMinimizeChoice = 1;
     }
-    // Enable the tray icon so the chosen behaviour takes effect on the next
-    // minimize and the icon survives this session.
-    trayEnabled_ = true;
-    settings_.trayEnabled = true;
-    settings_.Save();
-    SetMenuCheck(::GetMenu(hwnd_), IDM_VIEW_TRAY, true);
-    TrayAdd();
-    return MinimizeTarget::kTray;
+// Enable the tray icon so the chosen behaviour takes effect on the next
+// minimize and the icon survives this session.
+trayEnabled_ = true;
+settings_.trayEnabled = true;
+settings_.Save();
+SyncTray();
+return MinimizeTarget::kTray;
 }
 
 }  // namespace wintcp

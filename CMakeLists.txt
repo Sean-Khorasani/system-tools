@@ -31,6 +31,7 @@ add_executable(wintcp
     wintcp/src/MainWindow.cpp
     wintcp/src/MainWindow.h
     wintcp/src/TcpTable.cpp
+wintcp/src/TrayIcon.cpp
     wintcp/src/TcpTable.h
     wintcp/src/ProcessInfo.cpp
     wintcp/src/ProcessInfo.h
